@@ -122,6 +122,10 @@ def load_structured(text: str, fmt: str):
 def extract_version(raw: str):
     if not raw:
         return None
+    low = raw.lower()
+    for noise in ("command not found", "no such file", "not recognized", "permission denied"):
+        if noise in low:
+            return None
     for tok in raw.replace(",", " ").split():
         t = tok.strip("()[]{};,")
         if t[:1] == "v" and len(t) > 1:
@@ -300,6 +304,10 @@ def _read(facts, path: str, fmt: str, scope: str = "user", kind: str = "config")
             status="truncated",
             size=f.size,
             error="probe output truncated",
+        )
+    if f.status == "empty":
+        return SourceInfo(
+            scope=scope, path=path, format=fmt, kind=kind, status="empty", size=0, content=""
         )
     if f.status == "unreadable" or f.content is None:
         return SourceInfo(

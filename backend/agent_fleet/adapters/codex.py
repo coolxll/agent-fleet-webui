@@ -59,7 +59,7 @@ class CodexAdapter(AgentAdapter):
         raw = out.strip()
         if not path:
             # Be explicit: no probe output at all means we never asked properly.
-            if key not in facts.which:
+            if key not in facts.probed:
                 return Detection(status="unknown", error="no probe data for codex")
             return Detection(status="not_installed")
         version = extract_version(raw) if rc == 0 else None

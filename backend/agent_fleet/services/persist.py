@@ -101,8 +101,8 @@ def persist_result(runtime_id, result: RuntimeScanResult, run_id, settings) -> d
                             path=src.path,
                             format=src.format,
                             kind=src.kind,
-                            present=src.status in ("ok", "toolarge", "truncated", "isdir"),
-                            readable=src.status == "ok",
+                            present=src.status in ("ok", "empty", "toolarge", "truncated", "isdir"),
+                            readable=src.status in ("ok", "empty"),
                             size_bytes=src.size,
                             status=_source_status(src),
                             error=src.error,
@@ -148,6 +148,7 @@ def persist_result(runtime_id, result: RuntimeScanResult, run_id, settings) -> d
 def _source_status(src) -> str:
     return {
         "ok": "ok",
+        "empty": "empty",
         "missing": "missing",
         "isdir": "unsupported",
         "toolarge": "unreadable",

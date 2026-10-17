@@ -44,7 +44,7 @@ class PiAdapter(AgentAdapter):
         rc, out = facts.version(key)
         raw = out.strip()
         if not path:
-            if key not in facts.which:
+            if key not in facts.probed:
                 return Detection(status="unknown", error="no probe data for pi")
             return Detection(status="not_installed")
         return Detection(

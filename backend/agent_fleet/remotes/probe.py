@@ -13,6 +13,8 @@ NL = chr(10)
 BS = chr(92)
 ESC_N = BS + "n"
 ESC_T = BS + "t"
+SQ = chr(39)
+FLATTEN = "_o=$(echo $_o | tr " + SQ + ESC_N + SQ + " " + SQ + " " + SQ + " | head -c 300); "
 
 MAX_FILE_BYTES = 512_000
 MAX_DIR_ENTRIES = 400
@@ -167,6 +169,8 @@ def build_probe_script(spec: ProbeSpec) -> str:
     ]
 
     for b in spec.bins:
+        # The probed marker distinguishes "looked and absent" from "never looked".
+        lines.append("rec2 probed " + _q(b.key) + " 1")
         # A binary found on PATH wins; otherwise fall back to known locations.
         lines.append(
             "if _p=$(command -v -- " + _q(b.binary) + ' 2>/dev/null) && [ -n "$_p" ]; then '
@@ -181,16 +185,14 @@ def build_probe_script(spec: ProbeSpec) -> str:
             )
         args = " ".join(_q(a) for a in b.version_args)
         lines.append(
-            "_o=$(" + _q(b.binary) + " " + args
-            + ' 2>&1 | tr "' + ESC_N + '" " " | head -c 300); _r2=$?; '
+            "_o=$(" + _q(b.binary) + " " + args + " 2>&1); _r2=$?; " + FLATTEN
             + "rec4 version " + _q(b.key) + ' "$_r2" "$_o"'
         )
         for cand in b.candidates:
             lines.append(
-                'if [ "$_r2" != "0" ] && [ -x ' + _pathq(cand) + " ]; then "
-                + "_o=$(" + _pathq(cand) + " " + args
-                + ' 2>&1 | tr "' + ESC_N + '" " " | head -c 300); '
-                + "rec4 version " + _q(b.key) + ' "$?" "$_o"; fi'
+                'if [ "$_r2" != "0" ] && [ -x ' + _pathq(cand) + ' ]; then '
+                + "_o=$(" + _pathq(cand) + " " + args + " 2>&1); _r3=$?; " + FLATTEN
+                + "rec4 version " + _q(b.key) + ' "$_r3" "$_o"; fi'
             )
 
     for p in files:
@@ -282,6 +284,7 @@ class RemoteFacts:
     osrelease: str = ""
     macosver: str = ""
     has_wsl: bool = False
+    probed: set = field(default_factory=set)
     which: dict = field(default_factory=dict)
     version_rc: dict = field(default_factory=dict)
     version_out: dict = field(default_factory=dict)
@@ -318,7 +321,7 @@ def parse_probe_output(stdout: str) -> RemoteFacts:
                 if got > want:
                     raw = raw[: max(0, len(raw) - (got - want))]
                 if current.size == 0 and raw == "":
-                    current.status = "unreadable"
+                    current.status = "empty"
                 else:
                     current.status = "ok"
                 current.content = raw
@@ -347,6 +350,8 @@ def parse_probe_output(stdout: str) -> RemoteFacts:
             facts.macosver = _f(parts, 2)
         elif tag == "haswsl":
             facts.has_wsl = _f(parts, 2) == "yes"
+        elif tag == "probed":
+            facts.probed.add(_f(parts, 2))
         elif tag == "which":
             key, value = _f(parts, 2), _f(parts, 3)
             if key and value and key not in facts.which:
