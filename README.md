@@ -59,23 +59,30 @@ Nothing is duplicated: if a host appears in several sources it is stored once.
 ## Views
 
 * **Fleet overview** - totals, reachable/unreachable, per-agent distribution,
-  last successful scan, and the runtime table (click a row to inspect it).
+  last successful scan, and the runtime table (click a row to inspect it,
+  scan or disable a single machine).
 * **Matrix** - agents x machines; every cell distinguishes installed / absent /
   config-only / scan-failed / not-scanned. Click a cell to open its config.
 * **Inspector** - version, exec path, install method, model, provider, masked
-  base URL, MCP servers, skills, config file sources, unsupported fields,
-  warnings, and a sanitized JSON view.
+  base URL, MCP servers, skills, config scopes (system / user / project with
+  their state), unsupported fields, warnings, and a sanitized JSON view.
+* **Compare** - the same agent on two machines side by side, or two snapshots
+  of one runtime, as a field-level change list.
 
 ## Scanning
 
-* Manual: **Scan all**, or trigger a single machine from the API.
+* Manual: **Scan all**, or **Scan** on a single machine row.
+* Scheduled: the Schedule button turns on periodic fleet scans (10 minutes to
+  24 hours). State survives a restart; a run that comes due while another run
+  is active is skipped rather than queued.
 * Concurrency is bounded (default 4, hard ceiling 8 concurrent SSH sessions)
   and every runtime has its own timeout, so one dead host cannot stall a run.
 * Progress is visible while a run is in flight.
 * A failed scan keeps the previous data: the machine keeps showing its last
   known state and is flagged `stale` after `AGENT_FLEET_SCAN_TTL_SECONDS`
   (6h by default).
-* Every successful collection also writes a historical snapshot.
+* Every successful collection also writes a historical snapshot, and any two
+  snapshots (or two installations of the same agent) can be compared.
 
 ## CLI
 
@@ -121,10 +128,11 @@ This is a read-only observer.
 
     .venv/bin/python -m pytest tests/ -q
 
-62 tests: adapters against fixtures (installed / absent / config-only /
+92 tests: adapters against fixtures (installed / absent / config-only /
 missing / malformed / unreadable), the sanitizer, the probe protocol,
 all three inventory formats, timeout and connection-failure handling,
-concurrency, snapshot retention and the HTTP API.
+concurrency, snapshot retention, diff, scope precedence, scheduler and
+export, plus the HTTP API.
 
 ## Repo layout
 

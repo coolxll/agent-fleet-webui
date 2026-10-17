@@ -51,7 +51,27 @@ Last updated: 2026-10-18
 
 ### 7. Tests + docs (done)
 
-* 62 passing tests.
+* 92 passing tests.
+
+### 8. Comparison, scopes, scheduling, export (done)
+
+* **Snapshot diff + two-machine comparison**: `services/diff.py` produces
+  field-level change records for two installations (same agent on different
+  machines) or two snapshots (history of one runtime). UI "Compare" tab.
+* **Scope discovery + precedence**: every adapter declares a
+  system -> user -> project chain. Claude derives project roots from
+  `~/.claude.json`; Codex from its `[projects]` table. A second probe pass
+  reads project-scope files (`.claude/settings.json`, `.mcp.json`,
+  `opencode.json`, ...), capped at 5 roots and 30 files.
+  `resolution` is "effective" only when every scope in the chain was readable
+  or definitively absent; otherwise "declared" plus a warning naming the
+  unreadable file.
+* **Scheduled scanning**: one background loop in the API process, state
+  persisted in `app_state` so a restart resumes. A due run is skipped, never
+  queued, when a manual run is active.
+* **JSON export**: `/api/export` (optionally filtered by runtime, agent, or
+  detected-only) returns the whole fleet as one sanitized document; the UI has
+  an Export JSON button.
 
 ## Verified on real machines
 
@@ -89,8 +109,7 @@ fleet scan.
 * "Effective configuration" is never claimed - only declared values are shown.
 * Skills are counted and listed by directory/`SKILL.md` presence; frontmatter
   is not parsed.
-* Snapshot history is stored but there is no diff view yet (P1).
-* Scheduled scanning is not implemented; scans are manual.
+* Snapshot history now has a diff view (implemented in stage 8).
 * Stale runtime rows are not garbage collected: renaming a WSL distro in the
   inventory leaves the old row behind until it is removed by hand.
 
