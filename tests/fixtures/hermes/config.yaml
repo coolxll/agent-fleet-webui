@@ -1,0 +1,24 @@
+model:
+  default: fixture-model-v1
+  provider: fixture-provider
+  aliases:
+    fm: custom:fixture-provider/fixture-model-v1
+  key_env: FIXTURE_HERMES_API_KEY
+providers:
+  fixture-provider:
+    name: Fixture
+    base_url: https://fixture-hermes.example.com/v1
+    key_env: FIXTURE_HERMES_API_KEY
+  inline-provider:
+    api_key: sk-fixture-hermes-inline-abcdef0123456789
+    base_url: https://inline.example.com/v1
+mcp_servers:
+  fixture-hermes-mcp:
+    command: fixture-hermes-mcp
+    args: ["serve"]
+    env:
+      HERMES_TOKEN: sk-fixture-hermes-mcp-token-abcdef
+toolsets:
+  - core
+  - web
+timezone: UTC

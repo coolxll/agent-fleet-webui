@@ -1,0 +1,6 @@
+{
+  "lastChangelogVersion": "9.9.9",
+  "theme": "dark",
+  "defaultProvider": "fixture-provider",
+  "defaultModel": "fixture-model-v1"
+}

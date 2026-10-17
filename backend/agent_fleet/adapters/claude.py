@@ -178,10 +178,16 @@ class ClaudeAdapter(AgentAdapter):
                 n for n, kind in plugins if kind == "d" and not n.startswith(".") 
             ][:40]
 
-        if cfg.parse_status == "empty" and (cfg.mcp_servers or cfg.model):
-            cfg.parse_status = "partial"
-        elif cfg.model or cfg.mcp_servers or cfg.skills:
+        # Status reflects the config files themselves, not the skills directory.
+        any_usable = bool(
+            (settings_src and settings_src.usable) or (global_src and global_src.usable)
+        )
+        if not any_usable:
+            cfg.parse_status = "empty"
+        elif cfg.model or cfg.mcp_servers or cfg.settings:
             cfg.parse_status = "parsed"
+        else:
+            cfg.parse_status = "partial"
         cfg.sanitized.update(
             {
                 "agent": self.agent_id,

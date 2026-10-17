@@ -1,0 +1,13 @@
+Host la-tri
+    HostName 38.244.63.166
+    User root
+    Port 22
+Host racknerd rn
+    HostName 100.85.194.78
+    User coolxll
+Host wildcard-*
+    HostName 10.0.0.1
+Host ddrk
+    HostName 69.12.72.30
+    User lynn
+    Port 22222

@@ -1,0 +1,37 @@
+model = "gpt-5.1-codex"
+model_provider = "fixture-provider"
+model_reasoning_effort = "high"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+experimental_bearer_token = "sk-fixture-token-0123456789abcdef"
+
+[model_providers.fixture-provider]
+name = "Fixture"
+base_url = "https://fixture.example.com/v1?token=secretquery"
+wire_api = "responses"
+
+[mcp_servers.fixture-stdio]
+command = "/usr/local/bin/fixture-mcp"
+args = ["serve", "--verbose"]
+enabled = true
+
+[mcp_servers.fixture-stdio.env]
+FIXTURE_API_KEY = "sk-fixture-mcp-key-0123456789"
+FIXTURE_REGION = "eu-1"
+
+[mcp_servers.fixture-http]
+type = "streamable-http"
+url = "https://mcp.fixture.example.com/mcp"
+enabled = true
+
+[mcp_servers.fixture-http.http_headers]
+Authorization = "Bearer sk-fixture-header-token-9876543210"
+
+[[skills.config]]
+path = "/root/.codex/skills/fixture-skill/SKILL.md"
+enabled = true
+
+[[skills.config]]
+path = "/root/.codex/skills/disabled-skill/SKILL.md"
+enabled = false

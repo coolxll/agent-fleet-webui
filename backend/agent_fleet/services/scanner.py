@@ -122,21 +122,33 @@ async def probe_runtime(rt, settings) -> RuntimeScanResult:
     started = time.monotonic()
     result = RuntimeScanResult(runtime_id=rt.id)
     rt = to_ref(rt) if not isinstance(rt, RuntimeRef) else rt
-    windows = rt.transport == "windows"
-    if windows:
-        scripts = build_windows_probe_script(merged_probe_spec())
-    else:
-        scripts = [build_probe_script(merged_probe_spec())]
     runner = build_runner(rt, settings)
     result.transport = runner.describe()
 
-    chunks = []
-    for script in scripts:
+    if rt.transport == "windows":
+        # PowerShell runs each chunk in its own process; merge the outputs.
+        scripts = build_windows_probe_script(merged_probe_spec())
         per_chunk = max(10, settings.command_timeout // max(1, len(scripts)))
-        res = await runner.run_script(script, per_chunk)
+        chunks = []
+        for script in scripts:
+            chunk_result = await runner.run_script(script, per_chunk)
+            if chunk_result.timed_out:
+                result.error = f"probe timed out after {per_chunk}s via {runner.describe()}"
+                result.duration_ms = int((time.monotonic() - started) * 1000)
+                return result
+            if chunk_result.error:
+                result.error = f"{chunk_result.error} via {runner.describe()}"
+                result.duration_ms = int((time.monotonic() - started) * 1000)
+                return result
+            chunks.append(chunk_result.stdout)
+        res = ExecResult(stdout=NL.join(chunks), stderr="", exit_code=0)
+    else:
+        res = await runner.run_script(
+            build_probe_script(merged_probe_spec()), settings.command_timeout
+        )
         if res.timed_out:
             result.error = (
-                f"probe timed out after {per_chunk}s via {runner.describe()}"
+                f"probe timed out after {settings.command_timeout}s via {runner.describe()}"
             )
             result.duration_ms = int((time.monotonic() - started) * 1000)
             return result
@@ -144,11 +156,7 @@ async def probe_runtime(rt, settings) -> RuntimeScanResult:
             result.error = f"{res.error} via {runner.describe()}"
             result.duration_ms = int((time.monotonic() - started) * 1000)
             return result
-        chunks.append(res.stdout)
-        if res.exit_code != 0 and not chunks[0].strip():
-            break
 
-    res = ExecResult(stdout=NL.join(chunks), stderr="", exit_code=0)
     facts = parse_probe_output(res.stdout)
     if not facts.os and res.exit_code != 0:
         guessed = _fallback_kind_from_error(res.stderr)

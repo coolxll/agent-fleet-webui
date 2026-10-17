@@ -75,9 +75,14 @@ def _load_ansible_ini(text: str, path: Path) -> list[DiscoveredHost]:
         for name, value in cp.items(section):
             if not name or name in ("__name__",):
                 continue
-            hname = name.split()[0]
-            kv = _parse_kv_inline(value or "")
-            _merge_ansible_attrs(hosts, hname, kv, group=section)
+            # configparser splits on the first "=", so a line like
+            # "alpha ansible_host=1.2.3.4" arrives as key="alpha ansible_host".
+            line = name if value is None else f"{name}={value}"
+            tokens = shlex.split(line)
+            if not tokens:
+                continue
+            kv = _parse_kv_inline(" ".join(tokens[1:]))
+            _merge_ansible_attrs(hosts, tokens[0], kv, group=section)
     return list(hosts.values())
 
 

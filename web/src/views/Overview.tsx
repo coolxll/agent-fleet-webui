@@ -1,5 +1,21 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api, type Overview } from '../api'
+
+
+type RuntimeRow = {
+  id: string
+  host: string
+  key: string
+  kind: string
+  os_name: string | null
+  collect_user: string | null
+  transport: string
+  reachable: boolean | null
+  stale: boolean | null
+  enabled: boolean
+  last_success_at: string | null
+  agents_installed: number
+}
 
 function ago(iso: string | null): string {
   if (!iso) return 'never'
@@ -13,7 +29,7 @@ function ago(iso: string | null): string {
 
 export default function Overview({ onOpenRuntime }: { onOpenRuntime: (id: string) => void }) {
   const [data, setData] = useState<Overview | null>(null)
-  const [runtimes, setRuntimes] = useState<any[]>([])
+  const [runtimes, setRuntimes] = useState<RuntimeRow[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -34,6 +50,17 @@ export default function Overview({ onOpenRuntime }: { onOpenRuntime: (id: string
     return () => {
       alive = false
       clearInterval(t)
+    }
+  }, [])
+
+  const toggle = useCallback(async (r: RuntimeRow) => {
+    setRuntimes((prev) =>
+      prev.map((x) => (x.id === r.id ? { ...x, enabled: !r.enabled } : x))
+    )
+    try {
+      await api.setRuntimeEnabled(r.id, !r.enabled)
+    } catch {
+      setRuntimes((prev) => prev.map((x) => (x.id === r.id ? { ...x, enabled: r.enabled } : x)))
     }
   }, [])
 
@@ -161,6 +188,7 @@ export default function Overview({ onOpenRuntime }: { onOpenRuntime: (id: string
                 <th>State</th>
                 <th>Agents</th>
                 <th>Last success</th>
+                <th>Scan</th>
               </tr>
             </thead>
             <tbody>
@@ -187,6 +215,18 @@ export default function Overview({ onOpenRuntime }: { onOpenRuntime: (id: string
                   </td>
                   <td>{r.agents_installed}</td>
                   <td className="small muted">{ago(r.last_success_at)}</td>
+                  <td>
+                    <button
+                      className={'tag ' + (r.enabled ? 'ok' : 'unknown')}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        toggle(r)
+                      }}
+                      title={r.enabled ? 'Disable scanning' : 'Enable scanning'}
+                    >
+                      {r.enabled ? 'on' : 'off'}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

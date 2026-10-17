@@ -1,0 +1,10 @@
+{
+  "providers": {
+    "fixture-provider": {
+      "baseUrl": "https://fixture-pi.example.com/v1",
+      "api": "openai-completions",
+      "models": [{ "id": "fixture-model-v1" }, { "id": "fixture-model-v2" }]
+    },
+    "other-provider": { "baseUrl": "https://other.example.com/v1", "api": "openai-completions", "models": [{ "id": "x" }] }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "fixture-provider/fixture-model",
+  "theme": "fixture-dark",
+  "agent": { "build": { "model": "fixture-provider/fast" }, "plan": { "model": "fixture-provider/slow" } },
+  "provider": {
+    "fixture-provider": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "sk-fixture-opencode-key-0123456789abcdef",
+        "baseURL": "https://fixture-opencode.example.com/v1"
+      }
+    }
+  },
+  "mcp": {
+    "fixture-mcp": { "type": "local", "command": ["fixture-mcp", "serve"], "enabled": true },
+    "fixture-remote": { "type": "remote", "url": "https://mcp.fixture.example.com/remote", "enabled": false }
+  }
+}

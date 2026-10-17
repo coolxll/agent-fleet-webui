@@ -1,0 +1,12 @@
+{
+  "numStartups": 42,
+  "installMethod": "global",
+  "mcpServers": {
+    "fixture-search": { "type": "url", "url": "https://mcp.fixture.example.com/sse", "headers": { "Authorization": "Bearer sk-fixture-mcp-bearer-abcdef" } },
+    "fixture-local": { "command": "fixture-mcp", "args": ["--local"], "env": { "FIXTURE_TOKEN": "sk-fixture-env-token-abcdef0123" } }
+  },
+  "projects": {
+    "/work/a": { "mcpServers": { "project-only": { "command": "proj-mcp" } }, "allowedTools": [] },
+    "/work/b": { "mcpServers": { "project-only": { "command": "proj-mcp" } } }
+  }
+}

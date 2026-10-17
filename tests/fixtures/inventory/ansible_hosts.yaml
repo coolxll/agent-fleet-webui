@@ -1,0 +1,16 @@
+all:
+  children:
+    vps:
+      hosts:
+        rn-direct:
+          ansible_host: 64.188.31.181
+          ansible_user: coolxll
+          ansible_port: 22
+        la-tri:
+          ansible_host: 38.244.63.166
+          ansible_user: root
+    internal:
+      hosts:
+        wujie:
+          ansible_host: 100.83.8.30
+          ansible_user: coolx

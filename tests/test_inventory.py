@@ -1,0 +1,91 @@
+"""Inventory loading from all three supported sources."""
+
+from __future__ import annotations
+
+from agent_fleet.inventory import (
+    discover_inventory_dir,
+    load_all,
+    load_ansible_inventory,
+    load_project_yaml,
+    load_ssh_config,
+)
+
+
+def test_ansible_yaml_inventory():
+    hosts = load_ansible_inventory(Path("tests/fixtures/inventory/ansible_hosts.yaml"))
+    by_name = {h.name: h for h in hosts}
+    assert set(by_name) == {"rn-direct", "la-tri", "wujie"}
+    assert by_name["rn-direct"].hostname == "64.188.31.181"
+    assert by_name["rn-direct"].user == "coolxll"
+    assert by_name["rn-direct"].port == 22
+    assert by_name["la-tri"].user == "root"
+    assert all(h.source == "ansible" for h in hosts)
+
+
+def test_ansible_ini_inventory(tmp_path):
+    p = tmp_path / "hosts"
+    p.write_text(
+        "[vps]\n"
+        "alpha ansible_host=10.0.0.1 ansible_user=root ansible_port=2222\n"
+        "beta ansible_host=10.0.0.2\n"
+        "\n"
+        "[vps:vars]\n"
+        "ansible_python_interpreter=/usr/bin/python3\n"
+    )
+    hosts = {h.name: h for h in load_ansible_inventory(p)}
+    assert hosts["alpha"].hostname == "10.0.0.1"
+    assert hosts["alpha"].user == "root"
+    assert hosts["alpha"].port == 2222
+    assert hosts["beta"].hostname == "10.0.0.2"
+    # group vars must not become hosts
+    assert "ansible_python_interpreter" not in hosts
+
+
+def test_ssh_config_parsing():
+    from pathlib import Path
+
+    hosts = load_ssh_config(Path("tests/fixtures/inventory/ssh_config"))
+    by_name = {h.name: h for h in hosts}
+    assert set(by_name) == {"la-tri", "racknerd", "ddrk"}
+    assert by_name["ddrk"].port == 22222
+    assert by_name["ddrk"].user == "lynn"
+    assert by_name["la-tri"].hostname == "38.244.63.166"
+    # glob patterns are not hosts
+    assert "wildcard-*" not in by_name
+
+
+def test_ssh_config_missing_file(tmp_path):
+    assert load_ssh_config(tmp_path / "nope") == []
+
+
+def test_project_yaml_with_wsl(tmp_path):
+    p = tmp_path / "inv.yaml"
+    p.write_text(
+        "hosts:\n"
+        "  - name: box1\n"
+        "    kind: windows\n"
+        "    wsl:\n"
+        "      - distro: Ubuntu-22.04\n"
+        "        user: dev\n"
+        "  - name: box2\n"
+        "    kind: linux\n"
+        "    enabled: false\n"
+    )
+    hosts = {h.name: h for h in load_project_yaml(p)}
+    assert hosts["box1"].kind_hint == "windows"
+    assert hosts["box1"].wsl[0].distro == "Ubuntu-22.04"
+    assert hosts["box1"].wsl[0].user == "dev"
+    assert hosts["box2"].enabled is False
+
+
+def test_inventory_directory_discovery(tmp_path):
+    d = tmp_path / "inventory"
+    d.mkdir()
+    (d / "hosts.yaml").write_text(
+        "all:\n  hosts:\n    one:\n      ansible_host: 1.2.3.4\n"
+    )
+    hosts = discover_inventory_dir(d)
+    assert [h.name for h in hosts] == ["one"]
+
+
+from pathlib import Path  # noqa: E402

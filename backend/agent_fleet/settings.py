@@ -15,9 +15,9 @@ class Settings(BaseSettings):
     db_path: Path = ROOT / "data" / "fleet.db"
 
     # Inventory sources. Later entries override earlier ones for the same host name.
+    # Only the project inventory plus ~/.ssh/config by default.
     inventory_paths: list[Path] = [
         ROOT / "inventory.yaml",
-        ROOT / "examples" / "inventory.yaml",
     ]
     ssh_config_path: Path = Path.home() / ".ssh" / "config"
     workspace_root: Path = ROOT.parent

@@ -47,9 +47,11 @@ SECRET_KEY_MARKERS = (
 
 # Keys that contain a marker but are safe to show structurally.
 KEY_ALLOWLIST = (
+    # Structural fields we emit ourselves; they hold names, never values.
+    "env_keys",
+    "secret_keys_redacted",
     "key_env",          # hermes: name of the env var holding the key, not the key
     "keystore",
-    "monkey_key",
 )
 
 SECRET_VALUE_PREFIXES = (
@@ -74,7 +76,6 @@ SECRET_VALUE_PREFIXES = (
 )
 
 SECRET_VALUE_CONTAINS = (
-    "bearer ",
     "api-key: ",
     "x-api-key: ",
 )
@@ -105,6 +106,11 @@ def looks_like_secret(value) -> bool:
     for marker in SECRET_VALUE_CONTAINS:
         if marker in low:
             return True
+    # "Bearer <token>" is a credential; the word bearer alone is not.
+    if "bearer " in low:
+        tail = low.split("bearer ", 1)[1].strip().split(" ")[0]
+        if len(tail) >= 16 and all(c.isalnum() or c in "._-+" for c in tail):
+            return True
     # long high-entropy hex/base64 blobs
     if len(v) >= 32 and all(c.isalnum() or c in "+/=-_" for c in v):
         digits = sum(1 for c in v if c.isdigit())
@@ -114,7 +120,12 @@ def looks_like_secret(value) -> bool:
 
 
 def mask_url(url) -> tuple[str, bool]:
-    """Return (masked_url, changed). Keeps scheme://host[:port] only."""
+    """Return (masked_url, changed).
+
+    Keeps scheme://host[:port]/path and drops credentials, query strings and
+    fragments, which is where tokens hide. A path segment that itself looks
+    like a credential is dropped as well.
+    """
     if not isinstance(url, str) or not url:
         return (None, False)
     raw = url.strip()
@@ -124,14 +135,19 @@ def mask_url(url) -> tuple[str, bool]:
         parts = urlsplit(raw)
     except ValueError:
         return (MASKED, True)
+    changed = False
+    netloc = parts.netloc
     if parts.username or parts.password:
         host = parts.hostname or ""
         netloc = f"{host}:{parts.port}" if parts.port else host
-        return (f"{parts.scheme}://{netloc}", True)
-    netloc = parts.netloc
-    masked = f"{parts.scheme}://{netloc}"
-    changed = (parts.path not in ("", "/")) or bool(parts.query) or bool(parts.fragment)
-    return (masked, changed)
+        changed = True
+    path = "" if parts.path in ("", "/") else parts.path
+    if path and any(looks_like_secret(s) for s in path.split("/") if s):
+        path = ""
+        changed = True
+    if parts.query or parts.fragment:
+        changed = True
+    return (f"{parts.scheme}://{netloc}{path}", changed)
 
 
 def redact_value(value):

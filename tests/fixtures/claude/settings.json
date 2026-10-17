@@ -1,0 +1,13 @@
+{
+  "effortLevel": "high",
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "sk-fixture-claude-token-abcdef0123456789",
+    "ANTHROPIC_BASE_URL": "https://fixture-claude.example.com/v1",
+    "ANTHROPIC_MODEL": "fixture-sonnet",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "fixture-haiku",
+    "SOME_OTHER_FLAG": "1"
+  },
+  "permissions": { "allow": ["Bash(ls:*)"] },
+  "hooks": { "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "echo hi"}]}] },
+  "somethingUnknown": "keep-out"
+}
