@@ -13,26 +13,19 @@ hosts:
     tags:
       role: controller
 
-  # Windows hosts: add one entry per WSL distro you want probed
+  # Windows hosts: add one entry per WSL distro you want probed.
+  # Distros that are not listed are still auto-discovered on the first scan.
   - name: r9kp-win
     kind: windows
     wsl:
-      - distro: Ubuntu
+      - distro: Ubuntu-22.04
         user: coolxll
 
   - name: wujie-win
     kind: windows
-    wsl:
-      - distro: Ubuntu
-        user: coolx
-      - distro: Ubuntu-22.04
-        user: coolx
 
   - name: k14-win
     kind: windows
-    wsl:
-      - distro: Ubuntu
-        user: xulinglong
 
   # Direct WSL endpoints (sshd running inside the distro) are POSIX targets
   - name: r9kp-wsl

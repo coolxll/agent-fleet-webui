@@ -9,10 +9,19 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from agent_fleet.adapters.registry import all_adapters, merged_probe_spec
+NL = chr(10)
 
-from agent_fleet.remotes.executor import LocalRunner, SSHRunner, WindowsRunner, WslRunner
+from agent_fleet.adapters.registry import all_adapters, merged_probe_spec
+from agent_fleet.remotes.executor import (
+    CommandRunner,
+    ExecResult,
+    LocalRunner,
+    SSHRunner,
+    WindowsRunner,
+    WslRunner,
+)
 from agent_fleet.remotes.probe import build_probe_script, parse_probe_output
+from agent_fleet.remotes.probe_win import build_windows_probe_script
 
 
 @dataclass
@@ -112,20 +121,34 @@ async def probe_runtime(rt, settings) -> RuntimeScanResult:
     rt = to_ref(rt) if not isinstance(rt, RuntimeRef) else rt
     started = time.monotonic()
     result = RuntimeScanResult(runtime_id=rt.id)
-    script = build_probe_script(merged_probe_spec())
+    rt = to_ref(rt) if not isinstance(rt, RuntimeRef) else rt
+    windows = rt.transport == "windows"
+    if windows:
+        scripts = build_windows_probe_script(merged_probe_spec())
+    else:
+        scripts = [build_probe_script(merged_probe_spec())]
     runner = build_runner(rt, settings)
     result.transport = runner.describe()
 
-    res = await runner.run_script(script, settings.command_timeout)
-    if res.timed_out:
-        result.error = f"probe timed out after {settings.command_timeout}s via {runner.describe()}"
-        result.duration_ms = int((time.monotonic() - started) * 1000)
-        return result
-    if res.error:
-        result.error = f"{res.error} via {runner.describe()}"
-        result.duration_ms = int((time.monotonic() - started) * 1000)
-        return result
+    chunks = []
+    for script in scripts:
+        per_chunk = max(10, settings.command_timeout // max(1, len(scripts)))
+        res = await runner.run_script(script, per_chunk)
+        if res.timed_out:
+            result.error = (
+                f"probe timed out after {per_chunk}s via {runner.describe()}"
+            )
+            result.duration_ms = int((time.monotonic() - started) * 1000)
+            return result
+        if res.error:
+            result.error = f"{res.error} via {runner.describe()}"
+            result.duration_ms = int((time.monotonic() - started) * 1000)
+            return result
+        chunks.append(res.stdout)
+        if res.exit_code != 0 and not chunks[0].strip():
+            break
 
+    res = ExecResult(stdout=NL.join(chunks), stderr="", exit_code=0)
     facts = parse_probe_output(res.stdout)
     if not facts.os and res.exit_code != 0:
         guessed = _fallback_kind_from_error(res.stderr)
@@ -172,7 +195,7 @@ async def scan_runtime(rt, settings) -> RuntimeScanResult:
 
 
 async def _discover_wsl(rt, settings):
-    parent = WindowsRunner(rt.target, rt.ssh_port, settings.ssh_connect_timeout)
+    parent = CommandRunner(rt.target, rt.ssh_port, settings.ssh_connect_timeout)
     res = await parent.run_command(["wsl.exe", "-l", "-q"], min(20, settings.command_timeout))
     if not res.ok or not res.stdout:
         return []

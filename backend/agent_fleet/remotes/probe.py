@@ -266,6 +266,8 @@ class FileFact:
     status: str = "unknown"
     size: int = 0
     content: str = None
+    b64: bool = False
+    error: str = None
 
     @property
     def ok(self) -> bool:
@@ -313,17 +315,33 @@ def parse_probe_output(stdout: str) -> RemoteFacts:
     current = None
     buf: list = []
     for line in stdout.split(NL):
+        # Windows emitters add CR; a lone CR is never meaningful data here.
+        if line.endswith(chr(13)):
+            line = line[:-1]
         if current is not None:
             if line.startswith("AF" + chr(9) + "endfile" + chr(9)):
-                raw = NL.join(buf)
-                want = current.size
-                got = len(raw.encode("utf-8", "replace"))
-                if got > want:
-                    raw = raw[: max(0, len(raw) - (got - want))]
+                if current.b64:
+                    import base64
+
+                    try:
+                        raw = base64.b64decode("".join(buf), validate=False).decode(
+                            "utf-8", "replace"
+                        )
+                    except Exception:
+                        raw = ""
+                        current.error = "base64 decode failed"
+                else:
+                    raw = NL.join(buf)
+                    want = current.size
+                    got = len(raw.encode("utf-8", "replace"))
+                    if got > want:
+                        raw = raw[: max(0, len(raw) - (got - want))]
                 if current.size == 0 and raw == "":
                     current.status = "empty"
                 else:
                     current.status = "ok"
+                if current.b64 and current.error:
+                    current.status = "unreadable"
                 current.content = raw
                 facts.files[current.path] = current
                 current, buf = None, []
@@ -371,6 +389,10 @@ def parse_probe_output(stdout: str) -> RemoteFacts:
             except ValueError:
                 size = 0
             status = _f(parts, 4)
+            if status == "b64":
+                fact = FileFact(path=path, status="present", size=size, b64=True)
+                current, buf = fact, []
+                continue
             fact = FileFact(path=path, status=status, size=size)
             if status == "present":
                 current, buf = fact, []

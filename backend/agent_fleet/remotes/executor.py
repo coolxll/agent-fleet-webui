@@ -166,15 +166,42 @@ class SSHRunner(_SshBase):
         return self._target_label("ssh")
 
 
+class CommandRunner(_SshBase):
+    """Raw remote command execution over SSH (used as a parent for WSL)."""
+
+    kind = "ssh-raw"
+
+    async def run_script(self, script: str, timeout: int) -> ExecResult:
+        return await self.run_stdin(["sh", "-s"], script, timeout)
+
+    def describe(self) -> str:
+        return self._target_label("ssh")
+
+
 class WindowsRunner(_SshBase):
-    """Windows host reached over SSH, driving PowerShell remotely."""
+    """Windows host reached over SSH, driving PowerShell remotely.
+
+    Long scripts go over as UTF-16LE base64 with -EncodedCommand: piped stdin
+    is executed line by line by PowerShell, which breaks multi-statement
+    blocks, and inline quoting through cmd.exe is not survivable.
+    """
 
     kind = "windows"
 
+    def encode(self, script: str) -> str:
+        import base64
+
+        return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+
     async def run_script(self, script: str, timeout: int) -> ExecResult:
-        return await self.run_stdin(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "-"],
-            script,
+        return await self.run_command(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+                self.encode(script),
+            ],
             timeout,
         )
 
