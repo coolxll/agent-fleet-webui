@@ -74,4 +74,8 @@ def merged_probe_spec():
     spec = ProbeSpec()
     for a in all_adapters():
         spec = spec.merge(a.probe_spec())
+        # system-scope policy files are static, so they ride along for free
+        for path in getattr(a, "system_paths", []) or []:
+            if path not in spec.files:
+                spec.files.append(path)
     return spec

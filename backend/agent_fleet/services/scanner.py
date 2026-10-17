@@ -20,7 +20,13 @@ from agent_fleet.remotes.executor import (
     WindowsRunner,
     WslRunner,
 )
-from agent_fleet.remotes.probe import build_probe_script, parse_probe_output
+from agent_fleet.remotes.probe import (
+    ProbeSpec,
+    build_probe_script,
+    merge_facts,
+    parse_probe_output,
+)
+from agent_fleet.remotes.probe import _safe_path
 from agent_fleet.remotes.probe_win import build_windows_probe_script
 
 
@@ -179,9 +185,44 @@ async def probe_runtime(rt, settings) -> RuntimeScanResult:
     result.arch = facts.arch
     result.home = facts.home
     result.user = facts.user
+    facts = await _collect_project_scopes(rt, settings, runner, facts)
     result.agents = [a.run(facts) for a in all_adapters()]
     result.duration_ms = int((time.monotonic() - started) * 1000)
     return result
+
+
+# Project-scope files are only known after the user-scope pass, so they need
+# their own round trip. The number of files is capped to stay cheap.
+MAX_PROJECT_SCOPE_FILES = 30
+
+
+async def _collect_project_scopes(rt, settings, runner, facts):
+    if rt.transport == "windows":
+        script_builder = build_windows_probe_script
+    else:
+        script_builder = build_probe_script
+    spec = ProbeSpec()
+    for adapter in all_adapters():
+        for root in adapter.project_roots(facts) or []:
+            for rel in adapter.project_files or []:
+                path = root.rstrip("/") + "/" + rel
+                if _safe_path(path):
+                    spec.files.append(path)
+    spec.files = list(dict.fromkeys(spec.files))[:MAX_PROJECT_SCOPE_FILES]
+    if not spec.files:
+        return facts
+    try:
+        res = await runner.run_script(
+            script_builder(spec), max(15, settings.command_timeout)
+        )
+    except Exception:
+        return facts
+    if res.error or res.timed_out:
+        return facts
+    try:
+        return merge_facts(facts, parse_probe_output(res.stdout))
+    except Exception:
+        return facts
 
 
 def _os_label(facts) -> str:

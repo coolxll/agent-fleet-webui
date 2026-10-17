@@ -18,6 +18,7 @@ from agent_fleet.adapters.base import (
     _mcp_common,
     _read,
     _skills_from_dir,
+    apply_scope,
     extract_version,
     guess_install_method,
 )
@@ -45,6 +46,14 @@ class CodexAdapter(AgentAdapter):
     display_name = "Codex CLI"
     supports_config = True
 
+    PRECEDENCE_CHAIN = [
+        ("system", "/etc/codex/config.toml"),
+        ("user", CONFIG_PATH),
+    ]
+    system_paths = ["/etc/codex/config.toml"]
+    # Codex keeps project-level state inside the user config's [projects] table.
+    project_files: list = []
+
     def probe_spec(self) -> ProbeSpec:
         return ProbeSpec(
             bins=[BinProbe(key="codex:codex", binary="codex", version_args=["--version"])],
@@ -58,7 +67,6 @@ class CodexAdapter(AgentAdapter):
         rc, out = facts.version(key)
         raw = out.strip()
         if not path:
-            # Be explicit: no probe output at all means we never asked properly.
             if key not in facts.probed:
                 return Detection(status="unknown", error="no probe data for codex")
             return Detection(status="not_installed")
@@ -76,11 +84,25 @@ class CodexAdapter(AgentAdapter):
         )
 
     def discover_config(self, facts) -> list:
-        sources = [
+        return [
+            _read(facts, "/etc/codex/config.toml", "toml", scope="system", kind="policy"),
             _read(facts, CONFIG_PATH, "toml", scope="user", kind="config"),
             _read(facts, "~/.codex/AGENTS.md", "text", scope="user", kind="instructions"),
         ]
-        return sources
+
+    def project_roots(self, facts) -> list:
+        """Codex stores project trust in the user config, not on disk."""
+        src = _read(facts, CONFIG_PATH, "toml")
+        if not src.usable:
+            return []
+        try:
+            data = _load(src)
+        except Exception:
+            return []
+        projects = data.get("projects") if isinstance(data, dict) else None
+        if not isinstance(projects, dict):
+            return []
+        return [str(p) for p in projects.keys() if isinstance(p, str)][:5]
 
     def parse_config(self, facts, sources) -> ParsedConfig:
         primary = None
@@ -91,25 +113,27 @@ class CodexAdapter(AgentAdapter):
         cfg = ParsedConfig(resolution="declared")
         if primary is None or not primary.usable:
             cfg.parse_status = "empty" if (primary and primary.status == "missing") else "error"
-            cfg.warnings.append(f"codex config not readable ({primary.status if primary else 'absent'})")
-            return cfg
+            cfg.warnings.append(
+                f"codex config not readable ({primary.status if primary else 'absent'})"
+            )
+            return apply_scope(cfg, self, sources)
 
         try:
             data = _load(primary)
         except Exception as exc:
             cfg.parse_status = "error"
             cfg.warnings.append(f"TOML parse error: {type(exc).__name__}: {exc}"[:300])
-            return cfg
+            return apply_scope(cfg, self, sources)
         if not isinstance(data, dict):
             cfg.parse_status = "error"
             cfg.warnings.append("TOML root is not a table")
-            return cfg
+            return apply_scope(cfg, self, sources)
 
         settings, dropped = {}, []
         for k, v in data.items():
             if k in SETTING_KEYS:
                 settings[k] = v
-            elif k in ("mcp_servers", "skills", "model_providers"):
+            elif k in ("mcp_servers", "skills", "model_providers", "projects"):
                 continue
             else:
                 dropped.append(k)
@@ -159,12 +183,24 @@ class CodexAdapter(AgentAdapter):
             if not any(x["name"] == s["name"] for x in cfg.skills):
                 cfg.skills.append(s)
 
-        if is_secret_key("experimental_bearer_token") and "experimental_bearer_token" in data:
+        # project trust entries are names only (paths of directories)
+        projects = data.get("projects") or {}
+        if isinstance(projects, dict) and projects:
+            cfg.settings["projects"] = sorted(projects.keys())[:40]
+            cfg.settings["trusted_projects"] = sum(
+                1 for v in projects.values()
+                if isinstance(v, dict) and v.get("trust_level") == "trusted"
+            )
+
+        if "experimental_bearer_token" in data:
             cfg.warnings.append("config contains a bearer token field; value not read")
         cfg.parse_status = "parsed" if cfg.settings or cfg.mcp_servers or cfg.skills else "partial"
+        apply_scope(cfg, self, sources)
         cfg.sanitized = {
             "agent": self.agent_id,
             "scope": "user",
+            "resolution": cfg.resolution,
+            "scopes": cfg.settings.get("scopes"),
             "config_file": CONFIG_PATH,
             "model": cfg.model,
             "provider": cfg.model_provider,

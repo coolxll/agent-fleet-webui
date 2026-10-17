@@ -32,8 +32,12 @@ def assert_clean(payload) -> None:
 
 
 def _codex_facts(config: str | None = None, status: str = "ok"):
-    files = {"~/.codex/config.toml": (status, config) if config is not None else None,
-             "~/.codex/AGENTS.md": None}
+    files = {
+        "~/.codex/config.toml": (status, config) if config is not None else None,
+        "~/.codex/AGENTS.md": None,
+        # system policy path: probed, absent (the normal case)
+        "/etc/codex/config.toml": None,
+    }
     return make_facts(
         files=files,
         which={"codex:codex": "/usr/local/bin/codex"},
@@ -118,7 +122,20 @@ def test_codex_unreadable_file():
     )
     res = get_adapter("codex").run(facts)
     assert res.config.parse_status == "error"
-    assert "unreadable" in res.sources[0].status or res.sources[0].status == "error"
+    user_src = next(s for s in res.sources if s.path == "~/.codex/config.toml")
+    assert user_src.status in ("unreadable", "error")
+    # an unreadable scope must stop us from claiming effective values
+    assert res.config.resolution == "declared"
+    assert any("could not be resolved" in w for w in res.config.warnings)
+
+
+def test_codex_system_policy_is_reported_as_absent():
+    facts = _codex_facts(fixture_text("codex", "config.toml"))
+    res = get_adapter("codex").run(facts)
+    system = next(s for s in res.sources if s.scope == "system")
+    assert system.path == "/etc/codex/config.toml"
+    assert system.status == "missing"
+    assert res.config.resolution == "effective"
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +226,7 @@ def _opencode_facts(cfg=None):
     files = {
         "~/.config/opencode/opencode.json": cfg,
         "~/.config/opencode/opencode.jsonc": None,
+        "/etc/opencode/opencode.json": None,
     }
     return make_facts(
         files=files,

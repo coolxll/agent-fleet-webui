@@ -15,6 +15,7 @@ from agent_fleet.adapters.base import (
     _mask_endpoint,
     _mcp_common,
     _read,
+    apply_scope,
     extract_version,
     guess_install_method,
 )
@@ -38,6 +39,12 @@ class HermesAdapter(AgentAdapter):
     agent_id = "hermes"
     display_name = "Hermes Agent"
     supports_config = True
+
+    PRECEDENCE_CHAIN = [
+        ("system", "/etc/hermes/config.yaml"),
+        ("user", CONFIG_PATH),
+    ]
+    system_paths = ["/etc/hermes/config.yaml"]
 
     def probe_spec(self) -> ProbeSpec:
         return ProbeSpec(
@@ -73,16 +80,20 @@ class HermesAdapter(AgentAdapter):
         )
 
     def discover_config(self, facts) -> list:
-        return [_read(facts, CONFIG_PATH, "yaml", scope="user", kind="config")]
+        return [
+            _read(facts, "/etc/hermes/config.yaml", "yaml", scope="system", kind="policy"),
+            _read(facts, CONFIG_PATH, "yaml", scope="user", kind="config"),
+        ]
 
     def parse_config(self, facts, sources) -> ParsedConfig:
         cfg = ParsedConfig(resolution="declared")
         cfg.warnings.append("~/.hermes/.env is never read (contains credentials)")
-        src = sources[0] if sources else None
+        src = next((s for s in sources if s.path == CONFIG_PATH), None)
         if not src or not src.usable:
             if src:
                 cfg.warnings.append(f"{CONFIG_PATH}: {src.status}")
             cfg.parse_status = "empty" if (src and src.status == "missing") else "error"
+            apply_scope(cfg, self, sources)
             cfg.sanitized = self._view(cfg)
             return cfg
         try:
@@ -90,6 +101,7 @@ class HermesAdapter(AgentAdapter):
         except Exception as exc:
             cfg.parse_status = "error"
             cfg.warnings.append(f"YAML parse error: {type(exc).__name__}: {exc}"[:300])
+            apply_scope(cfg, self, sources)
             cfg.sanitized = self._view(cfg)
             return cfg
         if not isinstance(data, dict):
@@ -152,6 +164,7 @@ class HermesAdapter(AgentAdapter):
         cfg.unsupported_fields = sorted(set(str(k) for k in data.keys() if k not in known))[:60]
 
         cfg.parse_status = "parsed" if (cfg.model or cfg.mcp_servers) else "partial"
+        apply_scope(cfg, self, sources)
         cfg.sanitized = self._view(cfg)
         return cfg
 
@@ -159,6 +172,8 @@ class HermesAdapter(AgentAdapter):
         return {
             "agent": self.agent_id,
             "scope": "user",
+            "resolution": cfg.resolution,
+            "scopes": cfg.settings.get("scopes"),
             "config_file": CONFIG_PATH,
             "model": cfg.model,
             "provider": cfg.model_provider,

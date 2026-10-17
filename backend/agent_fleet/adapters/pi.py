@@ -17,6 +17,7 @@ from agent_fleet.adapters.base import (
     _load,
     _mask_endpoint,
     _read,
+    apply_scope,
     extract_version,
     guess_install_method,
 )
@@ -31,6 +32,12 @@ class PiAdapter(AgentAdapter):
     agent_id = "pi"
     display_name = "Pi Coding Agent"
     supports_config = True
+
+    PRECEDENCE_CHAIN = [
+        ("system", "/etc/pi/agent/settings.json"),
+        ("user", SETTINGS_PATH),
+    ]
+    system_paths = ["/etc/pi/agent/settings.json"]
 
     def probe_spec(self) -> ProbeSpec:
         return ProbeSpec(
@@ -60,6 +67,7 @@ class PiAdapter(AgentAdapter):
 
     def discover_config(self, facts) -> list:
         return [
+            _read(facts, "/etc/pi/agent/settings.json", "json", scope="system", kind="policy"),
             _read(facts, SETTINGS_PATH, "json", scope="user", kind="config"),
             _read(facts, MODELS_PATH, "json", scope="user", kind="catalog"),
         ]
@@ -108,12 +116,15 @@ class PiAdapter(AgentAdapter):
             cfg.warnings.append(f"{MODELS_PATH}: {m_src.status}")
 
         cfg.unsupported_fields = ["mcp_servers", "skills"] if not cfg.mcp_servers else []
+        apply_scope(cfg, self, sources)
         cfg.parse_status = "parsed" if (cfg.model or cfg.model_provider) else (
             "empty" if any(s.status == "missing" for s in sources) else "partial"
         )
         cfg.sanitized = {
             "agent": self.agent_id,
             "scope": "user",
+            "resolution": cfg.resolution,
+            "scopes": cfg.settings.get("scopes"),
             "config_file": SETTINGS_PATH,
             "model": cfg.model,
             "provider": cfg.model_provider,

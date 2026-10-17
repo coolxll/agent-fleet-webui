@@ -16,6 +16,7 @@ from agent_fleet.adapters.base import (
     _mcp_common,
     _read,
     _skills_from_dir,
+    apply_scope,
     extract_version,
     guess_install_method,
 )
@@ -31,6 +32,15 @@ class OpenCodeAdapter(AgentAdapter):
     agent_id = "opencode"
     display_name = "OpenCode"
     supports_config = True
+
+    PRECEDENCE_CHAIN = [
+        ("system", "/etc/opencode/opencode.json"),
+        ("user", JSON_PATH),
+        ("project", "PROJECT/opencode.json"),
+        ("project", "PROJECT/.opencode/opencode.json"),
+    ]
+    system_paths = ["/etc/opencode/opencode.json"]
+    project_files = ["opencode.json", ".opencode/opencode.json"]
 
     def probe_spec(self) -> ProbeSpec:
         return ProbeSpec(
@@ -68,10 +78,38 @@ class OpenCodeAdapter(AgentAdapter):
         )
 
     def discover_config(self, facts) -> list:
-        return [
+        sources = [
+            _read(facts, "/etc/opencode/opencode.json", "json", scope="system", kind="policy"),
             _read(facts, JSON_PATH, "json", scope="user", kind="config"),
             _read(facts, JSONC_PATH, "jsonc", scope="user", kind="config"),
         ]
+        for root in self.project_roots(facts):
+            for rel in self.project_files:
+                sources.append(
+                    _read(
+                        facts, root.rstrip("/") + "/" + rel, "json", scope="project", kind="config"
+                    )
+                )
+        return sources
+
+    def project_roots(self, facts) -> list:
+        """OpenCode keeps no project registry; the workspace roots it has been
+        run in are the best available signal."""
+        src = _read(facts, JSON_PATH, "json")
+        if not src.usable:
+            return []
+        try:
+            data = _load(src)
+        except Exception:
+            return []
+        if not isinstance(data, dict):
+            return []
+        roots = data.get("workspaceRoots") or data.get("projects")
+        if isinstance(roots, dict):
+            return [str(p) for p in roots.keys()][:5]
+        if isinstance(roots, list):
+            return [str(p) for p in roots][:5]
+        return []
 
     def parse_config(self, facts, sources) -> ParsedConfig:
         cfg = ParsedConfig(resolution="declared")
@@ -83,13 +121,15 @@ class OpenCodeAdapter(AgentAdapter):
         usable = [s for s in sources if s.usable]
         if not usable:
             states = {s.path: s.status for s in sources}
-            if all(v == "missing" for v in states.values()):
+            probed = [st for st in states.values() if st not in ("missing", "not_probed")]
+            if not probed:
                 cfg.parse_status = "empty"
             else:
                 cfg.parse_status = "error"
-            for p, st in states.items():
-                if st != "missing":
-                    cfg.warnings.append(f"{p}: {st}")
+                for p, st in states.items():
+                    if st not in ("missing", "not_probed"):
+                        cfg.warnings.append(f"{p}: {st}")
+            apply_scope(cfg, self, sources, self.project_roots(facts))
             cfg.sanitized = self._view(cfg)
             return cfg
 
@@ -104,12 +144,14 @@ class OpenCodeAdapter(AgentAdapter):
                 cfg.warnings.append(f"{s.path}: {type(exc).__name__}: {exc}"[:300])
         if data is None:
             cfg.parse_status = "error"
+            apply_scope(cfg, self, sources, self.project_roots(facts))
             cfg.sanitized = self._view(cfg)
             return cfg
 
         if not isinstance(data, dict):
             cfg.parse_status = "error"
             cfg.warnings.append(f"{used.path}: root is not an object")
+            apply_scope(cfg, self, sources, self.project_roots(facts))
             cfg.sanitized = self._view(cfg)
             return cfg
 
@@ -161,6 +203,7 @@ class OpenCodeAdapter(AgentAdapter):
             cfg.settings["agents"] = sorted(agents.keys())[:30]
 
         cfg.parse_status = "parsed" if (cfg.model or cfg.mcp_servers or cfg.skills or cfg.settings) else "empty"
+        apply_scope(cfg, self, sources, self.project_roots(facts))
         cfg.sanitized = self._view(cfg)
         return cfg
 
@@ -168,6 +211,8 @@ class OpenCodeAdapter(AgentAdapter):
         return {
             "agent": self.agent_id,
             "scope": "user",
+            "resolution": cfg.resolution,
+            "scopes": cfg.settings.get("scopes"),
             "config_file": JSON_PATH,
             "model": cfg.model,
             "provider": cfg.model_provider,

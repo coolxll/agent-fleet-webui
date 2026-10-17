@@ -152,6 +152,7 @@ export default function Inspector({
 
 function Detail({ detail, runtimeName }: { detail: InstallationDetail; runtimeName: string }) {
   const c = detail.config
+  const scopes = (c?.sanitized as any)?.scopes || (c?.settings as any)?.scopes || []
   return (
     <div>
       <div className="panel">
@@ -268,6 +269,48 @@ function Detail({ detail, runtimeName }: { detail: InstallationDetail; runtimeNa
                     </div>
                   ) : (
                     <span className="muted">none</span>
+                  )}
+                </dd>
+                <dt>Config scopes</dt>
+                <dd>
+                  {scopes.length === 0 ? (
+                    <span className="muted small">not reported by this adapter</span>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Scope</th>
+                          <th>Path</th>
+                          <th>State</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {scopes.map((s: any) => (
+                          <tr key={s.path}>
+                            <td>
+                              <span className="tag">{s.scope}</span>
+                            </td>
+                            <td className="mono small">{s.path}</td>
+                            <td>
+                              <span
+                                className={
+                                  'tag ' +
+                                  (s.status === 'ok'
+                                    ? 'ok'
+                                    : s.status === 'missing'
+                                      ? 'unknown'
+                                      : s.status === 'not_probed'
+                                        ? 'unknown'
+                                        : 'warn')
+                                }
+                              >
+                                {s.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
                 </dd>
                 <dt>Other settings</dt>

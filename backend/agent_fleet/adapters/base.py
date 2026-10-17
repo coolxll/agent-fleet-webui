@@ -243,6 +243,15 @@ class AgentAdapter(ABC):
     # adapters that only do discovery set this to False
     supports_config: bool = True
 
+    # ---- scope model ---------------------------------------------------
+    # system  : machine-wide policy, read-only for us
+    # user    : the account running the collection
+    # project : per-repository files, discovered from the user config
+    # Precedence runs low -> high in PRECEDENCE_CHAIN.
+    PRECEDENCE_CHAIN: list = []  # [(scope, path), ...] low priority first
+    system_paths: list = []
+    project_files: list = []
+
     @abstractmethod
     def probe_spec(self) -> ProbeSpec:
         """What to look for on the remote side."""
@@ -258,6 +267,65 @@ class AgentAdapter(ABC):
     @abstractmethod
     def parse_config(self, facts, sources) -> ParsedConfig:
         """Normalize + sanitize; never raise."""
+
+    def project_roots(self, facts) -> list:
+        """Project directories whose scope matters for this agent.
+
+        Derived from the user-scope config (Claude's projects table, Codex's
+        [projects] table, ...). The scanner runs a second pass over these.
+        """
+        return []
+
+    def scope_report(self, sources, project_roots=None) -> list:
+        """Per-scope provenance for the UI.
+
+        Project entries carry a "PROJECT/" prefix in the chain; they are
+        expanded to every discovered root so the report shows real paths.
+        """
+        by_path = {s.path: s for s in sources or []}
+        out = []
+        for scope, path in self.PRECEDENCE_CHAIN:
+            if path.startswith("PROJECT/"):
+                rel = path[len("PROJECT/") :]
+                roots = list(project_roots or [])
+                if not roots:
+                    out.append({"scope": scope, "path": rel, "status": "no_projects"})
+                    continue
+                for root in roots:
+                    full = root.rstrip("/") + "/" + rel
+                    src = by_path.get(full)
+                    out.append(
+                        {
+                            "scope": scope,
+                            "path": full,
+                            "status": src.status if src else "not_probed",
+                        }
+                    )
+                continue
+            src = by_path.get(path)
+            out.append(
+                {
+                    "scope": scope,
+                    "path": path,
+                    "status": src.status if src else "not_probed",
+                }
+            )
+        return out
+
+    def resolution_for(self, sources) -> tuple:
+        """(resolution, unresolved_paths).
+
+        "effective" is only claimed when every scope in the chain was actually
+        readable (or definitively absent). A file that exists but could not be
+        read or parsed makes the answer "declared" instead.
+        """
+        # Any scope file that exists but could not be read stops the chain.
+        unresolved = []
+        for src in sources or []:
+            if src.status in ("ok", "missing", "empty", "not_probed"):
+                continue
+            unresolved.append(src.path)
+        return ("effective" if not unresolved else "declared", unresolved)
 
     def sanitize(self, data: dict) -> dict:
         return sanitize_object(data)
@@ -283,6 +351,23 @@ class AgentAdapter(ABC):
         return AgentResult(
             agent_id=self.agent_id, detection=detection, sources=sources, config=config
         )
+
+
+def apply_scope(cfg: "ParsedConfig", adapter, sources, project_roots=None) -> "ParsedConfig":
+    """Attach scope provenance and the resolution verdict to a config."""
+    resolution, unresolved = adapter.resolution_for(sources)
+    cfg.resolution = resolution
+    if unresolved:
+        cfg.warnings.append(
+            "effective values could not be resolved, unreadable: "
+            + ", ".join(unresolved[:5])
+        )
+    cfg.settings["scope_resolution"] = resolution
+    cfg.settings["scopes"] = adapter.scope_report(sources, project_roots)
+    cfg.sanitized = dict(cfg.sanitized or {})
+    cfg.sanitized["resolution"] = resolution
+    cfg.sanitized["scopes"] = cfg.settings["scopes"]
+    return cfg
 
 
 def scrub_config(cfg: "ParsedConfig") -> "ParsedConfig":
@@ -336,7 +421,7 @@ def _read(facts, path: str, fmt: str, scope: str = "user", kind: str = "config")
         return SourceInfo(
             scope=scope, path=path, format=fmt, kind=kind, status="empty", size=0, content=""
         )
-    if f.status == "unreadable" or f.content is None:
+    if f.status == "unreadable" or (f.content is None and f.size > 0):
         return SourceInfo(
             scope=scope,
             path=path,
@@ -344,6 +429,11 @@ def _read(facts, path: str, fmt: str, scope: str = "user", kind: str = "config")
             kind=kind,
             status="unreadable",
             error="permission denied or read failed",
+        )
+    if f.status == "unknown":
+        # never probed (for example a scope added after the probe ran)
+        return SourceInfo(
+            scope=scope, path=path, format=fmt, kind=kind, status="not_probed", error="not probed"
         )
     return SourceInfo(
         scope=scope, path=path, format=fmt, kind=kind, status="ok", size=f.size, content=f.content

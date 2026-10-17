@@ -306,6 +306,21 @@ class RemoteFacts:
         return self.files.get(path, FileFact(path=path, status="unknown"))
 
 
+def merge_facts(base: RemoteFacts, other: RemoteFacts) -> RemoteFacts:
+    """Fold a second probe pass into the first one (project scopes)."""
+    base.files.update(other.files)
+    base.dirs.update(other.dirs)
+    for key, entries in other.ls.items():
+        base.ls.setdefault(key, []).extend(entries)
+    for key, entries in other.skills.items():
+        base.skills.setdefault(key, []).extend(entries)
+    base.which.update({k: v for k, v in other.which.items() if v})
+    base.probed |= other.probed
+    if not base.home and other.home:
+        base.home = other.home
+    return base
+
+
 def _f(parts, i):
     return parts[i] if len(parts) > i else ""
 
