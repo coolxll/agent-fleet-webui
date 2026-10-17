@@ -3,8 +3,9 @@ import { api } from './api'
 import Overview from './views/Overview'
 import Matrix from './views/Matrix'
 import Inspector from './views/Inspector'
+import Diff from './views/Diff'
 
-type Tab = 'overview' | 'matrix' | 'inspector'
+type Tab = 'overview' | 'matrix' | 'inspector' | 'diff'
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('overview')
@@ -155,6 +156,9 @@ export default function App() {
           >
             Inspector
           </button>
+          <button className={tab === 'diff' ? 'active' : ''} onClick={() => setTab('diff')}>
+            Compare
+          </button>
         </div>
       </div>
 
@@ -176,6 +180,7 @@ export default function App() {
             initialInstallationId={openInstallationId}
           />
         ) : null}
+        {tab === 'diff' ? <Diff /> : null}
       </div>
     </div>
   )

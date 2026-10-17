@@ -11,7 +11,7 @@ from sqlalchemy import select
 from agent_fleet import models
 from agent_fleet.adapters.registry import agent_ids, agent_meta
 from agent_fleet.db import session_scope
-from agent_fleet.services import persist as _persist  # noqa: F401
+from agent_fleet.services import diff, persist as _persist  # noqa: F401
 from agent_fleet.services import scan_service
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
 from agent_fleet.settings import get_settings
@@ -416,6 +416,111 @@ def list_snapshots(runtime_id: str = Query(None), limit: int = Query(50)):
                 for r in rows
             ]
         }
+
+
+@router.get("/snapshots/{snapshot_id}")
+def get_snapshot(snapshot_id: str):
+    with session_scope() as s:
+        snap = s.get(models.Snapshot, snapshot_id)
+        if snap is None:
+            raise HTTPException(404, "snapshot not found")
+        rt = s.get(models.Runtime, snap.runtime_id)
+        return {
+            "id": snap.id,
+            "runtime_id": snap.runtime_id,
+            "runtime": {
+                "id": snap.runtime_id,
+                "host": rt.host.name if rt and rt.host else None,
+                "key": rt.key if rt else None,
+                "kind": rt.kind if rt else None,
+            },
+            "created_at": _iso(snap.created_at),
+            "agents_found": snap.agents_found,
+            "payload": snap.payload,
+        }
+
+
+# --------------------------------------------------------------------------
+# comparison
+# --------------------------------------------------------------------------
+
+
+@router.get("/diff/installations")
+def diff_installations(a: str = Query(...), b: str = Query(...)):
+    """Compare two installations (same agent on different machines)."""
+    with session_scope() as s:
+        ia = s.get(models.AgentInstallation, a)
+        ib = s.get(models.AgentInstallation, b)
+        if ia is None or ib is None:
+            raise HTTPException(404, "one or both installations not found")
+        result = diff.compare_installations(ia, ib)
+        result["same_agent"] = ia.agent_id == ib.agent_id
+        for side in ("a", "b"):
+            rt = s.get(models.Runtime, result[side]["runtime_id"])
+            result[side]["runtime"] = {
+                "host": rt.host.name if rt and rt.host else None,
+                "key": rt.key if rt else None,
+                "kind": rt.kind if rt else None,
+                "collect_user": rt.collect_user if rt else None,
+            }
+        result["same_agent"] = ia.agent_id == ib.agent_id
+        return result
+
+
+@router.get("/diff/snapshots")
+def diff_snapshots(a: str = Query(...), b: str = Query(...)):
+    """Compare two snapshots (history, or two different runtimes)."""
+    with session_scope() as s:
+        sa = s.get(models.Snapshot, a)
+        sb = s.get(models.Snapshot, b)
+        if sa is None or sb is None:
+            raise HTTPException(404, "one or both snapshots not found")
+        result = diff.compare_snapshots(sa, sb)
+        for side, snap in (("a", sa), ("b", sb)):
+            rt = s.get(models.Runtime, snap.runtime_id)
+            result[side]["runtime"] = {
+                "host": rt.host.name if rt and rt.host else None,
+                "key": rt.key if rt else None,
+                "kind": rt.kind if rt else None,
+            }
+            result[side]["created_at"] = _iso(snap.created_at)
+        return result
+
+
+@router.get("/compare/{agent_id}")
+def compare_candidates(agent_id: str):
+    """Installations available as comparison targets for one agent."""
+    with session_scope() as s:
+        rows = (
+            s.execute(
+                select(models.AgentInstallation)
+                .where(models.AgentInstallation.agent_id == agent_id)
+                .where(models.AgentInstallation.detected.is_(True))
+            )
+            .scalars()
+            .all()
+        )
+        out = []
+        for i in rows:
+            rt = s.get(models.Runtime, i.runtime_id)
+            out.append(
+                {
+                    "installation_id": i.id,
+                    "agent": i.agent_id,
+                    "status": i.status,
+                    "version": i.version,
+                    "runtime_id": i.runtime_id,
+                    "host": rt.host.name if rt and rt.host else None,
+                    "runtime_key": rt.key if rt else None,
+                    "kind": rt.kind if rt else None,
+                    "user": rt.collect_user if rt else None,
+                    "model": i.config.model if i.config else None,
+                    "config_status": i.config_status,
+                    "collected_at": _iso(i.config.collected_at) if i.config else None,
+                }
+            )
+        out.sort(key=lambda x: (x["host"] or "", x["runtime_key"] or ""))
+        return {"agent": agent_id, "candidates": out}
 
 
 # --------------------------------------------------------------------------

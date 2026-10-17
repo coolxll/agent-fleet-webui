@@ -175,6 +175,41 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   return (await res.json()) as T
 }
 
+export type DiffChange = { path: string; kind: string; a: any; b: any }
+
+export type InstallationDiff = {
+  kind: string
+  same_agent: boolean
+  identical: boolean
+  a: { id: string; agent: string; runtime_id: string; runtime?: any }
+  b: { id: string; agent: string; runtime_id: string; runtime?: any }
+  changes: DiffChange[]
+}
+
+export type SnapshotDiff = {
+  kind: string
+  identical: boolean
+  a: { id: string; runtime_id: string; runtime?: any; created_at?: string | null }
+  b: { id: string; runtime_id: string; runtime?: any; created_at?: string | null }
+  per_agent: Record<string, DiffChange[]>
+  changes: DiffChange[]
+}
+
+export type CompareCandidate = {
+  installation_id: string
+  agent: string
+  status: string
+  version: string | null
+  runtime_id: string
+  host: string | null
+  runtime_key: string | null
+  kind: string | null
+  user: string | null
+  model: string | null
+  config_status: string
+  collected_at: string | null
+}
+
 export const api = {
   agents: () => get<{ agents: AgentMeta[] }>('/agents'),
   overview: () => get<Overview>('/overview'),
@@ -191,6 +226,24 @@ export const api = {
   },
   installation: (id: string) => get<InstallationDetail>('/installations/' + id),
   scans: () => get<{ runs: any[] }>('/scans'),
+  snapshots: (runtimeId?: string, limit = 100) => {
+    const q = new URLSearchParams()
+    if (runtimeId) q.set('runtime_id', runtimeId)
+    q.set('limit', String(limit))
+    return get<{
+      snapshots: {
+        id: string
+        runtime_id: string
+        created_at: string | null
+        agents_found: number
+      }[]
+    }>('/snapshots?' + q.toString())
+  },
+  compare: (agentId: string) => get<{ agent: string; candidates: CompareCandidate[] }>('/compare/' + agentId),
+  diffInstallations: (a: string, b: string) =>
+    get<InstallationDiff>('/diff/installations?a=' + a + '&b=' + b),
+  diffSnapshots: (a: string, b: string) =>
+    get<SnapshotDiff>('/diff/snapshots?a=' + a + '&b=' + b),
   scan: (id: string) => get<ScanRun>('/scan/' + id),
   activeScans: () => get<{ runs: any[] }>('/scan/active'),
   startScan: (runtimeIds: string[] | null) =>
