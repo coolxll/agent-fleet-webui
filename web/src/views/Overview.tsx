@@ -1,0 +1,198 @@
+import { useEffect, useState } from 'react'
+import { api, type Overview } from '../api'
+
+function ago(iso: string | null): string {
+  if (!iso) return 'never'
+  const then = new Date(iso).getTime()
+  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000))
+  if (secs < 60) return secs + 's ago'
+  if (secs < 3600) return Math.floor(secs / 60) + 'm ago'
+  if (secs < 86400) return Math.floor(secs / 3600) + 'h ago'
+  return Math.floor(secs / 86400) + 'd ago'
+}
+
+export default function Overview({ onOpenRuntime }: { onOpenRuntime: (id: string) => void }) {
+  const [data, setData] = useState<Overview | null>(null)
+  const [runtimes, setRuntimes] = useState<any[]>([])
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      try {
+        const [ov, rts] = await Promise.all([api.overview(), api.runtimes()])
+        if (!alive) return
+        setData(ov)
+        setRuntimes(rts.runtimes)
+        setError(null)
+      } catch (e: any) {
+        if (alive) setError(String(e.message || e))
+      }
+    }
+    load()
+    const t = setInterval(load, 10000)
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [])
+
+  if (error) return <div className="err">{error}</div>
+  if (!data) return <div className="muted">Loading...</div>
+
+  const t = data.totals
+  return (
+    <div>
+      <div className="cards">
+        <div className="card">
+          <div className="label">Runtimes</div>
+          <div className="value">{t.runtimes}</div>
+          <div className="hint">{t.hosts} hosts</div>
+        </div>
+        <div className="card">
+          <div className="label">Reachable</div>
+          <div className="value" style={{ color: 'var(--ok)' }}>
+            {t.online}
+          </div>
+          <div className="hint">of {t.runtimes} scanned</div>
+        </div>
+        <div className="card">
+          <div className="label">Unreachable</div>
+          <div className="value" style={{ color: t.offline ? 'var(--bad)' : undefined }}>
+            {t.offline}
+          </div>
+          <div className="hint">{t.unknown} not scanned yet</div>
+        </div>
+        <div className="card">
+          <div className="label">Agent installs</div>
+          <div className="value">{t.installations}</div>
+          <div className="hint">detected across fleet</div>
+        </div>
+        <div className="card">
+          <div className="label">Last success</div>
+          <div className="value" style={{ fontSize: 16 }}>
+            {ago(data.last_successful_scan)}
+          </div>
+          <div className="hint">stale after {Math.round(data.stale_after_s / 3600)}h</div>
+        </div>
+      </div>
+
+      <div className="grid2">
+        <div className="panel">
+          <h2>Agent distribution</h2>
+          <div className="body">
+            <table>
+              <thead>
+                <tr>
+                  <th>Agent</th>
+                  <th>Installations</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.agents.map((a) => (
+                  <tr key={a.id}>
+                    <td className="mono">{a.id}</td>
+                    <td>{a.installations}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="panel">
+          <h2>Recent scan runs</h2>
+          <div className="body">
+            {data.recent_runs.length === 0 ? (
+              <div className="muted small">No scans yet. Use "Scan all".</div>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Started</th>
+                    <th>Status</th>
+                    <th>Result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.recent_runs.map((r) => (
+                    <tr key={r.id}>
+                      <td>{ago(r.started)}</td>
+                      <td>
+                        <span
+                          className={
+                            'tag ' +
+                            (r.status === 'completed'
+                              ? 'ok'
+                              : r.status === 'failed'
+                                ? 'bad'
+                                : r.status === 'partial'
+                                  ? 'warn'
+                                  : '')
+                          }
+                        >
+                          {r.status}
+                        </span>
+                      </td>
+                      <td className="small">
+                        {r.succeeded} ok / {r.failed} failed / {r.total} total
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <h2>Runtimes</h2>
+        <div className="body">
+          <table>
+            <thead>
+              <tr>
+                <th>Host</th>
+                <th>Runtime</th>
+                <th>Kind</th>
+                <th>OS</th>
+                <th>User</th>
+                <th>Transport</th>
+                <th>State</th>
+                <th>Agents</th>
+                <th>Last success</th>
+              </tr>
+            </thead>
+            <tbody>
+              {runtimes.map((r) => (
+                <tr key={r.id} onClick={() => onOpenRuntime(r.id)} style={{ cursor: 'pointer' }}>
+                  <td className="mono">{r.host}</td>
+                  <td className="mono">{r.key}</td>
+                  <td>
+                    <span className="tag">{r.kind}</span>
+                  </td>
+                  <td className="small">{r.os_name || <span className="muted">unknown</span>}</td>
+                  <td className="small">{r.collect_user || '-'}</td>
+                  <td className="small muted">{r.transport}</td>
+                  <td>
+                    <span
+                      className={
+                        'tag ' +
+                        (r.reachable === true ? 'ok' : r.reachable === false ? 'bad' : 'unknown')
+                      }
+                    >
+                      {r.reachable === true ? 'up' : r.reachable === false ? 'down' : 'unscanned'}
+                    </span>
+                    {r.stale ? <span className="tag warn">stale</span> : null}
+                  </td>
+                  <td>{r.agents_installed}</td>
+                  <td className="small muted">{ago(r.last_success_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}

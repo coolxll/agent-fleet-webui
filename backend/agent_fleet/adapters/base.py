@@ -22,7 +22,11 @@ except ModuleNotFoundError:  # pragma: no cover - py<3.11
 
 import yaml
 
-from agent_fleet.adapters.sanitize import mask_url, sanitize_object
+from agent_fleet.adapters.sanitize import (
+    mask_url,
+    redact_value,
+    sanitize_object,
+)
 from agent_fleet.remotes.probe import ProbeSpec
 
 
@@ -275,7 +279,30 @@ class AgentAdapter(ABC):
                 parse_status="unsupported",
                 unsupported_fields=["<full config parsing not implemented>"],
             )
-        return AgentResult(agent_id=self.agent_id, detection=detection, sources=sources, config=config)
+        config = scrub_config(config)
+        return AgentResult(
+            agent_id=self.agent_id, detection=detection, sources=sources, config=config
+        )
+
+
+def scrub_config(cfg: "ParsedConfig") -> "ParsedConfig":
+    """Last line of defence: no adapter output reaches storage unscrubbed.
+
+    Walks every value recursively, dropping secret-named keys (apiKey and
+    friends can be nested inside an otherwise innocent "provider" block) and
+    redacting values that look like credentials.
+    """
+    cfg.settings = sanitize_object(cfg.settings) if cfg.settings else {}
+    cfg.sanitized = sanitize_object(cfg.sanitized) if cfg.sanitized else {}
+    cfg.mcp_servers = sanitize_object(cfg.mcp_servers) if cfg.mcp_servers else []
+    cfg.skills = sanitize_object(cfg.skills) if cfg.skills else []
+    if isinstance(cfg.model, str):
+        cfg.model = redact_value(cfg.model)
+    if isinstance(cfg.model_provider, str):
+        cfg.model_provider = redact_value(cfg.model_provider)
+    if isinstance(cfg.base_url, str):
+        cfg.base_url = redact_value(cfg.base_url)
+    return cfg
 
 
 def _read(facts, path: str, fmt: str, scope: str = "user", kind: str = "config") -> SourceInfo:

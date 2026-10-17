@@ -128,6 +128,18 @@ class OpenCodeAdapter(AgentAdapter):
                 cfg.model_provider = data["provider"]
         if isinstance(data.get("provider"), str) and data["provider"]:
             cfg.model_provider = data["provider"]
+        # providers.<name>.options.baseURL is the network endpoint in use
+        providers = data.get("provider")
+        if isinstance(providers, dict):
+            active = None
+            if isinstance(cfg.model_provider, str) and cfg.model_provider in providers:
+                active = providers[cfg.model_provider]
+            elif len(providers) == 1:
+                active = list(providers.values())[0]
+            opts = active.get("options") if isinstance(active, dict) else None
+            if isinstance(opts, dict) and isinstance(opts.get("baseURL"), str):
+                cfg.base_url, cfg.base_url_masked = _mask_endpoint(opts["baseURL"])
+            cfg.settings["providers"] = sorted(providers.keys())[:40]
 
         mcp = data.get("mcp")
         if isinstance(mcp, dict):
