@@ -1,0 +1,31 @@
+# Example inventory in Agent Fleet project format.
+#
+# Copy to ./inventory.yaml and adjust. Everything here is optional: the SSH
+# client config already provides aliases, and this file only adds what it
+# cannot express (runtime kind, WSL distros, tags, disabled hosts).
+
+hosts:
+  - name: local-controller
+    kind: macos
+    tags:
+      role: controller
+
+  - name: my-windows-box
+    kind: windows
+    wsl:
+      - distro: Ubuntu
+        user: ubuntu
+    tags:
+      role: workstation
+
+  # A direct SSH endpoint; no WSL, no Windows shell involved
+  - name: my-linux-server
+    kind: linux
+    hostname: 10.0.0.10
+    user: deploy
+    port: 22
+
+  # Discovered but not scanned
+  - name: cold-storage
+    kind: linux
+    enabled: false

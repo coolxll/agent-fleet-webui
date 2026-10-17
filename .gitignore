@@ -1,0 +1,19 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# data
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# frontend
+web/node_modules/
+web/dist/
+.DS_Store
+
+# local scratch
+scratch_*.py

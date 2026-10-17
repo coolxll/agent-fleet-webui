@@ -1,0 +1,58 @@
+# Agent Fleet inventory (project format).
+#
+# Sources are merged; later entries only fill gaps left by earlier ones.
+# The OpenSSH client config (~/.ssh/config) is always read as well, so every
+# ssh alias you already have shows up automatically. This file exists to add
+# what SSH config cannot express: runtime kind hints and WSL distros.
+#
+# kind: macos | linux | windows | wsl | auto
+
+hosts:
+  - name: local-controller
+    kind: macos
+    tags:
+      role: controller
+
+  # Windows hosts: add one entry per WSL distro you want probed
+  - name: r9kp-win
+    kind: windows
+    wsl:
+      - distro: Ubuntu
+        user: coolxll
+
+  - name: wujie-win
+    kind: windows
+    wsl:
+      - distro: Ubuntu
+        user: coolx
+      - distro: Ubuntu-22.04
+        user: coolx
+
+  - name: k14-win
+    kind: windows
+    wsl:
+      - distro: Ubuntu
+        user: xulinglong
+
+  # Direct WSL endpoints (sshd running inside the distro) are POSIX targets
+  - name: r9kp-wsl
+    kind: wsl
+  - name: wujie
+    kind: linux
+
+  - name: rn-direct
+    kind: linux
+    tags:
+      role: worker
+  - name: x13
+    kind: linux
+  - name: k14
+    kind: linux
+  - name: la-tri
+    kind: linux
+  - name: jph2
+    kind: linux
+  - name: ddrk
+    kind: linux
+  - name: corp172-dev
+    kind: linux
