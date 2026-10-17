@@ -228,6 +228,16 @@ class ScanTask(Base):
     agents_found: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class AppState(Base):
+    """Tiny key/value store for runtime configuration that must survive restart."""
+
+    __tablename__ = "app_state"
+
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    value: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Snapshot(Base):
     """Historical record of one successful runtime collection."""
 

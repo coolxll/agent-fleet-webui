@@ -7,6 +7,16 @@ import Diff from './views/Diff'
 
 type Tab = 'overview' | 'matrix' | 'inspector' | 'diff'
 
+type ScheduleState = {
+  enabled: boolean
+  interval_seconds: number
+  running: boolean
+  last_run_id: string | null
+  last_run_at: string | null
+  skipped_because_busy: number
+  next_run_at: string | null
+}
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('overview')
   const [runtimeFilter, setRuntimeFilter] = useState<string | undefined>(undefined)
@@ -15,6 +25,8 @@ export default function App() {
   const [progress, setProgress] = useState<{ done: number; total: number; ok: number; failed: number; status: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [schedule, setSchedule] = useState<ScheduleState | null>(null)
+  const [showSchedule, setShowSchedule] = useState(false)
 
   useEffect(() => {
     api.activeScans().then((r) => {
@@ -68,6 +80,49 @@ export default function App() {
       setBusy(false)
     }
   }, [])
+
+  const loadSchedule = useCallback(async () => {
+    try {
+      const s = (await fetch('/api/schedule').then((r) => r.json())) as ScheduleState
+      setSchedule(s)
+    } catch {
+      /* scheduler unavailable */
+    }
+  }, [])
+
+  const saveSchedule = useCallback(async (patch: Partial<ScheduleState>) => {
+    try {
+      const res = await fetch('/api/schedule', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      })
+      setSchedule(await res.json())
+    } catch (e: any) {
+      setToast(String(e.message || e))
+    }
+  }, [])
+
+  const exportJson = useCallback(async () => {
+    try {
+      const res = await fetch('/api/export')
+      const data = await res.json()
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'agent-fleet-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.json'
+      a.click()
+      URL.revokeObjectURL(url)
+      setToast('Exported ' + (data.counts?.runtimes ?? 0) + ' runtime(s), ' + (data.counts?.installations ?? 0) + ' installation(s)')
+    } catch (e: any) {
+      setToast(String(e.message || e))
+    }
+  }, [])
+
+  useEffect(() => {
+    loadSchedule()
+  }, [loadSchedule])
 
   const sync = useCallback(async () => {
     setBusy(true)
@@ -135,6 +190,12 @@ export default function App() {
           <button className="btn" onClick={sync} disabled={busy}>
             Re-sync inventory
           </button>
+          <button className="btn" onClick={() => setShowSchedule((v) => !v)}>
+            {showSchedule ? 'Hide schedule' : 'Schedule'}
+          </button>
+          <button className="btn" onClick={exportJson} disabled={busy}>
+            Export JSON
+          </button>
           <button className="btn primary" onClick={scanAll} disabled={busy || !!runId}>
             {runId ? 'Scanning...' : 'Scan all'}
           </button>
@@ -161,6 +222,39 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {showSchedule && schedule ? (
+        <div className="container" style={{ paddingBottom: 0 }}>
+          <div className="panel">
+            <h2>Scheduled scanning</h2>
+            <div className="body filters">
+              <label className="small">
+                <input
+                  type="checkbox"
+                  checked={schedule.enabled}
+                  onChange={(e) => saveSchedule({ enabled: e.target.checked })}
+                />{' '}
+                scan the whole fleet every
+              </label>
+              <select
+                value={schedule.interval_seconds}
+                onChange={(e) => saveSchedule({ interval_seconds: Number(e.target.value) })}
+              >
+                <option value={600}>10 minutes</option>
+                <option value={1800}>30 minutes</option>
+                <option value={3600}>1 hour</option>
+                <option value={21600}>6 hours</option>
+                <option value={86400}>24 hours</option>
+              </select>
+              <span className="muted small">
+                {schedule.running ? 'run in progress' : 'idle'}
+                {schedule.last_run_at ? ' | last run ' + new Date(schedule.last_run_at).toLocaleString() : ''}
+                {schedule.skipped_because_busy ? ' | skipped while busy: ' + schedule.skipped_because_busy : ''}
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {toast ? (
         <div className="container" style={{ paddingBottom: 0 }}>

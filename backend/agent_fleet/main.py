@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from agent_fleet.api.routes import router
 from agent_fleet.db import create_all, init_engine
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
+from agent_fleet.services.scheduler import get_schedule
 from agent_fleet.settings import ROOT, get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -37,6 +38,13 @@ async def lifespan(app: FastAPI):
         log.info("inventory sync: %s", result)
     except Exception as exc:
         log.warning("inventory sync failed: %s", exc)
+    try:
+        schedule = get_schedule()
+        if schedule.enabled:
+            schedule.start()
+            log.info("scheduled scanning enabled (every %ss)", schedule.interval_seconds)
+    except Exception as exc:
+        log.warning("scheduler start failed: %s", exc)
     yield
 
 

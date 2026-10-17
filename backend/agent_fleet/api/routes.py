@@ -11,8 +11,11 @@ from sqlalchemy import select
 from agent_fleet import models
 from agent_fleet.adapters.registry import agent_ids, agent_meta
 from agent_fleet.db import session_scope
-from agent_fleet.services import diff, persist as _persist  # noqa: F401
+from agent_fleet.services import diff
+from agent_fleet.services import persist as _persist  # noqa: F401
 from agent_fleet.services import scan_service
+from agent_fleet.services.export import build_export
+from agent_fleet.services.scheduler import get_schedule
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
 from agent_fleet.settings import get_settings
 
@@ -524,6 +527,23 @@ def compare_candidates(agent_id: str):
 
 
 # --------------------------------------------------------------------------
+# export
+# --------------------------------------------------------------------------
+
+
+@router.get("/export")
+def export_fleet(
+    runtime_id: str = Query(None),
+    agent_id: str = Query(None),
+    detected_only: bool = Query(False),
+):
+    """The whole fleet as one sanitized JSON document."""
+    return build_export(
+        runtime_id=runtime_id, agent_id=agent_id, detected_only=detected_only
+    )
+
+
+# --------------------------------------------------------------------------
 # scanning
 # --------------------------------------------------------------------------
 
@@ -558,6 +578,18 @@ async def start_scan(req: ScanRequest):
 @router.get("/scan/active")
 def active_scans():
     return {"runs": scan_service.active_runs()}
+
+
+@router.get("/schedule")
+def get_schedule_state():
+    return get_schedule().status()
+
+
+@router.put("/schedule")
+async def update_schedule(payload: dict):
+    enabled = payload.get("enabled")
+    interval = payload.get("interval_seconds")
+    return get_schedule().update(enabled=enabled, interval_seconds=interval)
 
 
 @router.get("/scan/{run_id}")
