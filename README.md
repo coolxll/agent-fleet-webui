@@ -91,6 +91,7 @@ Nothing is duplicated: if a host appears in several sources it is stored once.
     .venv/bin/python -m agent_fleet.cli probe <host> # one runtime, full JSON
     .venv/bin/python -m agent_fleet.cli scan         # scan every enabled runtime
     .venv/bin/python -m agent_fleet.cli scan --host <name>
+    curl http://127.0.0.1:8000/api/export -o fleet.json   # sanitized export
 
 ## Security
 
@@ -153,5 +154,17 @@ export, plus the HTTP API.
 The adapter only ever sees `RemoteFacts`, so it is testable without a machine.
 
 ## Known limitations
+
+* Config is stored as **declared**, not "effective" - env vars, project files
+  and CLI flags can all override it.
+* Project- and system-scope files are discovered and displayed, but only the
+  user-scope pass merges values into the normalized view. Claude's per-project
+  MCP servers recorded in `~/.claude.json` are listed separately, with a
+  warning saying so.
+* Windows layout variants may show `partial` instead of `parsed`.
+* Skills are counted and listed by directory/`SKILL.md` presence; frontmatter
+  is not parsed.
+* Renaming a WSL distro in the inventory leaves the old runtime row behind
+  until it is removed by hand.
 
 See `docs/progress.md`.
