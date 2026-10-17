@@ -80,6 +80,19 @@ export default function App() {
     }
   }, [])
 
+  const scanRuntime = useCallback(async (id: string) => {
+    setBusy(true)
+    try {
+      const res = await api.startScan([id])
+      setRunId(res.run_id)
+      setToast('Scanning 1 runtime...')
+    } catch (e: any) {
+      setToast(String(e.message || e))
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
   const openRuntime = useCallback((id: string) => {
     setRuntimeFilter(id)
     setTab('inspector')
@@ -152,7 +165,9 @@ export default function App() {
       ) : null}
 
       <div className="container">
-        {tab === 'overview' ? <Overview onOpenRuntime={openRuntime} /> : null}
+        {tab === 'overview' ? (
+          <Overview onOpenRuntime={openRuntime} onScanRuntime={scanRuntime} />
+        ) : null}
         {tab === 'matrix' ? <Matrix onOpenInstallation={openInstallation} /> : null}
         {tab === 'inspector' ? (
           <Inspector

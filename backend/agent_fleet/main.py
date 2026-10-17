@@ -58,11 +58,6 @@ app.add_middleware(
 app.include_router(router, prefix="/api")
 
 
-@app.get("/api/health")
-def api_health():
-    return {"ok": True}
-
-
 if WEB_DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
 

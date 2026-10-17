@@ -27,7 +27,13 @@ function ago(iso: string | null): string {
   return Math.floor(secs / 86400) + 'd ago'
 }
 
-export default function Overview({ onOpenRuntime }: { onOpenRuntime: (id: string) => void }) {
+export default function Overview({
+  onOpenRuntime,
+  onScanRuntime
+}: {
+  onOpenRuntime: (id: string) => void
+  onScanRuntime: (id: string) => void
+}) {
   const [data, setData] = useState<Overview | null>(null)
   const [runtimes, setRuntimes] = useState<RuntimeRow[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -189,6 +195,7 @@ export default function Overview({ onOpenRuntime }: { onOpenRuntime: (id: string
                 <th>Agents</th>
                 <th>Last success</th>
                 <th>Scan</th>
+                <th>Enabled</th>
               </tr>
             </thead>
             <tbody>
@@ -215,6 +222,18 @@ export default function Overview({ onOpenRuntime }: { onOpenRuntime: (id: string
                   </td>
                   <td>{r.agents_installed}</td>
                   <td className="small muted">{ago(r.last_success_at)}</td>
+                  <td>
+                    <button
+                      className="btn"
+                      disabled={!r.enabled}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onScanRuntime(r.id)
+                      }}
+                    >
+                      Scan
+                    </button>
+                  </td>
                   <td>
                     <button
                       className={'tag ' + (r.enabled ? 'ok' : 'unknown')}

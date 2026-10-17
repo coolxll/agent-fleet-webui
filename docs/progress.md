@@ -46,7 +46,8 @@ Last updated: 2026-10-18
 
 ### 6. Web UI (done)
 
-* Overview, Matrix, Inspector with filters; scan controls and live progress.
+* Overview (with per-machine scan + enable/disable), Matrix, Inspector with
+  filters; scan controls and live progress.
 
 ### 7. Tests + docs (done)
 
