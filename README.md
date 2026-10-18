@@ -52,7 +52,9 @@ Two source kinds, merged by host name (later sources only fill gaps):
    order, either an Ansible inventory (YAML `all.children.<group>.hosts`, or
    INI, including `ansible_host`/`ansible_user`/`ansible_port`) or the project
    YAML format. The default is the repo's `inventory.yaml`, which exists only
-   to express what SSH config cannot: runtime kind hints and WSL distro names.
+   to express what SSH config cannot: runtime kind hints, WSL distro names,
+   and an `exclude:` list for SSH aliases that are not part of the fleet
+   (exclusions win over every other source).
 2. **OpenSSH client config** - every `Host` alias in `~/.ssh/config`
    (ProxyJump, ports, Tailscale names, per-host users all keep working). It is
    merged last, but only fills fields the inventory left empty.
