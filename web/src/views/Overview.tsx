@@ -59,6 +59,27 @@ export default function Overview({
     }
   }, [])
 
+  const [hosts, setHosts] = useState<any[]>([])
+  const [showDisabled, setShowDisabled] = useState(false)
+
+  useEffect(() => {
+    api
+      .hosts(showDisabled)
+      .then((r) => setHosts(r.hosts))
+      .catch(() => undefined)
+  }, [showDisabled])
+
+  const toggleHost = useCallback(async (host: any) => {
+    setHosts((prev) => prev.map((h) => (h.id === host.id ? { ...h, enabled: !host.enabled } : h)))
+    try {
+      await api.setHostEnabled(host.id, !host.enabled)
+      const r = await api.runtimes()
+      setRuntimes(r.runtimes)
+    } catch {
+      setHosts((prev) => prev.map((h) => (h.id === host.id ? { ...h, enabled: host.enabled } : h)))
+    }
+  }, [])
+
   const toggle = useCallback(async (r: RuntimeRow) => {
     setRuntimes((prev) =>
       prev.map((x) => (x.id === r.id ? { ...x, enabled: !r.enabled } : x))
@@ -180,12 +201,23 @@ export default function Overview({
       </div>
 
       <div className="panel">
-        <h2>Runtimes</h2>
+        <h2>
+          Runtimes
+          <label className="small muted" style={{ textTransform: 'none', letterSpacing: 0 }}>
+            <input
+              type="checkbox"
+              checked={showDisabled}
+              onChange={(e) => setShowDisabled(e.target.checked)}
+            />{' '}
+            show excluded hosts
+          </label>
+        </h2>
         <div className="body">
           <table>
             <thead>
               <tr>
                 <th>Host</th>
+                <th style={{ width: 90 }}>Host</th>
                 <th>Runtime</th>
                 <th>Kind</th>
                 <th>OS</th>
@@ -203,6 +235,24 @@ export default function Overview({
                 <tr key={r.id} onClick={() => onOpenRuntime(r.id)} style={{ cursor: 'pointer' }}>
                   <td className="mono">{r.host}</td>
                   <td className="mono">{r.key}</td>
+                  <td>
+                    {(() => {
+                      const h = hosts.find((x) => x.name === r.host)
+                      if (!h) return null
+                      return (
+                        <button
+                          className={'tag ' + (h.enabled ? 'ok' : 'unknown')}
+                          title={h.enabled ? 'Exclude this host from the fleet' : 'Include this host'}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleHost(h)
+                          }}
+                        >
+                          {h.enabled ? 'on' : 'off'}
+                        </button>
+                      )
+                    })()}
+                  </td>
                   <td>
                     <span className="tag">{r.kind}</span>
                   </td>

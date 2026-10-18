@@ -253,5 +253,20 @@ export const api = {
     }),
   setRuntimeEnabled: (id: string, enabled: boolean) =>
     post<{ ok: boolean }>('/runtimes/' + id + '/enabled', { enabled }),
-  syncInventory: () => post<{ ok: boolean; hosts_seen?: number }>('/inventory/sync')
+  hosts: (includeDisabled = false) =>
+    get<{
+      hosts: {
+        id: string
+        name: string
+        hostname: string | null
+        source: string
+        group: string | null
+        enabled: boolean
+        tags: any
+      }[]
+      include_disabled: boolean
+    }>('/hosts?include_disabled=' + (includeDisabled ? 'true' : 'false')),
+  syncInventory: () => post<{ ok: boolean; hosts_seen?: number }>('/inventory/sync'),
+  setHostEnabled: (id: string, enabled: boolean) =>
+    post<{ ok: boolean; host?: string }>('/hosts/' + id + '/enabled', { enabled })
 }

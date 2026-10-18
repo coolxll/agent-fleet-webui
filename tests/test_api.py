@@ -111,6 +111,31 @@ def test_scan_endpoint_rejects_empty_fleet(client, fleet_db):
     assert res.status_code == 400
 
 
+def test_disabled_host_is_hidden_from_fleet_views(client, fleet_db, monkeypatch):
+    """An excluded host disappears from overview/matrix but keeps its data."""
+    rid = _seed(fleet_db, monkeypatch)[0]
+    _scan_one(rid, fleet_db)
+    assert client.get('/api/overview').json()['totals']['runtimes'] == 1
+
+    with session_scope() as s:
+        host = s.get(models.Runtime, rid).host
+        host_id = host.id
+
+    res = client.post('/api/hosts/' + host_id + '/enabled', json={'enabled': False})
+    assert res.status_code == 200
+    assert res.json()['enabled'] is False
+
+    ov = client.get('/api/overview').json()
+    assert ov['totals']['runtimes'] == 0
+    assert len(client.get('/api/matrix').json()['columns']) == 0
+    # the data itself is untouched and still reachable directly
+    inst = client.get('/api/installations?runtime_id=' + rid).json()['installations']
+    assert len(inst) == 5
+
+    client.post('/api/hosts/' + host_id + '/enabled', json={'enabled': True})
+    assert client.get('/api/overview').json()['totals']['runtimes'] == 1
+
+
 def test_unknown_installation_404(client):
     assert client.get("/api/installations/does-not-exist").status_code == 404
 

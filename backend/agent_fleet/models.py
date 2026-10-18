@@ -56,6 +56,9 @@ class Host(Base):
     inventory_source: Mapped[str] = mapped_column(String, default="project-yaml")
     group: Mapped[str | None] = mapped_column(String, nullable=True)
     tags: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # A host can be disabled (for example an SSH alias you do not want in the
+    # fleet) without deleting its history.
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     runtimes: Mapped[list["Runtime"]] = relationship(

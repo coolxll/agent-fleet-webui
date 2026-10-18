@@ -35,6 +35,7 @@ def sync_inventory(settings) -> dict:
                     inventory_source=h.source,
                     group=h.group,
                     tags=h.tags or {},
+                    enabled=True,
                 )
                 s.add(row)
                 created_hosts += 1

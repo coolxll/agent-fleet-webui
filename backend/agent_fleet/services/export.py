@@ -15,11 +15,15 @@ from agent_fleet.db import session_scope
 _iso = models.iso_utc
 
 
-def build_export(runtime_id=None, agent_id=None, detected_only=False) -> dict:
+def build_export(
+    runtime_id=None, agent_id=None, detected_only=False, exclude_runtime_ids=None
+) -> dict:
     with session_scope() as s:
         rt_q = select(models.Runtime).order_by(models.Runtime.key)
         if runtime_id:
             rt_q = rt_q.where(models.Runtime.id == runtime_id)
+        if exclude_runtime_ids:
+            rt_q = rt_q.where(models.Runtime.id.notin_(exclude_runtime_ids))
         runtimes = s.execute(rt_q).scalars().all()
 
         hosts = []

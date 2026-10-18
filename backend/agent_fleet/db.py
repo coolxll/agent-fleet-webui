@@ -45,6 +45,29 @@ def create_all():
     from agent_fleet import models  # noqa: F401 - registers tables
 
     Base.metadata.create_all(get_engine())
+    _add_missing_columns()
+
+
+def _add_missing_columns():
+    """SQLite has no ALTER-based migration; add new columns in place."""
+    from sqlalchemy import inspect, text
+
+    from agent_fleet import models  # noqa: F401
+
+    engine = get_engine()
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            existing = {c["name"] for c in inspect(conn).get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing or column.primary_key:
+                    continue
+                ddl = column.type.compile(engine.dialect)
+                default = ""
+                if column.default is not None and column.default.is_scalar:
+                    default = f" DEFAULT {column.default.arg!r}"
+                conn.execute(
+                    text(f'ALTER TABLE {table.name} ADD COLUMN "{column.name}" {ddl}{default}')
+                )
 
 
 @contextmanager

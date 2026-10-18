@@ -32,6 +32,14 @@ def _age(dt):
     return int((datetime.utcnow() - dt).total_seconds())
 
 
+def _visible(s, include_disabled: bool):
+    """Runtime ids that should appear in fleet views."""
+    q = select(models.Runtime)
+    if not include_disabled:
+        q = q.join(models.Host).where(models.Host.enabled.is_(True))
+    return s.execute(q).scalars().all()
+
+
 def _stale(rt, ttl):
     if not rt.last_success_at:
         return None
@@ -151,10 +159,13 @@ def agents():
 
 
 @router.get("/hosts")
-def list_hosts():
+def list_hosts(include_disabled: bool = Query(False)):
     settings = get_settings()
     with session_scope() as s:
-        hosts = s.execute(select(models.Host).order_by(models.Host.name)).scalars().all()
+        q = select(models.Host).order_by(models.Host.name)
+        if not include_disabled:
+            q = q.where(models.Host.enabled.is_(True))
+        hosts = s.execute(q).scalars().all()
         out = []
         for h in hosts:
             rts = s.execute(
@@ -168,21 +179,38 @@ def list_hosts():
                     "source": h.inventory_source,
                     "group": h.group,
                     "tags": h.tags or {},
+                    "enabled": h.enabled,
                     "runtimes": [
                         _rt_summary(s, r, settings.scan_ttl_seconds) for r in rts
                     ],
                 }
             )
-        return {"hosts": out}
+        return {"hosts": out, "include_disabled": include_disabled}
+
+
+@router.post("/hosts/{host_id}/enabled")
+def set_host_enabled(host_id: str, payload: dict):
+    enabled = bool(payload.get("enabled", True))
+    with session_scope() as s:
+        host = s.get(models.Host, host_id)
+        if host is None:
+            raise HTTPException(404, "host not found")
+        host.enabled = enabled
+        for rt in host.runtimes:
+            rt.enabled = enabled if not enabled else rt.enabled
+        s.commit()
+    return {"ok": True, "enabled": enabled, "host": host.name}
 
 
 @router.get("/runtimes")
-def list_runtimes(enabled_only: bool = Query(False)):
+def list_runtimes(enabled_only: bool = Query(False), include_disabled_hosts: bool = Query(False)):
     settings = get_settings()
     with session_scope() as s:
         q = select(models.Runtime)
         if enabled_only:
             q = q.where(models.Runtime.enabled.is_(True))
+        if not include_disabled_hosts:
+            q = q.join(models.Host).where(models.Host.enabled.is_(True))
         rts = s.execute(q.order_by(models.Runtime.key)).scalars().all()
         return {
             "runtimes": [_rt_summary(s, r, settings.scan_ttl_seconds) for r in rts],
@@ -221,7 +249,7 @@ def overview():
     settings = get_settings()
     ttl = settings.scan_ttl_seconds
     with session_scope() as s:
-        rts = s.execute(select(models.Runtime)).scalars().all()
+        rts = _visible(s, include_disabled=False)
         online = [r for r in rts if r.reachable is True]
         offline = [r for r in rts if r.reachable is False]
         unknown = [r for r in rts if r.reachable is None]
@@ -272,9 +300,7 @@ def matrix():
     settings = get_settings()
     ttl = settings.scan_ttl_seconds
     with session_scope() as s:
-        rts = s.execute(
-            select(models.Runtime).order_by(models.Runtime.key)
-        ).scalars().all()
+        rts = sorted(_visible(s, include_disabled=False), key=lambda r: r.key)
         ids = [r.id for r in rts]
         rows = s.execute(
             select(models.AgentInstallation).where(
@@ -351,9 +377,16 @@ def list_installations(
     runtime_id: str = Query(None),
     agent_id: str = Query(None),
     detected_only: bool = Query(False),
+    include_disabled_hosts: bool = Query(False),
 ):
     with session_scope() as s:
-        q = select(models.AgentInstallation)
+        if not include_disabled_hosts and not runtime_id:
+            visible = [r.id for r in _visible(s, include_disabled=False)]
+            q = select(models.AgentInstallation).where(
+                models.AgentInstallation.runtime_id.in_(visible)
+            )
+        else:
+            q = select(models.AgentInstallation)
         if runtime_id:
             q = q.where(models.AgentInstallation.runtime_id == runtime_id)
         if agent_id:
@@ -534,10 +567,22 @@ def export_fleet(
     runtime_id: str = Query(None),
     agent_id: str = Query(None),
     detected_only: bool = Query(False),
+    include_disabled_hosts: bool = Query(False),
 ):
     """The whole fleet as one sanitized JSON document."""
+    hidden = None
+    if not include_disabled_hosts:
+        with session_scope() as s:
+            hidden = [
+                r.id
+                for r in s.execute(select(models.Runtime)).scalars()
+                if r.host is None or not r.host.enabled
+            ]
     return build_export(
-        runtime_id=runtime_id, agent_id=agent_id, detected_only=detected_only
+        runtime_id=runtime_id,
+        agent_id=agent_id,
+        detected_only=detected_only,
+        exclude_runtime_ids=hidden,
     )
 
 
