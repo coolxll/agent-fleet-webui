@@ -79,10 +79,13 @@ def sync_inventory(settings) -> dict:
                 primary.ssh_host = h.hostname or primary.ssh_host
                 primary.ssh_port = h.port or primary.ssh_port
                 primary.collect_user = h.user or primary.collect_user
-                if kind != "auto":
+                # The transport hint decides how we reach the machine, so it is
+                # always applied. The kind hint is only a pre-scan guess: once a
+                # probe has observed the runtime, the observation wins.
+                if kind == "windows":
+                    primary.transport = "windows"
+                if kind != "auto" and primary.last_scan_at is None:
                     primary.kind = kind
-                    if kind == "windows":
-                        primary.transport = "windows"
 
             # declared WSL runtimes (project yaml only)
             for w in h.wsl or []:

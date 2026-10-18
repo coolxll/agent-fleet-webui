@@ -101,6 +101,19 @@ Requirements source: `requirements.md` (IDs such as `CFG-3` referenced below).
 Two-host end-to-end: **local-controller + rn-direct**, plus a full 27-runtime
 fleet scan.
 
+## WSL policy (changed 2026-10-18, after user feedback)
+
+WSL distros are reached through their own SSH endpoints (wujie, r9kp-wsl, ...),
+which the SSH config already provides. Auto-discovery through the Windows host
+(wsl.exe -l -q) duplicated those, so it is now off by default
+(AGENT_FLEET_DISCOVER_WSL=false). The duplicated rows were removed and the two
+distros without a direct connection (docker-desktop, k14-win archlinux) were
+disabled with a reason rather than deleted.
+
+Also fixed in the same pass: a kind hint in inventory.yaml was overwriting the
+kind observed by a probe on every restart, so wujie showed "linux" although it
+is a WSL distro. Hints now only apply before the first scan.
+
 ## Known limitations / not done
 
 **Not implemented (phase 1 is read-only by design)**

@@ -251,7 +251,7 @@ async def scan_runtime(rt, settings) -> RuntimeScanResult:
     """Probe a runtime and, for Windows hosts, discover its WSL distros."""
     result = await probe_runtime(rt, settings)
     rt = to_ref(rt) if not isinstance(rt, RuntimeRef) else rt
-    if result.ok and result.kind == "windows":
+    if result.ok and result.kind == "windows" and getattr(settings, "discover_wsl", False):
         result.wsl_distros = await _discover_wsl(rt, settings)
     return result
 

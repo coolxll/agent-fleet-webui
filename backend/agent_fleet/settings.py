@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # sanitization; they are never written to disk.
     persist_raw_config: bool = False
 
+    # WSL distros are normally reachable through their own SSH endpoint.
+    # When that is not the case, turn this on to discover them through the
+    # Windows host (wsl.exe -l -q) and probe each distro separately.
+    discover_wsl: bool = False
+
     # The machine running the backend can be probed without SSH.
     include_local_runtime: bool = True
     local_host_label: str = "local-controller"

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from sqlalchemy import select
+
+from agent_fleet.db import session_scope
 from agent_fleet.inventory import (
     discover_inventory_dir,
     load_all,
@@ -76,6 +79,46 @@ def test_project_yaml_with_wsl(tmp_path):
     assert hosts["box1"].wsl[0].distro == "Ubuntu-22.04"
     assert hosts["box1"].wsl[0].user == "dev"
     assert hosts["box2"].enabled is False
+
+
+def test_kind_hint_does_not_override_a_probe(fleet_db):
+    """A declared kind is a pre-scan guess; the observation wins afterwards."""
+    import datetime as _dt
+
+    from agent_fleet import models
+    from agent_fleet.services.inventory_sync import sync_inventory
+    from agent_fleet.inventory.loader import DiscoveredHost
+
+    settings = fleet_db
+    monkey = None
+    with session_scope() as s:
+        host = models.Host(id=models.new_id(), name="hint-box", inventory_source="project-yaml")
+        s.add(host)
+        s.flush()
+        rt = models.Runtime(
+            id=models.new_id(),
+            host_id=host.id,
+            key="native",
+            kind="wsl",
+            transport="ssh",
+            last_scan_at=_dt.datetime.utcnow(),
+        )
+        s.add(rt)
+        s.commit()
+
+    # a host that declares kind=linux while the probe already saw wsl
+    orig = load_project_yaml
+    try:
+        import agent_fleet.services.inventory_sync as mod
+
+        mod.load_project_yaml = lambda path: [DiscoveredHost(name="hint-box", kind_hint="linux")]
+        sync_inventory(settings)
+    finally:
+        mod.load_project_yaml = orig
+
+    with session_scope() as s:
+        row = s.execute(select(models.Runtime)).scalars().first()
+        assert row.kind == "wsl", "a probe observation must not be overwritten"
 
 
 def test_inventory_directory_discovery(tmp_path):

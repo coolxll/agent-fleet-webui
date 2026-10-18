@@ -6,6 +6,11 @@
 # what SSH config cannot express: runtime kind hints and WSL distros.
 #
 # kind: macos | linux | windows | wsl | auto
+#
+# NOTE: WSL distros are NOT declared here. They are reachable through their own
+# SSH endpoints (wujie, r9kp-wsl, ...), which already appear as runtimes.
+# Declaring them again under the Windows host would duplicate them.
+# Set AGENT_FLEET_DISCOVER_WSL=true if you ever want the wsl.exe route instead.
 
 hosts:
   - name: local-controller
@@ -13,13 +18,9 @@ hosts:
     tags:
       role: controller
 
-  # Windows hosts: add one entry per WSL distro you want probed.
-  # Distros that are not listed are still auto-discovered on the first scan.
+  # Windows hosts: only the native PowerShell runtime is probed.
   - name: r9kp-win
     kind: windows
-    wsl:
-      - distro: Ubuntu-22.04
-        user: coolxll
 
   - name: wujie-win
     kind: windows
@@ -27,11 +28,11 @@ hosts:
   - name: k14-win
     kind: windows
 
-  # Direct WSL endpoints (sshd running inside the distro) are POSIX targets
+  # Direct WSL endpoints (sshd running inside the distro): plain POSIX targets
   - name: r9kp-wsl
     kind: wsl
   - name: wujie
-    kind: linux
+    kind: wsl
 
   - name: rn-direct
     kind: linux

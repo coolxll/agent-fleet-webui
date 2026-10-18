@@ -211,8 +211,9 @@ The adapter only ever sees `RemoteFacts`, so it is testable without a machine.
 * Windows layout variants may show `partial` instead of `parsed`.
 * Skills are counted and listed by directory/`SKILL.md` presence; frontmatter
   is not parsed.
-* Renaming a WSL distro in the inventory leaves the old runtime row behind
-  until it is removed by hand.
+* WSL distros are only probed through their own SSH endpoints by default. Two
+  distros with no direct connection (docker-desktop, k14-win archlinux) stay
+  disabled until you add one or turn on AGENT_FLEET_DISCOVER_WSL.
 * Snapshot history is kept indefinitely; there is no pruning.
 * The API has no authentication and is meant for loopback use.
 

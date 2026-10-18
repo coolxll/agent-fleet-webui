@@ -134,7 +134,7 @@ async def _scan_one(run_id, runtime_id, settings):
             duration_ms=result.duration_ms,
         )
         _touch(run_id, ok=_registry[run_id]["ok"] + 1)
-        if result.wsl_distros:
+        if result.wsl_distros and getattr(settings, "discover_wsl", False):
             _ensure_wsl_runtimes(runtime_id, result.wsl_distros)
     else:
         _mark_task(
