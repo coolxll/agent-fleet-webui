@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api'
-import Overview from './views/Overview'
+import MachinesView from './views/MachinesView'
+import MachineView from './views/MachineView'
+import AgentDetail from './components/AgentDetail'
 import Matrix from './views/Matrix'
-import Inspector from './views/Inspector'
 import Diff from './views/Diff'
+import Overview from './views/Overview'
 
-type Tab = 'overview' | 'matrix' | 'inspector' | 'diff'
+type Route =
+  | { name: 'fleet' }
+  | { name: 'machine'; hostId: string }
+  | { name: 'agent'; installationId: string }
+  | { name: 'compare' }
+  | { name: 'matrix' }
+  | { name: 'overview' }
 
 type ScheduleState = {
   enabled: boolean
@@ -14,25 +22,30 @@ type ScheduleState = {
   last_run_id: string | null
   last_run_at: string | null
   skipped_because_busy: number
-  next_run_at: string | null
 }
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('overview')
-  const [runtimeFilter, setRuntimeFilter] = useState<string | undefined>(undefined)
-  const [openInstallationId, setOpenInstallationId] = useState<string | undefined>(undefined)
+  const [route, setRoute] = useState<Route>({ name: 'fleet' })
   const [runId, setRunId] = useState<string | null>(null)
-  const [progress, setProgress] = useState<{ done: number; total: number; ok: number; failed: number; status: string } | null>(null)
+  const [progress, setProgress] = useState<{
+    done: number
+    total: number
+    ok: number
+    failed: number
+  } | null>(null)
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [schedule, setSchedule] = useState<ScheduleState | null>(null)
   const [showSchedule, setShowSchedule] = useState(false)
 
+  // poll an in-flight scan and refresh when it lands
+  const [refreshKey, setRefreshKey] = useState(0)
+
   useEffect(() => {
-    api.activeScans().then((r) => {
-      const active = r.runs[0]
-      if (active) setRunId(active.run_id)
-    })
+    fetch('/api/schedule')
+      .then((r) => r.json())
+      .then((s: ScheduleState) => setSchedule(s))
+      .catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -49,12 +62,13 @@ export default function App() {
           done: run.live.done ?? run.succeeded + run.failed,
           total: run.total,
           ok: run.live.ok ?? run.succeeded,
-          failed: run.live.failed ?? run.failed,
-          status: run.status
+          failed: run.live.failed ?? run.failed
         })
         if (run.status !== 'running') {
           setRunId(null)
           setProgress(null)
+          setRefreshKey((k) => k + 1)
+          setToast('Scan finished: ' + run.succeeded + ' ok / ' + run.failed + ' failed')
         }
       } catch {
         /* keep trying */
@@ -67,6 +81,19 @@ export default function App() {
       clearInterval(t)
     }
   }, [runId])
+
+  const scanRuntime = useCallback(async (id: string) => {
+    setBusy(true)
+    try {
+      const res = await api.startScan([id])
+      setRunId(res.run_id)
+      setToast('Scanning 1 runtime...')
+    } catch (e: any) {
+      setToast(String(e.message || e))
+    } finally {
+      setBusy(false)
+    }
+  }, [])
 
   const scanAll = useCallback(async () => {
     setBusy(true)
@@ -81,16 +108,20 @@ export default function App() {
     }
   }, [])
 
-  const loadSchedule = useCallback(async () => {
+  const sync = useCallback(async () => {
+    setBusy(true)
     try {
-      const s = (await fetch('/api/schedule').then((r) => r.json())) as ScheduleState
-      setSchedule(s)
-    } catch {
-      /* scheduler unavailable */
+      const res = await api.syncInventory()
+      setToast('Inventory synced: ' + (res.hosts_seen ?? 'ok') + ' host(s)')
+      setRefreshKey((k) => k + 1)
+    } catch (e: any) {
+      setToast(String(e.message || e))
+    } finally {
+      setBusy(false)
     }
   }, [])
 
-  const saveSchedule = useCallback(async (patch: Partial<ScheduleState>) => {
+  const saveSchedule = useCallback(async (patch: any) => {
     try {
       const res = await fetch('/api/schedule', {
         method: 'PUT',
@@ -111,53 +142,16 @@ export default function App() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = 'agent-fleet-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.json'
+      a.download =
+        'agent-fleet-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.json'
       a.click()
       URL.revokeObjectURL(url)
-      setToast('Exported ' + (data.counts?.runtimes ?? 0) + ' runtime(s), ' + (data.counts?.installations ?? 0) + ' installation(s)')
+      setToast(
+        'Exported ' + (data.counts?.runtimes ?? 0) + ' runtime(s), ' + (data.counts?.installations ?? 0) + ' installation(s)'
+      )
     } catch (e: any) {
       setToast(String(e.message || e))
     }
-  }, [])
-
-  useEffect(() => {
-    loadSchedule()
-  }, [loadSchedule])
-
-  const sync = useCallback(async () => {
-    setBusy(true)
-    try {
-      const res = await api.syncInventory()
-      setToast('Inventory synced: ' + (res.hosts_seen ?? 'ok') + ' host(s)')
-    } catch (e: any) {
-      setToast(String(e.message || e))
-    } finally {
-      setBusy(false)
-    }
-  }, [])
-
-  const scanRuntime = useCallback(async (id: string) => {
-    setBusy(true)
-    try {
-      const res = await api.startScan([id])
-      setRunId(res.run_id)
-      setToast('Scanning 1 runtime...')
-    } catch (e: any) {
-      setToast(String(e.message || e))
-    } finally {
-      setBusy(false)
-    }
-  }, [])
-
-  const openRuntime = useCallback((id: string) => {
-    setRuntimeFilter(id)
-    setTab('inspector')
-  }, [])
-
-  const openInstallation = useCallback((id: string) => {
-    setRuntimeFilter(undefined)
-    setOpenInstallationId(id)
-    setTab('inspector')
   }, [])
 
   useEffect(() => {
@@ -166,19 +160,40 @@ export default function App() {
     return () => clearTimeout(t)
   }, [toast])
 
+  const crumbs: { label: string; route?: Route }[] = [{ label: 'Machines', route: { name: 'fleet' } }]
+  if (route.name === 'machine' || route.name === 'agent') {
+    crumbs.push({ label: 'Machine', route: { name: 'machine', hostId: (route as any).hostId } })
+  }
+  if (route.name === 'agent') {
+    crumbs.push({ label: 'Agent' })
+  }
+  if (route.name === 'compare') crumbs.push({ label: 'Compare' })
+  if (route.name === 'matrix') crumbs.push({ label: 'Matrix' })
+  if (route.name === 'overview') crumbs.push({ label: 'Overview' })
+
   return (
     <div>
       <div className="app-header">
-        <h1>AGENT FLEET EXPLORER</h1>
-        <span className="sub">read-only multi-machine agent configuration browser</span>
+        <div className="crumbs">
+          {crumbs.map((c, i) => (
+            <span key={i}>
+              {i > 0 ? <span className="muted"> / </span> : null}
+              <span
+                className={'crumb' + (c.route ? ' link' : '')}
+                onClick={c.route ? () => setRoute(c.route!) : undefined}
+              >
+                {c.label}
+              </span>
+            </span>
+          ))}
+        </div>
         <div className="scan-bar" style={{ marginLeft: 12 }}>
           {progress ? (
             <>
               <div className="bar">
                 <div
                   style={{
-                    width:
-                      Math.round((progress.done / Math.max(1, progress.total)) * 100) + '%'
+                    width: Math.round((progress.done / Math.max(1, progress.total)) * 100) + '%'
                   }}
                 />
               </div>
@@ -188,36 +203,35 @@ export default function App() {
             </>
           ) : null}
           <button className="btn" onClick={sync} disabled={busy}>
-            Re-sync inventory
-          </button>
-          <button className="btn" onClick={() => setShowSchedule((v) => !v)}>
-            {showSchedule ? 'Hide schedule' : 'Schedule'}
-          </button>
-          <button className="btn" onClick={exportJson} disabled={busy}>
-            Export JSON
+            Re-sync
           </button>
           <button className="btn primary" onClick={scanAll} disabled={busy || !!runId}>
             {runId ? 'Scanning...' : 'Scan all'}
           </button>
+          <button className="btn" onClick={() => setShowSchedule((v) => !v)}>
+            Schedule
+          </button>
+          <button className="btn" onClick={exportJson} disabled={busy}>
+            Export JSON
+          </button>
         </div>
         <div className="tabs">
-          <button className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}>
-            Fleet overview
+          <button
+            className={route.name === 'overview' ? 'active' : ''}
+            onClick={() => setRoute({ name: 'overview' })}
+          >
+            Overview
           </button>
-          <button className={tab === 'matrix' ? 'active' : ''} onClick={() => setTab('matrix')}>
+          <button
+            className={route.name === 'matrix' ? 'active' : ''}
+            onClick={() => setRoute({ name: 'matrix' })}
+          >
             Matrix
           </button>
           <button
-            className={tab === 'inspector' ? 'active' : ''}
-            onClick={() => {
-              setRuntimeFilter(undefined)
-              setOpenInstallationId(undefined)
-              setTab('inspector')
-            }}
+            className={route.name === 'compare' ? 'active' : ''}
+            onClick={() => setRoute({ name: 'compare' })}
           >
-            Inspector
-          </button>
-          <button className={tab === 'diff' ? 'active' : ''} onClick={() => setTab('diff')}>
             Compare
           </button>
         </div>
@@ -248,8 +262,6 @@ export default function App() {
               </select>
               <span className="muted small">
                 {schedule.running ? 'run in progress' : 'idle'}
-                {schedule.last_run_at ? ' | last run ' + new Date(schedule.last_run_at).toLocaleString() : ''}
-                {schedule.skipped_because_busy ? ' | skipped while busy: ' + schedule.skipped_because_busy : ''}
               </span>
             </div>
           </div>
@@ -262,20 +274,50 @@ export default function App() {
         </div>
       ) : null}
 
-      <div className="container">
-        {tab === 'overview' ? (
-          <Overview onOpenRuntime={openRuntime} onScanRuntime={scanRuntime} />
+      <div className="container" key={refreshKey}>
+        {route.name === 'fleet' ? (
+          <MachinesView onOpenMachine={(hostId) => setRoute({ name: 'machine', hostId })} />
         ) : null}
-        {tab === 'matrix' ? <Matrix onOpenInstallation={openInstallation} /> : null}
-        {tab === 'inspector' ? (
-          <Inspector
-            key={(runtimeFilter || 'all') + ':' + (openInstallationId || '')}
-            initialRuntimeId={runtimeFilter}
-            initialInstallationId={openInstallationId}
+        {route.name === 'machine' ? (
+          <MachineView
+            hostId={route.hostId}
+            onOpenAgent={(id) => setRoute({ name: 'agent', installationId: id })}
           />
         ) : null}
-        {tab === 'diff' ? <Diff /> : null}
+        {route.name === 'agent' ? <AgentPage installationId={route.installationId} /> : null}
+        {route.name === 'overview' ? (
+          <Overview
+            onOpenRuntime={(id) => setRoute({ name: 'machine', hostId: id })}
+            onScanRuntime={scanRuntime}
+          />
+        ) : null}
+        {route.name === 'matrix' ? (
+          <Matrix onOpenInstallation={(id) => setRoute({ name: 'agent', installationId: id })} />
+        ) : null}
+        {route.name === 'compare' ? <Diff /> : null}
       </div>
     </div>
   )
+}
+
+function AgentPage({ installationId }: { installationId: string }) {
+  const [detail, setDetail] = useState<any>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    api
+      .installation(installationId)
+      .then((d) => alive && setDetail(d))
+      .catch((e: any) => alive && setError(String(e.message || e)))
+    return () => {
+      alive = false
+    }
+  }, [installationId])
+
+  if (error) return <div className="err">{error}</div>
+  if (!detail) return <div className="muted">Loading...</div>
+  const rt = detail.runtime || {}
+  const runtimeName = (rt.host || '?') + '/' + (rt.key || '?')
+  return <AgentDetail detail={detail} runtimeName={runtimeName} />
 }

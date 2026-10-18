@@ -149,6 +149,70 @@ tbody tr:hover { background: #1a212c; }
 .muted { color: var(--muted); }
 
 .agent-icon { flex: 0 0 auto; }
+
+.crumbs { display: flex; align-items: center; gap: 4px; }
+.crumbs .crumb { font-weight: 600; letter-spacing: 0.4px; }
+.crumbs .crumb.link { cursor: pointer; }
+.crumbs .crumb.link:hover { color: var(--accent); }
+
+.machine-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.machine-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.machine-card:hover { border-color: var(--accent); }
+.machine-card-head { display: flex; align-items: center; gap: 8px; }
+.machine-name { font-size: 15px; font-weight: 600; }
+.dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  display: inline-block; flex: 0 0 auto;
+}
+.dot.on { background: var(--ok); }
+.dot.off { background: var(--bad); }
+.dot.unk { background: var(--unknown); }
+.machine-os { margin: 6px 0 10px; }
+.machine-agents {
+  display: flex; gap: 10px; align-items: center;
+  min-height: 24px; flex-wrap: wrap;
+}
+.machine-agent-dot { display: inline-flex; }
+.machine-foot { margin-top: 8px; }
+
+.agent-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+}
+.agent-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.agent-card:hover { border-color: var(--accent); }
+.agent-card-top { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+.agent-card-name { font-weight: 600; font-size: 13.5px; }
+.agent-card-model {
+  font-size: 14px; margin-bottom: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.agent-card-provider {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-bottom: 8px;
+}
+.agent-card-foot {
+  display: flex; justify-content: space-between; align-items: center;
+}
 .agent-cell {
   display: inline-flex;
   align-items: center;

@@ -82,6 +82,19 @@ def _rt_summary(s, rt, ttl):
     }
 
 
+def _config_summary(inst):
+    cfg = getattr(inst, "config", None)
+    if cfg is None:
+        return None
+    return {
+        "model": cfg.model,
+        "provider": cfg.model_provider,
+        "base_url": cfg.base_url,
+        "parse_status": cfg.parse_status,
+        "resolution": cfg.resolution,
+    }
+
+
 def _inst_detail(inst, include_config=True):
     out = {
         "id": inst.id,
@@ -97,6 +110,7 @@ def _inst_detail(inst, include_config=True):
         "detected_at": _iso(inst.detected_at),
         "error": inst.error,
         "config_status": inst.config_status,
+        "config_summary": _config_summary(inst),
     }
     if include_config:
         cfg = inst.config
@@ -158,6 +172,64 @@ def agents():
 # --------------------------------------------------------------------------
 
 
+@router.get("/machines/{host_id}")
+def get_machine(host_id: str):
+    """One machine, its runtimes, and every agent install on it.
+
+    This is the machine-first view: the UI lands here after a host card click.
+    """
+    settings = get_settings()
+    with session_scope() as s:
+        host = s.get(models.Host, host_id)
+        if host is None:
+            raise HTTPException(404, "host not found")
+        runtimes = []
+        for rt in sorted(host.runtimes, key=lambda r: (r.key != "native", r.key)):
+            installs = s.execute(
+                select(models.AgentInstallation)
+                .where(models.AgentInstallation.runtime_id == rt.id)
+                .order_by(models.AgentInstallation.agent_id)
+            ).scalars().all()
+            runtimes.append(
+                {
+                    **_rt_summary(s, rt, settings.scan_ttl_seconds),
+                    "installations": [
+                        {
+                            "id": i.id,
+                            "agent": i.agent_id,
+                            "status": i.status,
+                            "detected": i.detected,
+                            "version": i.version,
+                            "exec_path": i.exec_path,
+                            "install_method": i.install_method,
+                            "config_dir": i.config_dir,
+                            "config_status": i.config_status,
+                            "error": i.error,
+                            "config_summary": _config_summary(i),
+                        }
+                        for i in installs
+                    ],
+                }
+            )
+        detected = sum(
+            1
+            for r in runtimes
+            for i in r["installations"]
+            if i["detected"]
+        )
+        return {
+            "id": host.id,
+            "name": host.name,
+            "hostname": host.hostname,
+            "source": host.inventory_source,
+            "group": host.group,
+            "tags": host.tags or {},
+            "enabled": host.enabled,
+            "runtimes": runtimes,
+            "agents_detected": detected,
+        }
+
+
 @router.get("/hosts")
 def list_hosts(include_disabled: bool = Query(False)):
     settings = get_settings()
@@ -181,7 +253,13 @@ def list_hosts(include_disabled: bool = Query(False)):
                     "tags": h.tags or {},
                     "enabled": h.enabled,
                     "runtimes": [
-                        _rt_summary(s, r, settings.scan_ttl_seconds) for r in rts
+                        {
+                            **_rt_summary(s, r, settings.scan_ttl_seconds),
+                            "agents": sorted(
+                                i.agent_id for i in r.installations if i.detected
+                            ),
+                        }
+                        for r in rts
                     ],
                 }
             )

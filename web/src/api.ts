@@ -21,6 +21,7 @@ export type Runtime = {
   snapshot_age_s: number | null
   stale: boolean | null
   agents_installed: number
+  agents?: string[]
 }
 
 export type AgentMeta = { id: string; name: string; config_supported: boolean }
@@ -253,6 +254,43 @@ export const api = {
     }),
   setRuntimeEnabled: (id: string, enabled: boolean) =>
     post<{ ok: boolean }>('/runtimes/' + id + '/enabled', { enabled }),
+  machine: (hostId: string) =>
+    get<{
+      id: string
+      name: string
+      hostname: string | null
+      enabled: boolean
+      agents_detected: number
+      runtimes: {
+        id: string
+        key: string
+        kind: string
+        os_name: string | null
+        reachable: boolean | null
+        stale: boolean | null
+        agents_installed: number
+        last_error: string | null
+        installations: {
+          id: string
+          agent: string
+          status: string
+          detected: boolean
+          version: string | null
+          exec_path: string | null
+          install_method: string | null
+          config_dir: string | null
+          config_status: string
+          error: string | null
+          config_summary: {
+            model: string | null
+            provider: string | null
+            base_url: string | null
+            parse_status: string | null
+            resolution: string | null
+          } | null
+        }[]
+      }[]
+    }>('/machines/' + hostId),
   hosts: (includeDisabled = false) =>
     get<{
       hosts: {
