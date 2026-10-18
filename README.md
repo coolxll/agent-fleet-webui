@@ -88,7 +88,8 @@ Nothing is duplicated: if a host appears in several sources it is stored once.
 
 ## Scanning
 
-* Manual: **Scan all**, or **Scan** on a single machine row.
+* Manual: **Scan all**, or **Scan** on a single machine row. Each row can also be
+  disabled (stop scanning) or removed entirely (drop its collected data).
 * Scheduled: the Schedule button turns on periodic fleet scans (10 minutes to
   24 hours). State survives a restart; a run that comes due while another run
   is active is skipped rather than queued.
@@ -211,9 +212,8 @@ The adapter only ever sees `RemoteFacts`, so it is testable without a machine.
 * Windows layout variants may show `partial` instead of `parsed`.
 * Skills are counted and listed by directory/`SKILL.md` presence; frontmatter
   is not parsed.
-* WSL distros are only probed through their own SSH endpoints by default. Two
-  distros with no direct connection (docker-desktop, k14-win archlinux) stay
-  disabled until you add one or turn on AGENT_FLEET_DISCOVER_WSL.
+* Hosts you do not want in the fleet can be excluded at the host level; they
+  keep their history but disappear from every view until you turn them back on.
 * Snapshot history is kept indefinitely; there is no pruning.
 * The API has no authentication and is meant for loopback use.
 

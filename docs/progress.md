@@ -114,6 +114,19 @@ Also fixed in the same pass: a kind hint in inventory.yaml was overwriting the
 kind observed by a probe on every restart, so wujie showed "linux" although it
 is a WSL distro. Hints now only apply before the first scan.
 
+## Fleet scope (2026-10-18)
+
+The fleet now contains exactly the machines the user asked for. Everything
+else that used to leak in from ~/.ssh/config (corp172, ddrk, jph2, la-tri, pve,
+r9u, racknerd) is excluded at the host level rather than deleted, so its
+history is still there and the Overview has a "show excluded hosts" checkbox.
+
+k14 turned out to be the WSL side of k14-win (kernel
+6.6.114.1-microsoft-standard-WSL2, /mnt/c present), the same relationship as
+wujie/wujie-win and r9kp-wsl/r9kp-win. The two auto-discovered distros with no
+direct SSH endpoint (k14-win/wsl:archlinux, r9kp-win/wsl:docker-desktop) were
+removed with the new DELETE /api/runtimes/{id} endpoint.
+
 ## Known limitations / not done
 
 **Not implemented (phase 1 is read-only by design)**
