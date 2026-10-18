@@ -268,5 +268,10 @@ export const api = {
     }>('/hosts?include_disabled=' + (includeDisabled ? 'true' : 'false')),
   syncInventory: () => post<{ ok: boolean; hosts_seen?: number }>('/inventory/sync'),
   setHostEnabled: (id: string, enabled: boolean) =>
-    post<{ ok: boolean; host?: string }>('/hosts/' + id + '/enabled', { enabled })
+    post<{ ok: boolean; host?: string }>('/hosts/' + id + '/enabled', { enabled }),
+  deleteRuntime: (id: string) =>
+    fetch('/api/runtimes/' + id, { method: 'DELETE' }).then(async (r) => {
+      if (!r.ok) throw new Error((await r.text()) || 'delete failed')
+      return (await r.json()) as { ok: boolean; deleted: string }
+    })
 }

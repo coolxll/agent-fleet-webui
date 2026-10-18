@@ -136,6 +136,26 @@ def test_disabled_host_is_hidden_from_fleet_views(client, fleet_db, monkeypatch)
     assert client.get('/api/overview').json()['totals']['runtimes'] == 1
 
 
+def test_delete_runtime_removes_everything(client, fleet_db, monkeypatch):
+    rid = _seed(fleet_db, monkeypatch)[0]
+    _scan_one(rid, fleet_db)
+    assert client.get('/api/installations?runtime_id=' + rid).json()['installations']
+
+    res = client.delete('/api/runtimes/' + rid)
+    assert res.status_code == 200
+    assert res.json()['ok'] is True
+
+    assert client.get('/api/installations?runtime_id=' + rid).json()['installations'] == []
+    assert client.get('/api/runtimes').json()['runtimes'] == []
+    assert client.get('/api/overview').json()['totals']['runtimes'] == 0
+    # snapshots of a deleted runtime go too
+    assert client.get('/api/snapshots').json()['snapshots'] == []
+
+
+def test_delete_unknown_runtime_404(client):
+    assert client.delete('/api/runtimes/nope').status_code == 404
+
+
 def test_unknown_installation_404(client):
     assert client.get("/api/installations/does-not-exist").status_code == 404
 

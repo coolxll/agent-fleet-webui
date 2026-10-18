@@ -80,6 +80,22 @@ export default function Overview({
     }
   }, [])
 
+  const remove = useCallback(
+    async (r: RuntimeRow) => {
+      if (!window.confirm('Remove ' + r.host + '/' + r.key + ' and everything collected from it?')) {
+        return
+      }
+      try {
+        await api.deleteRuntime(r.id)
+        const fresh = await api.runtimes()
+        setRuntimes(fresh.runtimes)
+      } catch (e: any) {
+        setError(String(e.message || e))
+      }
+    },
+    []
+  )
+
   const toggle = useCallback(async (r: RuntimeRow) => {
     setRuntimes((prev) =>
       prev.map((x) => (x.id === r.id ? { ...x, enabled: !r.enabled } : x))
@@ -228,6 +244,7 @@ export default function Overview({
                 <th>Last success</th>
                 <th>Scan</th>
                 <th>Enabled</th>
+                <th style={{ width: 70 }}>Remove</th>
               </tr>
             </thead>
             <tbody>
@@ -294,6 +311,18 @@ export default function Overview({
                       title={r.enabled ? 'Disable scanning' : 'Enable scanning'}
                     >
                       {r.enabled ? 'on' : 'off'}
+                    </button>
+                  </td>
+                  <td>
+                    <button
+                      className="tag"
+                      title="Remove this runtime and its collected data"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        remove(r)
+                      }}
+                    >
+                      del
                     </button>
                   </td>
                 </tr>

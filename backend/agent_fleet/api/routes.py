@@ -6,7 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from agent_fleet import models
 from agent_fleet.adapters.registry import agent_ids, agent_meta
@@ -228,6 +228,35 @@ def set_runtime_enabled(runtime_id: str, payload: dict):
         rt.enabled = enabled
         s.commit()
     return {"ok": True, "enabled": enabled}
+
+
+@router.delete("/runtimes/{runtime_id}")
+def delete_runtime(runtime_id: str):
+    """Remove a runtime and everything collected from it.
+
+    Used for rows that turned out to be duplicates (a WSL distro already
+    reachable through its own SSH endpoint) or that you no longer want.
+    """
+    with session_scope() as s:
+        rt = s.get(models.Runtime, runtime_id)
+        if rt is None:
+            raise HTTPException(404, "runtime not found")
+        label = f"{rt.host.name if rt.host else '?'}/{rt.key}"
+        # children that have no ON DELETE CASCADE of their own
+        s.execute(
+            delete(models.AgentConfiguration).where(
+                models.AgentConfiguration.installation_id.in_(
+                    select(models.AgentInstallation.id).where(
+                        models.AgentInstallation.runtime_id == runtime_id
+                    )
+                )
+            )
+        )
+        s.execute(delete(models.Snapshot).where(models.Snapshot.runtime_id == runtime_id))
+        s.execute(delete(models.ScanTask).where(models.ScanTask.runtime_id == runtime_id))
+        s.delete(rt)  # installations and their sources cascade
+        s.commit()
+    return {"ok": True, "deleted": label}
 
 
 @router.post("/inventory/sync")
