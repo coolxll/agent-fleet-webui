@@ -241,6 +241,45 @@ export const api = {
     }>('/snapshots?' + q.toString())
   },
   compare: (agentId: string) => get<{ agent: string; candidates: CompareCandidate[] }>('/compare/' + agentId),
+  agentView: (agentId: string) =>
+    get<{
+      agent: string
+      name: string
+      detected_count: number
+      consistent_configs: boolean
+      config_groups: { signature: string; machines: string[]; count: number }[]
+      installations: {
+        id: string
+        host: string
+        runtime_key: string
+        kind: string
+        collect_user: string | null
+        status: string
+        detected: boolean
+        version: string | null
+        install_method: string | null
+        config_status: string
+        config_summary: {
+          model: string | null
+          provider: string | null
+          base_url: string | null
+          parse_status: string | null
+          resolution: string | null
+        } | null
+        version_state: string
+      }[]
+      version: {
+        package: string | null
+        latest_available: string | null
+        source: string
+        latest_installed: string | null
+        distinct_versions: string[]
+        up_to_date: number
+        behind: number
+        unknown_source: boolean
+        error?: string
+      }
+    }>('/agent-view/' + agentId),
   diffInstallations: (a: string, b: string) =>
     get<InstallationDiff>('/diff/installations?a=' + a + '&b=' + b),
   diffSnapshots: (a: string, b: string) =>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from './api'
 import MachinesView from './views/MachinesView'
 import MachineView from './views/MachineView'
+import AgentsView from './views/AgentsView'
 import AgentDetail from './components/AgentDetail'
 import Matrix from './views/Matrix'
 import Diff from './views/Diff'
@@ -9,6 +10,7 @@ import Overview from './views/Overview'
 
 type Route =
   | { name: 'fleet' }
+  | { name: 'agents' }
   | { name: 'machine'; hostId: string }
   | { name: 'agent'; installationId: string }
   | { name: 'compare' }
@@ -167,6 +169,7 @@ export default function App() {
   if (route.name === 'agent') {
     crumbs.push({ label: 'Agent' })
   }
+  if (route.name === 'agents') crumbs.push({ label: 'Agents' })
   if (route.name === 'compare') crumbs.push({ label: 'Compare' })
   if (route.name === 'matrix') crumbs.push({ label: 'Matrix' })
   if (route.name === 'overview') crumbs.push({ label: 'Overview' })
@@ -216,6 +219,12 @@ export default function App() {
           </button>
         </div>
         <div className="tabs">
+          <button
+            className={route.name === 'agents' ? 'active' : ''}
+            onClick={() => setRoute({ name: 'agents' })}
+          >
+            Agents
+          </button>
           <button
             className={route.name === 'overview' ? 'active' : ''}
             onClick={() => setRoute({ name: 'overview' })}
@@ -278,6 +287,7 @@ export default function App() {
         {route.name === 'fleet' ? (
           <MachinesView onOpenMachine={(hostId) => setRoute({ name: 'machine', hostId })} />
         ) : null}
+        {route.name === 'agents' ? <AgentsView /> : null}
         {route.name === 'machine' ? (
           <MachineView
             hostId={route.hostId}

@@ -15,6 +15,7 @@ from agent_fleet.services import diff
 from agent_fleet.services import persist as _persist  # noqa: F401
 from agent_fleet.services import scan_service
 from agent_fleet.services.export import build_export
+from agent_fleet.services.updates import latest_available  # noqa: F401
 from agent_fleet.services.scheduler import get_schedule
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
 from agent_fleet.settings import get_settings
@@ -626,6 +627,118 @@ def diff_snapshots(a: str = Query(...), b: str = Query(...)):
             }
             result[side]["created_at"] = _iso(snap.created_at)
         return result
+
+
+@router.get("/agent-view/{agent_id}")
+def agent_view(agent_id: str, include_disabled_hosts: bool = Query(False)):
+    """Agent-first view: one agent across every machine.
+
+    Answers two questions at a glance: are the versions current, and are the
+    configurations consistent.
+    """
+    from agent_fleet.adapters.registry import get_adapter as _get_adapter
+    from agent_fleet.services.updates import latest_available, version_state
+
+    if agent_id not in agent_ids():
+        raise HTTPException(404, f"unknown agent: {agent_id}")
+
+    with session_scope() as s:
+        if include_disabled_hosts:
+            runtimes = s.execute(select(models.Runtime)).scalars().all()
+        else:
+            runtimes = _visible(s, include_disabled=False)
+        by_id = {r.id: r for r in runtimes}
+        rows = s.execute(
+            select(models.AgentInstallation).where(
+                models.AgentInstallation.agent_id == agent_id
+            )
+        ).scalars().all()
+        installations = []
+        for i in rows:
+            rt = by_id.get(i.runtime_id)
+            if rt is None:
+                continue
+            cfg = getattr(i, "config", None)
+            installations.append(
+                {
+                    "id": i.id,
+                    "host": rt.host.name if rt.host else None,
+                    "runtime_key": rt.key,
+                    "kind": rt.kind,
+                    "collect_user": rt.collect_user,
+                    "runtime_id": i.runtime_id,
+                    "status": i.status,
+                    "detected": i.detected,
+                    "version": i.version,
+                    "install_method": i.install_method,
+                    "config_status": i.config_status,
+                    "config_summary": _config_summary(i),
+                    "collected_at": _iso(cfg.collected_at) if cfg else None,
+                }
+            )
+
+    detected = [i for i in installations if i["detected"]]
+    currency = latest_available(agent_id)
+    latest = currency.get("latest_available")
+    for i in detected:
+        i["version_state"] = (
+            version_state(i["version"], latest)
+            if i["status"] == "installed"
+            else "unknown"
+        )
+
+    # config consistency: group detected installs by their declared triple
+    groups: dict = {}
+    for i in detected:
+        cs = i["config_summary"] or {}
+        signature = " / ".join(
+            str(cs.get(k) or "?") for k in ("model", "provider", "base_url")
+        )
+        groups.setdefault(signature, []).append(
+            f"{i['host']}/{i['runtime_key']}"
+        )
+    config_groups = [
+        {"signature": sig, "machines": machines, "count": len(machines)}
+        for sig, machines in sorted(
+            groups.items(), key=lambda kv: -len(kv[1])
+        )
+    ]
+
+    versions = sorted(
+        {i["version"] for i in detected if i["version"]},
+        key=lambda v: _semver_key(v),
+    )
+    return {
+        "agent": agent_id,
+        "name": _get_adapter(agent_id).display_name,
+        "installations": installations,
+        "detected_count": len(detected),
+        "config_groups": config_groups,
+        "consistent_configs": len(config_groups) <= 1,
+        "version": {
+            **currency,
+            "distinct_versions": versions,
+            "latest_installed": versions[-1] if versions else None,
+            "up_to_date": sum(
+                1 for i in detected if i["version_state"] == "latest"
+            ),
+            "behind": sum(1 for i in detected if i["version_state"] == "behind"),
+            "unknown_source": currency.get("source") != "npm",
+        },
+    }
+
+
+def _semver_key(value: str):
+    core = ""
+    for ch in value:
+        if ch.isdigit() or ch == ".":
+            core += ch
+        else:
+            break
+    try:
+        return tuple(int(p) for p in core.split(".") if p)
+    except ValueError:
+        return (0,)
 
 
 @router.get("/compare/{agent_id}")
