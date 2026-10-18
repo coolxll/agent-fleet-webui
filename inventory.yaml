@@ -2,15 +2,12 @@
 #
 # Sources are merged; later entries only fill gaps left by earlier ones.
 # The OpenSSH client config (~/.ssh/config) is always read as well, so every
-# ssh alias you already have shows up automatically. This file exists to add
-# what SSH config cannot express: runtime kind hints and WSL distros.
+# ssh alias you already have shows up automatically.
 #
 # kind: macos | linux | windows | wsl | auto
 #
-# NOTE: WSL distros are NOT declared here. They are reachable through their own
-# SSH endpoints (wujie, r9kp-wsl, ...), which already appear as runtimes.
-# Declaring them again under the Windows host would duplicate them.
-# Set AGENT_FLEET_DISCOVER_WSL=true if you ever want the wsl.exe route instead.
+# WSL distros are NOT declared here. They are reachable through their own SSH
+# endpoints (wujie, r9kp-wsl), which already appear as runtimes.
 
 hosts:
   - name: local-controller
@@ -42,11 +39,16 @@ hosts:
     kind: linux
   - name: k14
     kind: linux
-  - name: la-tri
-    kind: linux
-  - name: jph2
-    kind: linux
-  - name: ddrk
-    kind: linux
   - name: corp172-dev
     kind: linux
+
+# Hosts that exist in ~/.ssh/config but are not part of the fleet.
+# Exclusions win over every other source.
+exclude:
+  - corp172
+  - ddrk
+  - jph2
+  - la-tri
+  - pve
+  - r9u
+  - racknerd

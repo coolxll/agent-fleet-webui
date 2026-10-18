@@ -136,7 +136,13 @@ is reported.
 
 Agent count is now 7, all with config parsing.
 
-## Fleet scope (2026-10-18)
+## Fleet scope (2026-10-18, updated after user feedback)
+
+The fleet is now declaratively scoped in inventory.yaml with an exclude:
+list. Hosts that used to leak in from ~/.ssh/config (corp172, ddrk, jph2,
+la-tri, pve, r9u, racknerd) are excluded outright and their rows were removed
+from the database - the earlier host-level disable flag is kept for ad-hoc
+exclusion from the UI, but the config is the source of truth.
 
 The fleet now contains exactly the machines the user asked for. Everything
 else that used to leak in from ~/.ssh/config (corp172, ddrk, jph2, la-tri, pve,

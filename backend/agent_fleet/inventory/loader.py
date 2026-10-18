@@ -192,6 +192,20 @@ def load_ssh_config(path: Path) -> list[DiscoveredHost]:
     return [h for h in hosts if h.name and h.name != "*"]
 
 
+def load_exclusions(path: Path) -> set[str]:
+    """Host names explicitly excluded from the fleet by inventory.yaml."""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace")) or {}
+    except Exception:
+        return set()
+    if not isinstance(data, dict):
+        return set()
+    items = data.get("exclude") or []
+    if not isinstance(items, list):
+        return set()
+    return {str(x).strip() for x in items if str(x).strip()}
+
+
 def load_project_yaml(path: Path) -> list[DiscoveredHost]:
     data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace")) or {}
     out: list[DiscoveredHost] = []
@@ -272,6 +286,16 @@ def load_all(settings) -> list[DiscoveredHost]:
             add_many(load_ansible_inventory(p))
 
     add_many(load_ssh_config(settings.ssh_config_path))
+
+    # inventory.yaml can exclude hosts outright (for example ssh aliases that
+    # are not part of the fleet). Exclusions win over every source.
+    excluded: set[str] = set()
+    for p in settings.inventory_paths:
+        p = Path(p)
+        if p.suffix.lower() in (".yaml", ".yml") and p.exists():
+            excluded |= load_exclusions(p)
+    if excluded:
+        merged = {k: v for k, v in merged.items() if k not in excluded}
     return list(merged.values())
 
 

@@ -709,7 +709,10 @@ async def start_scan(req: ScanRequest):
     with session_scope() as s:
         if req.all or not req.runtime_ids:
             rts = s.execute(
-                select(models.Runtime).where(models.Runtime.enabled.is_(True))
+                select(models.Runtime)
+                .join(models.Host)
+                .where(models.Runtime.enabled.is_(True))
+                .where(models.Host.enabled.is_(True))
             ).scalars().all()
             ids = [r.id for r in rts]
         else:

@@ -112,6 +112,44 @@ def test_matrix_shows_scan_failure_without_losing_data(client, fleet_db, monkeyp
     assert cell["last_success"]
 
 
+def test_scan_all_skips_excluded_hosts(client, fleet_db, monkeypatch):
+    """Hosts excluded from the fleet are not scanned, even with all=True."""
+    import agent_fleet.services.scan_service as svc
+
+    from test_scan import FakeRunner, _codex_stream
+
+    ids = []
+    for i in range(2):
+        rid = _make_runtime(fleet_db, name="scope-" + str(i))
+        ids.append(rid)
+    with session_scope() as s:
+        rt = s.get(models.Runtime, ids[0])
+        host = s.get(models.Host, rt.host_id)
+        host.enabled = False
+        s.commit()
+    monkeypatch.setattr(
+        "agent_fleet.services.scanner.build_runner", lambda rt, s: FakeRunner(_codex_stream())
+    )
+    monkeypatch.setattr(
+        "agent_fleet.services.scanner.scan_runtime", fake_scan_runtime
+    )
+    captured = []
+
+    async def fake_start_scan(runtime_ids, triggered_by, settings):
+        captured.append(list(runtime_ids))
+        return "fake-run"
+
+    monkeypatch.setattr(svc, "start_scan", fake_start_scan)
+
+    res = client.post("/api/scan", json={"all": True})
+    assert res.status_code == 200
+    assert res.json()["total"] == 1  # the excluded host's runtime is not scanned
+
+
+def fake_scan_runtime(ref, settings):
+    raise AssertionError("scanner must not be reached for excluded hosts")
+
+
 def test_scan_endpoint_rejects_empty_fleet(client, fleet_db):
     res = client.post("/api/scan", json={"all": True})
     assert res.status_code == 400

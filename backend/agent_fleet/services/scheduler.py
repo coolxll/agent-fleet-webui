@@ -177,7 +177,10 @@ class Schedule:
             ids = [
                 r.id
                 for r in s.execute(
-                    select(models.Runtime).where(models.Runtime.enabled.is_(True))
+                    select(models.Runtime)
+                    .join(models.Host)
+                    .where(models.Runtime.enabled.is_(True))
+                    .where(models.Host.enabled.is_(True))
                 ).scalars()
             ]
         if not ids:
