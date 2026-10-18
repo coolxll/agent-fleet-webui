@@ -116,10 +116,14 @@ class PiAdapter(AgentAdapter):
             cfg.warnings.append(f"{MODELS_PATH}: {m_src.status}")
 
         cfg.unsupported_fields = ["mcp_servers", "skills"] if not cfg.mcp_servers else []
-        apply_scope(cfg, self, sources)
+        # Status is decided before apply_scope, which adds its own bookkeeping
+        # keys to cfg.settings. "empty" is about the user settings file
+        # specifically; the system policy file is normally absent.
+        user_missing = bool(s_src is None or s_src.status == "missing")
         cfg.parse_status = "parsed" if (cfg.model or cfg.model_provider) else (
-            "empty" if any(s.status == "missing" for s in sources) else "partial"
+            "empty" if user_missing else "partial"
         )
+        apply_scope(cfg, self, sources)
         cfg.sanitized = {
             "agent": self.agent_id,
             "scope": "user",

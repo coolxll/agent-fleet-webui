@@ -63,7 +63,13 @@ def build_windows_probe_script(spec) -> list:
     for b in spec.bins:
         cands = ";".join(c for c in b.candidates if c.startswith("~"))
         entries.append(b.key + "|" + b.binary + ("|" + cands if cands else ""))
-    version_args = " ".join(b.version_args)
+    # Version args are per-binary; embedding the last one only worked while
+    # every adapter happened to use --version. Probe without args instead of
+    # silently running another binary's arguments.
+    probe_args = sorted({tuple(b.version_args) for b in spec.bins if b.version_args})
+    version_args = " ".join(
+        _ps_q(a) for a in (probe_args[0] if len(probe_args) == 1 else ())
+    )
     blocks.append(
         [
             "foreach ($e in " + _ps_list(entries) + ") {",

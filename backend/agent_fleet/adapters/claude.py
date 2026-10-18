@@ -154,8 +154,14 @@ class ClaudeAdapter(AgentAdapter):
         global_src = by_path.get(GLOBAL_PATH)
 
         # ---- ordered scopes: system policy < user < project -------------
+        # Local settings sit between the user file and project files. Project
+        # files are not really ordered against each other (they belong to
+        # different repositories), so they merge in a stable path order.
         ordered = [src for src in sources if src.scope == "project" and src.kind == "config"]
         ordered.sort(key=lambda s: s.path)
+        local_src = by_path.get(LOCAL_SETTINGS_PATH)
+        if local_src and local_src.usable:
+            ordered.insert(0, local_src)
         if settings_src and settings_src.usable:
             ordered.insert(0, settings_src)
         system_src = by_path.get(SYSTEM_SETTINGS_PATH)
@@ -214,8 +220,6 @@ class ClaudeAdapter(AgentAdapter):
                 pass
         elif settings_src:
             cfg.warnings.append(f"{SETTINGS_PATH}: {settings_src.status}")
-            if settings_src.status == "missing":
-                cfg.parse_status = "empty"
 
         # ---- MCP servers: user scope first, project .mcp.json overrides ---
         if global_src and global_src.usable:
@@ -275,11 +279,18 @@ class ClaudeAdapter(AgentAdapter):
             ][:40]
 
         # ---- status and resolution -------------------------------------
-        any_usable = bool(
-            (settings_src and settings_src.usable) or (global_src and global_src.usable)
+        # Any readable file counts, including ~/.claude.json (MCP servers) and
+        # project settings, both of which are merged above. Unreadable scopes
+        # must surface as errors, not "empty", or a broken scan looks like an
+        # absent config and the persist layer discards the last-known-good one.
+        any_usable = any(
+            src.usable and src.kind in ("config", "state", "mcp") for src in sources
+        )
+        any_unreadable = any(
+            src.status in ("unreadable", "toolarge", "truncated") for src in sources
         )
         if not any_usable:
-            cfg.parse_status = "empty"
+            cfg.parse_status = "error" if any_unreadable else "empty"
         elif cfg.model or cfg.mcp_servers or cfg.settings:
             cfg.parse_status = "parsed"
         else:

@@ -50,30 +50,49 @@ def diff_dicts(a: dict, b: dict, path: str = "") -> list:
     return out
 
 
+def _group(items: list) -> dict:
+    """Bucket list entries by key, keeping duplicates instead of collapsing them.
+
+    MCP servers can appear twice with the same name (user scope plus a project
+    override); a plain dict would drop one of them and mask real changes.
+    """
+    groups: dict = {}
+    for i, item in enumerate(items or []):
+        groups.setdefault(_key(item, i), []).append(item)
+    return groups
+
+
 def diff_lists(a: list, b: list, path: str) -> list:
     out = []
-    ka = {_key(x, i): x for i, x in enumerate(a or [])}
-    kb = {_key(x, i): x for i, x in enumerate(b or [])}
-    for key in sorted(set(ka) | set(kb)):
+    ga = _group(a)
+    gb = _group(b)
+    for key in sorted(set(ga) | set(gb)):
         child = f"{path}[{key}]"
-        if key not in ka:
-            out.append({"path": child, "kind": "added", "a": None, "b": _scalar(kb[key])})
-            continue
-        if key not in kb:
-            out.append({"path": child, "kind": "removed", "a": _scalar(ka[key]), "b": None})
-            continue
-        va, vb = ka[key], kb[key]
-        if isinstance(va, dict) and isinstance(vb, dict):
-            out.extend(diff_dicts(va, vb, child))
-        elif isinstance(va, list) and isinstance(vb, list):
-            out.extend(diff_lists(va, vb, child))
-        elif va != vb:
-            out.append({"path": child, "kind": "changed", "a": _scalar(va), "b": _scalar(vb)})
+        items_a = ga.get(key, [])
+        items_b = gb.get(key, [])
+        for i in range(max(len(items_a), len(items_b))):
+            suffix = f"#{i}" if (len(items_a) > 1 or len(items_b) > 1) else ""
+            if i >= len(items_a):
+                out.append({"path": child + suffix, "kind": "added", "a": None, "b": _scalar(items_b[i])})
+                continue
+            if i >= len(items_b):
+                out.append({"path": child + suffix, "kind": "removed", "a": _scalar(items_a[i]), "b": None})
+                continue
+            va, vb = items_a[i], items_b[i]
+            if isinstance(va, dict) and isinstance(vb, dict):
+                out.extend(diff_dicts(va, vb, child + suffix))
+            elif isinstance(va, list) and isinstance(vb, list):
+                out.extend(diff_lists(va, vb, child + suffix))
+            elif va != vb:
+                out.append(
+                    {
+                        "path": child + suffix,
+                        "kind": "changed",
+                        "a": _scalar(va),
+                        "b": _scalar(vb),
+                    }
+                )
     return out
-
-
-def diff_views(name_a: str, name_b: str, a: dict, b: dict) -> list:
-    return diff_dicts(a or {}, b or {})
 
 
 # ---------------------------------------------------------------------------

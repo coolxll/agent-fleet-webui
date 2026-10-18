@@ -212,15 +212,19 @@ async def _collect_project_scopes(rt, settings, runner, facts):
     if not spec.files:
         return facts
     try:
-        res = await runner.run_script(
-            script_builder(spec), max(15, settings.command_timeout)
-        )
-    except Exception:
-        return facts
-    if res.error or res.timed_out:
-        return facts
-    try:
-        return merge_facts(facts, parse_probe_output(res.stdout))
+        # The Windows builder returns one script per chunk; run them in order
+        # and merge the record streams, like the main Windows probe does.
+        scripts = script_builder(spec)
+        if isinstance(scripts, str):
+            scripts = [scripts]
+        chunks = []
+        for script in scripts:
+            res = await runner.run_script(script, max(15, settings.command_timeout))
+            if res.error or res.timed_out:
+                return facts
+            chunks.append(res.stdout)
+        merged = parse_probe_output(NL.join(chunks))
+        return merge_facts(facts, merged)
     except Exception:
         return facts
 

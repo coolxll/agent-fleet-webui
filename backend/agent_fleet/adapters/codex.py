@@ -194,6 +194,8 @@ class CodexAdapter(AgentAdapter):
 
         if "experimental_bearer_token" in data:
             cfg.warnings.append("config contains a bearer token field; value not read")
+        # Decide status before apply_scope, which adds its own bookkeeping
+        # keys to cfg.settings and would otherwise make every config "parsed".
         cfg.parse_status = "parsed" if cfg.settings or cfg.mcp_servers or cfg.skills else "partial"
         apply_scope(cfg, self, sources)
         cfg.sanitized = {

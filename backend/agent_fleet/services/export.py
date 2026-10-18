@@ -108,6 +108,7 @@ def build_export(runtime_id=None, agent_id=None, detected_only=False) -> dict:
             "detected_only": detected_only,
         },
         "counts": {
+            # one host entry per runtime, so this is runtime/host pairs
             "runtimes": len(hosts),
             "installations": sum(len(h["agents"]) for h in hosts),
         },

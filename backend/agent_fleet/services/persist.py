@@ -110,7 +110,9 @@ def persist_result(runtime_id, result: RuntimeScanResult, run_id, settings) -> d
                         )
                     )
                 cfg = _store_config(s, inst, ar.config, now)
-                inst.config_status = ar.config.parse_status
+                # config_status describes the stored config, not this run: when
+                # nothing usable was parsed we keep showing the last good one.
+                inst.config_status = cfg.parse_status if cfg else ar.config.parse_status
                 inst.config_id = cfg.id if cfg else None
             if det.detected:
                 agents_found += 1
@@ -159,9 +161,17 @@ def _source_status(src) -> str:
 
 
 def _store_config(s, inst, cfg, now):
-    if cfg.parse_status in ("empty", "error", "unsupported") and not cfg.sanitized:
-        # keep the previous config if this run produced nothing usable
-        return None
+    # apply_scope always fills `sanitized` with at least resolution/scopes, so
+    # its truthiness says nothing about whether values were actually parsed.
+    # Gate on parse_status alone: keep (and still point at) the previous config
+    # when this run produced nothing usable.
+    if cfg.parse_status in ("empty", "error", "unsupported"):
+        return s.execute(
+            select(models.AgentConfiguration)
+            .where(models.AgentConfiguration.installation_id == inst.id)
+            .order_by(models.AgentConfiguration.collected_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
     row = models.AgentConfiguration(
         id=models.new_id(),
         installation_id=inst.id,
