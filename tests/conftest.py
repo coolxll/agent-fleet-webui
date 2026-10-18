@@ -10,6 +10,17 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 
 @pytest.fixture()
+def client(fleet_db):
+    """API test client backed by the per-test database."""
+    from fastapi.testclient import TestClient
+
+    from agent_fleet.main import app
+
+    with TestClient(app) as c:
+        yield c
+
+
+@pytest.fixture()
 def fleet_db(tmp_path, monkeypatch):
     """Every test gets its own SQLite file."""
     monkeypatch.setenv("AGENT_FLEET_DB_PATH", str(tmp_path / "fleet-test.db"))
