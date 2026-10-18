@@ -2,7 +2,8 @@
 
 Goal of this phase: decide what to reuse, what to implement, and which remote
 mechanisms are reliable enough to collect agent installs from macOS, Linux,
-Windows and WSL machines over SSH.
+Windows and WSL machines over SSH. Findings here feed the constraints and
+verification notes in `requirements.md`.
 
 ## 1. Existing projects considered
 

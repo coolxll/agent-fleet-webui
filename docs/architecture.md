@@ -1,8 +1,9 @@
 # Architecture
 
 Read-only observer: it connects to machines you already have SSH access to,
-reads agent installs and their user-scope configuration, sanitizes everything,
-and stores a normalized snapshot. It never writes to a remote machine.
+reads agent installs and their configuration across scopes, sanitizes
+everything, and stores a normalized snapshot. It never writes to a remote
+machine. Requirements it implements: `requirements.md`.
 
 ## Shape
 
@@ -15,16 +16,26 @@ asyncio tasks inside the API process.
 
 ## Collection model
 
-The central idea is **one round trip per runtime**.
+The central idea is **one main round trip per runtime**, plus one small second
+pass when project scopes exist.
 
 1. The backend renders a read-only shell script from the union of everything
-   every adapter wants to know (binaries, config paths, skills directories).
+   every adapter wants to know (binaries, user/system config paths, skills
+   directories).
 2. The script is streamed to `sh -s` over one `ssh` connection (or to
    `wsl.exe -d <distro> -- sh -s`, or to `powershell.exe -EncodedCommand ...`
    in chunks on Windows).
 3. The script replies with a framed record stream, `AF<TAB>tag<TAB>fields...`,
    including whole file contents for whitelisted config paths.
 4. The reply is parsed into `RemoteFacts` - a plain data object.
+5. If an adapter derives project roots from the user-scope config (Claude's
+   projects table, Codex's `[projects]`, OpenCode's declared workspace roots),
+   a second files-only pass fetches project-scope files. It is capped at 30
+   unique files and at 5 roots per agent and reuses the same connection code.
+   If that pass fails, the scan still succeeds, project values are missing
+   and those scopes are reported `not_probed` (see "Declared vs effective").
+   Windows chunks run one after another within a single shared timeout
+   budget, so a runtime never opens more than one SSH connection at a time.
 
 Because adapters only ever see `RemoteFacts`, they are pure functions and can
 be tested from fixtures with no machine and no network.
@@ -58,7 +69,8 @@ be stored, so a future adapter cannot leak by forgetting to sanitize.
 
     hosts 1---n runtimes 1---n agent_installations 1---n config_sources
                                     1---1 agent_configurations
-    scan_runs 1---n scan_tasks      snapshots (history per runtime)
+    scan_runs 1---n scan_tasks      snapshots (history, kept indefinitely)
+    app_state (schedule state, key/value)
 
 **Identity of an install is (host, runtime, user, agent).** A Windows machine
 has a `native` runtime plus one runtime per WSL distro; each has its own home
@@ -80,7 +92,10 @@ Statuses are kept separate on purpose:
   means one hung host cannot stall the fleet.
 * A failed scan updates connectivity fields and leaves the last known good
   snapshot untouched, so offline machines keep showing their last state with a
-  `stale` marker.
+  `stale` marker (after the TTL plus a 60s grace).
+* When a scan produces no usable config (`empty`/`error`/`unsupported`), the
+  previous configuration row is retained and `config_status` keeps describing
+  it, so a broken parse never blanks the inspector.
 
 ## Security model
 
@@ -103,10 +118,39 @@ Additional rules:
   `.npmrc`, keychain and similar paths even if an adapter asked for them.
 * Raw remote config data exists only in memory during a scan and is never
   persisted; only the sanitized structure reaches SQLite.
-* Declarations vs effective values: configurations are stored as **declared**
-  ("as written in the file"). The tool never claims to know the effective
-  value, because environment variables, project-level files and CLI flags can
-  all override it.
+
+### Declared vs effective
+
+Every stored configuration carries `resolution`, set by `apply_scope()` from
+the agent's precedence chain:
+
+* `effective` - every file in the chain was readable or definitively absent,
+  so the normalized values reflect every declared scope (Claude merges system
+  < user < local < project; OpenCode parses the highest-precedence readable
+  document).
+* `declared` - at least one existing file was unreadable, oversized,
+  truncated or malformed; a warning names it, and the values must be read as
+  "as written in the files that could be read". This is the honest answer
+  when a scope could not be inspected. A file that is entirely absent from
+  the probe output (`not_probed`, for example when the project-scope pass
+  failed) is not part of the check; those scopes show `not_probed`.
+
+The stored values are always declarations from files. Environment variables
+and CLI flags are invisible to the probe, so even `effective` never means
+"what the agent will actually use at runtime". Codex, Pi and Hermes normalize
+the user-scope file and report the system policy as a scope without merging
+it; their `resolution` still only says whether every declared scope file was
+readable.
+
+## Comparison, export and scheduling
+
+* `services/diff.py` produces field-level change records (`path`, `kind`,
+  `a`, `b`) for two installations or two snapshots; the UI's Compare tab
+  renders them.
+* `services/export.py` builds one sanitized `agent-fleet-export/1` document
+  and exposes it at `GET /api/export`.
+* `services/scheduler.py` runs one loop inside the API process; its state is
+  persisted in `app_state` and a due run is skipped while another is active.
 
 ## Layout
 
@@ -117,7 +161,8 @@ Additional rules:
         probe.py      POSIX probe script + record parser
         probe_win.py  PowerShell probe (chunked, base64)
       adapters/       sanitize, base, and one module per agent
-      services/       scanner, persistence, scan runner, inventory sync
+      services/       scanner, persistence, scan runner, inventory sync,
+                      diff, export, scheduler
       api/            HTTP routes
-    web/src/          overview, matrix, inspector
+    web/src/          overview, matrix, inspector, compare (Diff.tsx)
     tests/            fixtures + unit/integration tests

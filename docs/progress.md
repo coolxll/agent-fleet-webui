@@ -2,6 +2,8 @@
 
 Last updated: 2026-10-18
 
+Requirements source: `requirements.md` (IDs such as `CFG-3` referenced below).
+
 ## Stages
 
 ### 1. Skeleton + inventory (done)
@@ -47,7 +49,8 @@ Last updated: 2026-10-18
 ### 6. Web UI (done)
 
 * Overview (with per-machine scan + enable/disable), Matrix, Inspector with
-  filters; scan controls and live progress.
+  filters; scan controls and live progress. Stage 8 added the Compare tab and
+  the Export JSON button.
 
 ### 7. Tests + docs (done)
 
@@ -60,12 +63,18 @@ Last updated: 2026-10-18
   machines) or two snapshots (history of one runtime). UI "Compare" tab.
 * **Scope discovery + precedence**: every adapter declares a
   system -> user -> project chain. Claude derives project roots from
-  `~/.claude.json`; Codex from its `[projects]` table. A second probe pass
-  reads project-scope files (`.claude/settings.json`, `.mcp.json`,
-  `opencode.json`, ...), capped at 5 roots and 30 files.
+  `~/.claude.json`; Codex from its `[projects]` table; OpenCode from its
+  declared workspace roots. A second probe pass reads project-scope files
+  (`.claude/settings.json`, `.mcp.json`, `opencode.json`, ...), capped at 5
+  roots per agent and 30 files per runtime.
+  Precedence is applied per agent: Claude merges system < user < local <
+  project settings plus project `.mcp.json`; OpenCode parses the single
+  highest-precedence readable document; Codex, Pi and Hermes normalize the
+  user-scope file and report the system policy as a scope without merging it.
   `resolution` is "effective" only when every scope in the chain was readable
   or definitively absent; otherwise "declared" plus a warning naming the
-  unreadable file.
+  unreadable file (CFG-3). The stored values are always declared file values:
+  environment variables and CLI flags are outside the probe.
 * **Scheduled scanning**: one background loop in the API process, state
   persisted in `app_state` so a restart resumes. A due run is skipped, never
   queued, when a manual run is active.
@@ -103,15 +112,28 @@ fleet scan.
 
 * Windows config parsing uses the same adapters, so a few Windows-specific
   layout variants will show up as `partial` rather than `parsed`.
-* Project-scope and system-scope configurations are not merged into the
-  user-scope view. Claude's per-project MCP servers are listed separately and
-  a warning says so.
-* "Effective configuration" is never claimed - only declared values are shown.
+* Merging is not uniform across agents: Claude merges system/user/local/project
+  settings; OpenCode takes the highest-precedence document; Codex, Pi and
+  Hermes normalize only the user-scope file (the system policy is reported as
+  a scope but not applied). Claude's per-project MCP servers recorded in
+  `~/.claude.json` are listed separately and a warning says so.
+* "Effective" only ever covers the config files in the chain. Environment
+  variables and CLI flags are never observed, so no value is presented as
+  the definitive runtime setting.
+* If the project-scope pass fails, project values are missing while the scan
+  still succeeds; scopes show `not_probed` and `resolution` remains
+  `effective` because the missing files never entered the chain check.
 * Skills are counted and listed by directory/`SKILL.md` presence; frontmatter
   is not parsed.
-* Snapshot history now has a diff view (implemented in stage 8).
 * Stale runtime rows are not garbage collected: renaming a WSL distro in the
   inventory leaves the old row behind until it is removed by hand.
+* Snapshot history is not pruned.
+* The API has no authentication; bind it to loopback.
+
+**Done in stage 8 (previously listed as gaps)**
+
+* Snapshot history has a diff view, and two installations of the same agent
+  can be compared side by side.
 
 **Partially verified**
 
