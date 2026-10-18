@@ -67,6 +67,31 @@ def _group(items: list) -> dict:
     return groups
 
 
+def _pair(items_a: list, items_b: list):
+    """Pair duplicate entries by value where possible, then by position.
+
+    Same-named MCP servers (a user-scope entry plus a project override) can
+    appear more than once, and their order is not meaningful. Pairing purely
+    by position reports a change in both halves when only the order differs.
+    """
+    remaining_b = list(items_b)
+    pairs = []
+    # Exact matches first: equal entries are not changes, wherever they sit.
+    rest_a = []
+    for va in items_a:
+        for i, vb in enumerate(remaining_b):
+            if va == vb:
+                del remaining_b[i]
+                pairs.append((va, vb))
+                break
+        else:
+            rest_a.append(va)
+    # The leftovers are matched positionally and diffed field by field.
+    for va, vb in zip_longest(rest_a, remaining_b, fillvalue=_MISSING):
+        pairs.append((va, vb))
+    return pairs
+
+
 def diff_lists(a: list, b: list, path: str) -> list:
     out = []
     ga = _group(a)
@@ -75,20 +100,28 @@ def diff_lists(a: list, b: list, path: str) -> list:
         items_a = ga.get(key, [])
         items_b = gb.get(key, [])
         base = f"{path}[{key}]"
+        pairs = _pair(items_a, items_b)
         # Duplicates get an index suffix so the two sides stay distinguishable.
         dup = len(items_a) > 1 or len(items_b) > 1
-        for i, (va, vb) in enumerate(zip_longest(items_a, items_b, fillvalue=_MISSING)):
-            child = base + (f"#{i}" if dup else "")
+        for i, (va, vb) in enumerate(pairs):
             if va is _MISSING:
+                child = base + (f"#{i}" if dup else "")
                 out.append({"path": child, "kind": "added", "a": None, "b": _scalar(vb)})
             elif vb is _MISSING:
+                child = base + (f"#{i}" if dup else "")
                 out.append({"path": child, "kind": "removed", "a": _scalar(va), "b": None})
-            elif isinstance(va, dict) and isinstance(vb, dict):
-                out.extend(diff_dicts(va, vb, child))
-            elif isinstance(va, list) and isinstance(vb, list):
-                out.extend(diff_lists(va, vb, child))
-            elif va != vb:
-                out.append({"path": child, "kind": "changed", "a": _scalar(va), "b": _scalar(vb)})
+            elif va == vb:
+                continue
+            else:
+                child = base + (f"#{i}" if dup else "")
+                if isinstance(va, dict) and isinstance(vb, dict):
+                    out.extend(diff_dicts(va, vb, child))
+                elif isinstance(va, list) and isinstance(vb, list):
+                    out.extend(diff_lists(va, vb, child))
+                else:
+                    out.append(
+                        {"path": child, "kind": "changed", "a": _scalar(va), "b": _scalar(vb)}
+                    )
     return out
 
 

@@ -406,3 +406,21 @@ def test_fixture_configs_never_leak(agent_id, fixture):
     )
     res = get_adapter(agent_id).run(facts)
     assert_clean(res.config.sanitized)
+
+
+def test_claude_unreadable_user_settings_does_not_count_as_parsed():
+    """~/.claude.json being readable must not mask a broken settings.json.
+
+    persist keeps the last good config only for empty/error/unsupported, so a
+    "partial" verdict here is what prevents a near-empty merge from replacing
+    model/provider/base_url.
+    """
+    facts = _claude_facts(None, fixture_text("claude", "global.json"))
+    facts.files["~/.claude/settings.json"] = FileFact(
+        path="~/.claude/settings.json", status="unreadable"
+    )
+    cfg = get_adapter("claude").run(facts).config
+    assert cfg.model is None
+    assert cfg.mcp_servers  # ~/.claude.json was readable
+    assert cfg.parse_status == "partial"
+    assert cfg.resolution == "declared"

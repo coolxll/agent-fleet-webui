@@ -288,6 +288,15 @@ class ClaudeAdapter(AgentAdapter):
         any_usable = any(src.usable for src in sources)
         if not any_usable:
             cfg.parse_status = "error" if unresolved else "empty"
+        elif any(
+            src is not None and src.status not in ("ok", "missing", "empty", "not_probed")
+            for src in (settings_src, by_path.get(LOCAL_SETTINGS_PATH))
+        ):
+            # The user settings file holds model/base_url and is unreadable,
+            # while something else (~/.claude.json) is still readable. The MCP
+            # list alone must not make this look like a clean parse: persist
+            # would replace the last good config with the near-empty merge.
+            cfg.parse_status = "partial"
         elif cfg.model or cfg.mcp_servers or cfg.settings:
             cfg.parse_status = "parsed"
         else:

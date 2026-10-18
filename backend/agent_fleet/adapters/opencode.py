@@ -92,6 +92,26 @@ class OpenCodeAdapter(AgentAdapter):
                 )
         return sources
 
+    def _rank_of(self, path: str) -> int:
+        """Precedence rank of a path: its position in PRECEDENCE_CHAIN, higher
+        wins (-1 when the path is not in the chain)."""
+        # Exact names first: "~/.config/opencode/opencode.json" also ends with
+        # "/opencode.json", so the project suffix rule must not see user files.
+        for i, (_, chain_path) in enumerate(self.PRECEDENCE_CHAIN):
+            if path == chain_path:
+                return i
+        # Project files are discovered under a concrete root and are matched by
+        # suffix, so "PROJECT/opencode.json" covers "/work/proj/opencode.json".
+        # The longest suffix wins: the chain is low -> high, so when both
+        # project entries match, the later (more specific) one is right.
+        best = -1
+        for i, (_, chain_path) in enumerate(self.PRECEDENCE_CHAIN):
+            if not chain_path.startswith("PROJECT/"):
+                continue
+            if path.endswith("/" + chain_path[len("PROJECT/"):]):
+                best = i
+        return best
+
     def project_roots(self, facts) -> list:
         """OpenCode keeps no project registry; the workspace roots it has been
         run in are the best available signal."""
@@ -135,12 +155,10 @@ class OpenCodeAdapter(AgentAdapter):
 
         # Precedence: system < user < project, taken from PRECEDENCE_CHAIN so
         # the order is declared once. Only one document is parsed, so try from
-        # the highest scope down and stop at the first one that loads.
-        chain = [scope for scope, _ in self.PRECEDENCE_CHAIN]
-        usable.sort(
-            key=lambda s: chain.index(s.scope) if s.scope in chain else -1,
-            reverse=True,
-        )
+        # the highest-precedence path down and stop at the first one that
+        # loads. Sorting by scope alone is not enough: the chain lists two
+        # user files and two project files, and their order matters.
+        usable.sort(key=lambda s: self._rank_of(s.path), reverse=True)
         data = None
         used = None
         for s in usable:
@@ -155,6 +173,17 @@ class OpenCodeAdapter(AgentAdapter):
             apply_scope(cfg, self, sources, self.project_roots(facts))
             cfg.sanitized = self._view(cfg)
             return cfg
+
+        # A readable file was skipped because it did not parse, so the values
+        # below come from a lower-precedence document. Never present that as a
+        # clean "parsed" result: the agent itself would stop at the broken file.
+        if any(self._rank_of(s.path) > self._rank_of(used.path) for s in usable):
+            cfg.warnings.append(
+                "higher-precedence config did not parse; values fall back to " + used.path
+            )
+            cfg.parse_status = "partial"
+        else:
+            cfg.parse_status = None  # decided below from the parsed values
 
         if not isinstance(data, dict):
             cfg.parse_status = "error"
@@ -210,7 +239,10 @@ class OpenCodeAdapter(AgentAdapter):
         if isinstance(agents, dict) and agents:
             cfg.settings["agents"] = sorted(agents.keys())[:30]
 
-        cfg.parse_status = "parsed" if (cfg.model or cfg.mcp_servers or cfg.skills or cfg.settings) else "empty"
+        if cfg.parse_status is None:
+            cfg.parse_status = (
+                "parsed" if (cfg.model or cfg.mcp_servers or cfg.skills or cfg.settings) else "empty"
+            )
         apply_scope(cfg, self, sources, self.project_roots(facts))
         cfg.sanitized = self._view(cfg)
         return cfg

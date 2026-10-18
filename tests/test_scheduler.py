@@ -147,3 +147,103 @@ def test_no_runtimes_means_no_run(schedule, fleet_db, monkeypatch):
     )
     asyncio.run(schedule._run_once())
     assert calls == []
+
+
+def test_interval_change_rearms_the_sleeping_loop(schedule, fleet_db, monkeypatch):
+    """A shorter interval whose deadline has already passed fires promptly;
+    status() reports the armed deadline, not the old one."""
+    _add_runtime(fleet_db, "sched-f")
+    calls = []
+
+    async def fake_start_scan(ids, triggered_by, settings):
+        calls.append(ids)
+        return "run-arm"
+
+    monkeypatch.setattr(
+        "agent_fleet.services.scheduler.scan_service.start_scan", fake_start_scan
+    )
+
+    async def main():
+        from datetime import datetime, timedelta
+
+        schedule.enabled = True
+        schedule.interval_seconds = 24 * 3600
+        schedule._last_run_at = datetime.utcnow() - timedelta(minutes=30)
+        schedule.start()
+        task = schedule._task
+        await asyncio.sleep(0.05)
+        assert calls == []  # armed for 24h
+        schedule.update(enabled=True, interval_seconds=600)  # due 20 min ago
+        await asyncio.sleep(0.15)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(main())
+    assert len(calls) == 1
+
+
+def test_status_reports_the_armed_deadline(schedule):
+    """next_run_at must describe what the loop is actually sleeping until."""
+    from datetime import datetime, timedelta
+
+    async def main():
+        schedule.enabled = True
+        schedule.interval_seconds = 3600
+        schedule._last_run_at = datetime.utcnow() - timedelta(minutes=5)
+        schedule.start()
+        task = schedule._task
+        await asyncio.sleep(0.02)
+        before = schedule.status()["next_run_at"]
+        schedule.update(enabled=True, interval_seconds=120)
+        after = schedule.status()["next_run_at"]
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return before, after
+
+    before, after = asyncio.run(main())
+    assert before and after
+    assert after < before  # the 2-minute deadline replaces the hourly one
+
+
+def test_enabling_starts_a_run_without_waiting_a_full_interval(schedule, fleet_db, monkeypatch):
+    _add_runtime(fleet_db, "sched-g")
+    calls = []
+
+    async def fake_start_scan(ids, triggered_by, settings):
+        calls.append(ids)
+        return "run-now"
+
+    monkeypatch.setattr(
+        "agent_fleet.services.scheduler.scan_service.start_scan", fake_start_scan
+    )
+
+    async def main():
+        schedule.start()
+        task = schedule._task
+        await asyncio.sleep(0.02)
+        schedule.update(enabled=True, interval_seconds=3600)
+        await asyncio.sleep(0.15)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(main())
+    assert len(calls) == 1
+
+
+def test_update_can_be_called_without_a_running_loop(fleet_db):
+    """The API calls update() from a sync route; there may be no loop yet."""
+    s = Schedule()
+    out = s.update(enabled=True, interval_seconds=600)
+    assert out["enabled"] is True
+    assert out["next_run_at"]
+    s.update(enabled=False)
+    assert s.status()["next_run_at"] is None

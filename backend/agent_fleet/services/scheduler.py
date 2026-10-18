@@ -31,6 +31,9 @@ class Schedule:
         self._last_run_id: str = None
         self._last_run_at: datetime = None
         self._skipped = 0
+        # Wake time currently armed in the loop, so status() and update() agree
+        # with what the sleeping loop will actually do.
+        self._arm_deadline: datetime = None
         self._load()
 
     # ---- persistence ---------------------------------------------------
@@ -62,12 +65,10 @@ class Schedule:
 
     # ---- state ---------------------------------------------------------
     def status(self) -> dict:
-        next_at = None
-        if self.enabled and self._last_run_at:
-            # next run counts from the last actual run, not from "now".
-            # _last_run_at is naive UTC, so add the delta instead of going
-            # through .timestamp() (which would read it as local time).
-            next_at = self._last_run_at + timedelta(seconds=self.interval_seconds)
+        # Report the time the loop is actually sleeping until. Deriving it from
+        # the last run and the current interval would advertise a time the
+        # sleeping loop never armed, e.g. right after an interval change.
+        next_at = self._arm_deadline if self.enabled else None
         return {
             "enabled": self.enabled,
             "interval_seconds": self.interval_seconds,
@@ -79,6 +80,8 @@ class Schedule:
         }
 
     def update(self, enabled=None, interval_seconds=None) -> dict:
+        was_enabled = self.enabled
+        old_interval = self.interval_seconds
         if enabled is not None:
             self.enabled = bool(enabled)
         if interval_seconds is not None:
@@ -88,38 +91,81 @@ class Schedule:
                 pass
         self.save()
         if self.enabled:
+            if not was_enabled:
+                # Flipping the switch on starts a run now, like a manual scan.
+                self._arm(datetime.utcnow())
+            elif self.interval_seconds != old_interval:
+                # Next run still counts from the last run, but an interval that
+                # is already past fires immediately instead of waiting another
+                # full cycle.
+                base = self._last_run_at or datetime.utcnow()
+                self._arm(
+                    max(datetime.utcnow(), base + timedelta(seconds=self.interval_seconds))
+                )
+            # The loop keeps the timeout it is sleeping with until woken. If it
+            # has not started yet, it picks the deadline set above.
             self.start()
+            self._wakeup.set()
         return self.status()
 
     # ---- loop ----------------------------------------------------------
     def start(self):
         if self._task and not self._task.done():
             return
-        self._wakeup.clear()
+        if self._arm_deadline is None:
+            # A schedule that is already due (backend was down past its next
+            # run) fires now instead of waiting another whole interval.
+            base = self._last_run_at or datetime.utcnow()
+            self._arm(
+                max(datetime.utcnow(), base + timedelta(seconds=self.interval_seconds))
+            )
         try:
             self._task = asyncio.create_task(self._loop())
         except RuntimeError:
             # no running loop (sync context): the app lifespan will start it
             self._task = None
 
+    def _arm(self, at: datetime = None) -> datetime:
+        """Set the next due time (default: one interval from now)."""
+        self._arm_deadline = at or (
+            datetime.utcnow() + timedelta(seconds=self.interval_seconds)
+        )
+        return self._arm_deadline
+
     def stop(self):
         if self._task and not self._task.done():
             self._task.cancel()
         self._task = None
+        self._arm_deadline = None
 
     async def _loop(self):
         while True:
+            if self._arm_deadline is None:
+                self._arm()
+            remaining = max(
+                0.0, (self._arm_deadline - datetime.utcnow()).total_seconds()
+            )
             try:
-                await asyncio.wait_for(self._wakeup.wait(), timeout=self.interval_seconds)
+                await asyncio.wait_for(self._wakeup.wait(), timeout=remaining)
                 self._wakeup.clear()
+                # Woken by update(): it saved the new interval and re-armed the
+                # deadline. Only run if that deadline has actually passed; a
+                # later one is waited out again.
+                if not self.enabled or datetime.utcnow() < self._arm_deadline:
+                    if not self.enabled:
+                        self._arm()  # park until re-enabled
+                    continue
             except asyncio.TimeoutError:
                 pass
             if not self.enabled:
+                self._arm()
                 continue
             try:
                 await self._run_once()
             except Exception as exc:  # never let the loop die
                 log.warning("scheduled scan failed: %s", exc)
+            # The run consumed the deadline: next run counts from now.
+            self._arm()
 
     async def _run_once(self):
         if not self.enabled:

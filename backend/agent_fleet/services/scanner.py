@@ -184,21 +184,27 @@ MAX_PROJECT_SCOPE_FILES = 30
 async def _run_probe_scripts(runner, scripts, timeout):
     """Run each probe chunk and merge the record streams.
 
-    Each chunk is a separate process/connection. For Windows, divide the budget
-    across chunks; otherwise run in parallel on the single shared budget.
+    Each chunk is a separate process/connection. Chunks run sequentially: the
+    connection semaphore is held per runtime, so running them concurrently
+    would multiply real SSH connections past the global ceiling. The per-runtime
+    timeout is a budget shared by all chunks, not a fresh allowance each.
     """
     if len(scripts) == 1:
         return await runner.run_script(scripts[0], timeout)
-    per_chunk = max(15, timeout // len(scripts))
-    results = await asyncio.gather(*(runner.run_script(s, per_chunk) for s in scripts))
-    for res in results:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    outputs = []
+    for script in scripts:
+        remaining = int(deadline - loop.time())
+        if remaining < 1:
+            return ExecResult(exit_code=-1, timed_out=True, error="probe chunk timed out")
+        res = await runner.run_script(script, remaining)
         if res.timed_out:
             return ExecResult(exit_code=-1, timed_out=True, error="probe chunk timed out")
         if res.error:
             return res
-    return ExecResult(
-        stdout=NL.join(res.stdout for res in results), stderr="", exit_code=0
-    )
+        outputs.append(res.stdout)
+    return ExecResult(stdout=NL.join(outputs), stderr="", exit_code=0)
 
 
 async def _collect_project_scopes(rt, settings, runner, facts):

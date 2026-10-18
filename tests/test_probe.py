@@ -109,3 +109,30 @@ def test_generated_script_captures_real_exit_code():
     script = build_probe_script(spec)
     # the exit code must be captured before the output is piped anywhere
     assert "2>&1); _r2=$?;" in script
+
+
+def test_probe_chunks_share_one_timeout_budget():
+    """Windows chunks must not each get a fresh timeout."""
+    import asyncio
+
+    from agent_fleet.remotes.executor import ExecResult
+    from agent_fleet.services.scanner import _run_probe_scripts
+
+    class Runner:
+        def __init__(self):
+            self.timeouts = []
+
+        async def run_script(self, script, timeout):
+            self.timeouts.append(timeout)
+            await asyncio.sleep(0.05)  # leaves 4.95s of the budget for b, c
+            return ExecResult(stdout="AF\\tdone\\t1\\n", exit_code=0)
+
+    runner = Runner()
+    res = asyncio.run(_run_probe_scripts(runner, ["a", "b", "c"], 5))
+    assert res.error is None
+    assert len(runner.timeouts) == 3
+    # each chunk gets what is left of the shared budget, never a fresh 5s
+    assert runner.timeouts[0] <= 5
+    assert all(
+        later <= earlier for earlier, later in zip(runner.timeouts, runner.timeouts[1:])
+    )

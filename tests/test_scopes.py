@@ -135,3 +135,56 @@ def test_pi_and_hermes_report_system_scope():
         assert scopes[0]["status"] == "missing"
         assert scopes[1]["status"] == "ok"
         assert cfg.resolution == "effective"
+
+
+def _opencode(files):
+    return get_adapter("opencode").run(
+        make_facts(files=files, probed={"opencode:opencode"})
+    ).config
+
+
+def test_opencode_project_file_order_follows_the_chain():
+    """.opencode/opencode.json outranks opencode.json in the same root."""
+    cfg = _opencode(
+        {
+            "/etc/opencode/opencode.json": None,
+            "~/.config/opencode/opencode.json": (
+                "ok",
+                json.dumps({"model": "user/m", "workspaceRoots": ["/work/proj"]}),
+            ),
+            "~/.config/opencode/opencode.jsonc": None,
+            "/work/proj/opencode.json": ("ok", json.dumps({"model": "root/m"})),
+            "/work/proj/.opencode/opencode.json": ("ok", json.dumps({"model": "dot/m"})),
+        }
+    )
+    assert cfg.model == "dot/m"
+    assert cfg.parse_status == "parsed"
+
+
+def test_opencode_json_outranks_jsonc_at_user_scope():
+    cfg = _opencode(
+        {
+            "/etc/opencode/opencode.json": None,
+            "~/.config/opencode/opencode.json": ("ok", json.dumps({"model": "json/m"})),
+            "~/.config/opencode/opencode.jsonc": ("ok", json.dumps({"model": "jsonc/m"})),
+        }
+    )
+    assert cfg.model == "json/m"
+
+
+def test_opencode_broken_higher_precedence_file_is_partial_not_parsed():
+    """A project file that does not parse must not be masked by the user file."""
+    cfg = _opencode(
+        {
+            "/etc/opencode/opencode.json": None,
+            "~/.config/opencode/opencode.json": (
+                "ok",
+                json.dumps({"model": "user/m", "workspaceRoots": ["/work/proj"]}),
+            ),
+            "~/.config/opencode/opencode.jsonc": None,
+            "/work/proj/opencode.json": ("ok", "{ not json"),
+        }
+    )
+    assert cfg.model == "user/m"
+    assert cfg.parse_status == "partial"
+    assert any("fall back to" in w for w in cfg.warnings)

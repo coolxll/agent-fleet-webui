@@ -179,3 +179,28 @@ def test_dict_and_list_diff_basics():
     ]
     # lists without a key fall back to positional comparison
     assert diff_lists([1, 2], [1, 3], "n") == [{"path": "n[__1]", "kind": "changed", "a": 2, "b": 3}]
+
+
+def test_duplicate_named_entries_are_matched_by_value_not_position():
+    a = [{"name": "x", "scope": "user", "v": 1}, {"name": "x", "scope": "project", "v": 2}]
+    b = [{"name": "x", "scope": "project", "v": 2}, {"name": "x", "scope": "user", "v": 1}]
+    # Same entries, different order: no changes.
+    assert diff_lists(a, b, "mcp_servers") == []
+
+
+def test_removing_one_of_two_duplicates_reports_only_that_entry():
+    a = [{"name": "x", "v": 1}, {"name": "x", "v": 2}]
+    b = [{"name": "x", "v": 2}]
+    changes = diff_lists(a, b, "mcp_servers")
+    assert len(changes) == 1
+    assert changes[0]["kind"] == "removed"
+    assert changes[0]["a"] == '{"name": "x", "v": 1}'
+
+
+def test_changed_duplicate_still_diffs_field_by_field():
+    a = [{"name": "x", "v": 1}]
+    b = [{"name": "x", "v": 9}]
+    changes = diff_lists(a, b, "mcp_servers")
+    assert changes == [
+        {"path": "mcp_servers[x].v", "kind": "changed", "a": 1, "b": 9}
+    ]

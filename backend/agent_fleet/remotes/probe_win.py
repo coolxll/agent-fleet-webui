@@ -19,6 +19,10 @@ LF = "[char]10"
 # Keep each encoded command comfortably below the ~8k remote limit.
 MAX_CHUNK_CHARS = 2600
 
+# A single data block (a loop over files, dirs, ...) must also fit in a chunk
+# together with the header, so its item list is split well below the cap.
+LIST_BUDGET = 1500
+
 
 def _ps_q(s: str) -> str:
     """Single-quote a literal for PowerShell."""
@@ -28,6 +32,19 @@ def _ps_q(s: str) -> str:
 def _ps_list(items) -> str:
     return "@(" + ",".join(_ps_q(i) for i in items) + ")"
 
+
+# Resolve a path the probe was given to a native Windows path:
+#   ~/x        -> $HOME + \x
+#   C:/Users/x -> C:\Users\x   (drive-absolute, used by project scopes)
+#   /cygdrive/c/Users/x -> c:\Users\x
+# Anything else is taken as-is with forward slashes converted.
+RESOLVE_FN = [
+    "function rp($k) {",
+    "  if ($k.StartsWith('~/')) { return ($H + $k.Substring(1).Replace('/', $B)) }",
+    "  if ($k -match '^[A-Za-z]:') { return $k.Replace('/', $B) }",
+    "  return (($k -replace '^/cygdrive/([a-zA-Z])/', '$1:/').Replace('/', $B))",
+    "}",
+]
 
 HEADER = [
     "# agent-fleet read-only probe (Windows)",
@@ -39,7 +56,7 @@ HEADER = [
     'function r2($a,$b) { "AF" + $T + $a + $T + $b }',
     'function r3($a,$b,$c) { "AF" + $T + $a + $T + $b + $T + $c }',
     'function r4($a,$b,$c,$d) { "AF" + $T + $a + $T + $b + $T + $c + $T + $d }',
-]
+] + RESOLVE_FN
 
 
 def build_windows_probe_script(spec, header=True) -> list:
@@ -64,42 +81,46 @@ def build_windows_probe_script(spec, header=True) -> list:
             ]
         )
 
-    # Version args are per-binary, so they ride in their own | field.
+    # Version args are per-binary, so they ride in their own field. They are
+    # not quoted here: the field is split on ';' at run time and splatted as
+    # an argument array, so quotes would become part of the argument.
     entries = []
     for b in spec.bins:
         cands = ";".join(c for c in b.candidates if c.startswith("~"))
-        args = " ".join(_ps_q(a) for a in b.version_args or [])
+        args = ";".join(b.version_args or [])
         entries.append(b.key + "|" + b.binary + "|" + cands + "|" + args)
-    blocks.append(
-        [
-            "foreach ($e in " + _ps_list(entries) + ") {",
-            "  $f = $e.Split('|')",
-            "  r2 probed $f[0] 1",
-            "  $_p = (Get-Command $f[1]).Source",
-            "  if (-not $_p -and $f[2]) {",
-            "    foreach ($c in $f[2].Split(';')) {",
-            "      $cp = ($H + $c.Substring(1).Replace('/', $B))",
-            "      if (Test-Path -LiteralPath $cp) { $_p = $cp; break }",
-            "    }",
-            "  }",
-            "  if ($_p) { r3 which $f[0] $_p }",
-            "  $_o = ''; $_r = 127",
-            "  if ($_p) { $_o = (& $_p $f[3] 2>&1 | Out-String); $_r = $LASTEXITCODE }",
-            "  $_o = (($_o -split " + LF + ") -join ' ')",
-            "  $_o = (($_o -split " + CR + ") -join ' ')",
-            "  $_o = $_o.Trim()",
-            "  if ($_o.Length -gt 300) { $_o = $_o.Substring(0,300) }",
-            "  r4 version $f[0] $_r $_o",
-            "}",
-        ]
-    )
-
-    files = [p for p in spec.files if _safe_path(p)]
-    if files:
+    for group in _groups(entries):
         blocks.append(
             [
-                "foreach ($k in " + _ps_list(files) + ") {",
-                "  $p = ($H + $k.Substring(1).Replace('/', $B))",
+                "foreach ($e in " + _ps_list(group) + ") {",
+                "  $f = $e.Split('|')",
+                "  r2 probed $f[0] 1",
+                "  $_p = (Get-Command $f[1]).Source",
+                "  if (-not $_p -and $f[2]) {",
+                "    foreach ($c in $f[2].Split(';')) {",
+                "      $cp = (rp $c)",
+                "      if (Test-Path -LiteralPath $cp) { $_p = $cp; break }",
+                "    }",
+                "  }",
+                "  if ($_p) { r3 which $f[0] $_p }",
+                "  $_a = @(); if ($f[3]) { $_a = $f[3].Split(';') }",
+                "  $_o = ''; $_r = 127",
+                "  if ($_p) { $_o = (& $_p $_a 2>&1 | Out-String); $_r = $LASTEXITCODE }",
+                "  $_o = (($_o -split " + LF + ") -join ' ')",
+                "  $_o = (($_o -split " + CR + ") -join ' ')",
+                "  $_o = $_o.Trim()",
+                "  if ($_o.Length -gt 300) { $_o = $_o.Substring(0,300) }",
+                "  r4 version $f[0] $_r $_o",
+                "}",
+            ]
+        )
+
+    files = [p for p in spec.files if _safe_path(p)]
+    for group in _groups(files):
+        blocks.append(
+            [
+                "foreach ($k in " + _ps_list(group) + ") {",
+                "  $p = (rp $k)",
                 "  if (Test-Path -LiteralPath $p -PathType Leaf) {",
                 "    $l = (Get-Item -LiteralPath $p).Length",
                 "    if ($l -gt " + str(MAX_FILE_BYTES) + ") { r4 file $k $l toolarge }",
@@ -116,11 +137,11 @@ def build_windows_probe_script(spec, header=True) -> list:
         )
 
     dirs = [p for p in spec.dirs if _safe_path(p)]
-    if dirs:
+    for group in _groups(dirs):
         blocks.append(
             [
-                "foreach ($k in " + _ps_list(dirs) + ") {",
-                "  $p = ($H + $k.Substring(1).Replace('/', $B))",
+                "foreach ($k in " + _ps_list(group) + ") {",
+                "  $p = (rp $k)",
                 "  if (Test-Path -LiteralPath $p -PathType Container) {",
                 "    r3 dir $k dir",
                 "    $n = 0",
@@ -137,11 +158,11 @@ def build_windows_probe_script(spec, header=True) -> list:
         )
 
     skills = [p for p in spec.skill_dirs if _safe_path(p)]
-    if skills:
+    for group in _groups(skills):
         blocks.append(
             [
-                "foreach ($k in " + _ps_list(skills) + ") {",
-                "  $p = ($H + $k.Substring(1).Replace('/', $B))",
+                "foreach ($k in " + _ps_list(group) + ") {",
+                "  $p = (rp $k)",
                 "  if (Test-Path -LiteralPath $p -PathType Container) {",
                 "    r3 skilldir $k dir",
                 "    foreach ($s in (Get-ChildItem -LiteralPath $p -Directory)) {",
@@ -161,13 +182,35 @@ def build_windows_probe_script(spec, header=True) -> list:
     return _chunks(blocks)
 
 
+def _groups(items) -> list:
+    """Split an item list into runs whose literal form fits LIST_BUDGET.
+
+    A chunk is assembled from whole blocks, so a single loop block must stay
+    well under MAX_CHUNK_CHARS or the chunker cannot split it. Items are kept
+    in order; only the loop is repeated.
+    """
+    groups, current, size = [], [], 0
+    for item in items:
+        literal = _ps_q(item)
+        cost = len(literal) + 1  # separating comma
+        if current and size + cost > LIST_BUDGET:
+            groups.append(current)
+            current, size = [], 0
+        current.append(item)
+        size += cost
+    if current:
+        groups.append(current)
+    return groups
+
+
 def _chunks(blocks) -> list:
     """Group whole blocks into chunks that each stay under the size limit."""
     head = NL.join(HEADER)
     parts, current, size = [], [], 0
     for block in blocks:
         text = NL.join(block)
-        if size + len(text) > MAX_CHUNK_CHARS and current:
+        # The header is repeated in every chunk, so it is part of the budget.
+        if current and size + len(text) > MAX_CHUNK_CHARS - len(head) - 1:
             parts.append(head + NL + NL.join(current) + NL)
             current, size = [], 0
         current.append(text)
