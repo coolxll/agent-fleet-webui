@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type Overview } from '../api'
+import AgentIcon, { agentLabel } from '../components/AgentIcon'
 
 
 type RuntimeRow = {
@@ -161,7 +162,12 @@ export default function Overview({
               <tbody>
                 {data.agents.map((a) => (
                   <tr key={a.id}>
-                    <td className="mono">{a.id}</td>
+                    <td>
+                      <span className="agent-cell">
+                        <AgentIcon agent={a.id} size={18} />
+                        {agentLabel(a.id)}
+                      </span>
+                    </td>
                     <td>{a.installations}</td>
                   </tr>
                 ))}

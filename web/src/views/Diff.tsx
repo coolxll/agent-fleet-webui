@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, type CompareCandidate, type DiffChange } from '../api'
+import AgentIcon, { agentLabel } from '../components/AgentIcon'
 
 type Mode = 'machines' | 'snapshots'
 
@@ -112,8 +113,9 @@ export default function Diff() {
                   </option>
                 ))}
               </select>
-              <span className="muted small">
-                {candidates.length} installation(s) of {agentId} across the fleet
+              <span className="muted small agent-cell">
+                <AgentIcon agent={agentId} size={17} />
+                {candidates.length} installation(s) of {agentLabel(agentId)} across the fleet
               </span>
             </div>
           </div>
@@ -203,7 +205,10 @@ export default function Diff() {
               Object.entries(snapDiff.per_agent).map(([agent, changes]) => (
                 <div className="panel" key={agent}>
                   <h2>
-                    {agent}
+                    <span className="agent-cell">
+                      <AgentIcon agent={agent} size={17} />
+                      {agentLabel(agent)}
+                    </span>
                     <span className="tag">{(changes as DiffChange[]).length} change(s)</span>
                   </h2>
                   <div className="body">

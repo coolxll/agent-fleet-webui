@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type Installation, type InstallationDetail, type Runtime } from '../api'
+import AgentIcon, { agentLabel } from '../components/AgentIcon'
 
 const STATUS_TAG: Record<string, string> = {
   installed: 'ok',
@@ -127,7 +128,11 @@ export default function Inspector({
               onClick={() => open(i.id)}
             >
               <div className="mono">
-                {i.agent} <span className={'tag ' + (STATUS_TAG[i.status] || '')}>{i.status}</span>
+                <span className="agent-cell">
+                  <AgentIcon agent={i.agent} size={17} />
+                  {agentLabel(i.agent)}
+                </span>{' '}
+                <span className={'tag ' + (STATUS_TAG[i.status] || '')}>{i.status}</span>
               </div>
               <div className="small muted">
                 {i.runtime?.host}/{i.runtime?.key} · {i.runtime?.collect_user || '-'}
@@ -157,7 +162,11 @@ function Detail({ detail, runtimeName }: { detail: InstallationDetail; runtimeNa
     <div>
       <div className="panel">
         <h2>
-          {detail.agent} @ {runtimeName}
+          <span className="agent-cell">
+            <AgentIcon agent={detail.agent} size={18} />
+            {agentLabel(detail.agent)}
+          </span>{' '}
+          @ {runtimeName}
         </h2>
         <div className="body">
           <dl className="kv">

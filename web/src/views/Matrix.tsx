@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, type MatrixColumn, type MatrixCell, type AgentMeta } from '../api'
+import AgentIcon, { agentLabel } from '../components/AgentIcon'
 
 const STATE_LABEL: Record<string, string> = {
   installed: 'installed',
@@ -75,7 +76,10 @@ export default function Matrix({
               {agents.map((a) => (
                 <tr key={a.id}>
                   <td className="mono" style={{ position: 'sticky', left: 0, background: 'var(--panel)' }}>
-                    {a.id}
+                    <span className="agent-cell">
+                      <AgentIcon agent={a.id} size={17} />
+                      {agentLabel(a.id)}
+                    </span>
                   </td>
                   {sorted.map((c) => {
                     const cell: MatrixCell | undefined = c.cells[a.id]
