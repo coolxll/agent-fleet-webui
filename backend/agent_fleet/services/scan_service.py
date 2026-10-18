@@ -30,6 +30,10 @@ def active_runs() -> list:
     return [r for r in _registry.values() if r["status"] == "running"]
 
 
+def is_scanning() -> bool:
+    return any(r["status"] == "running" for r in _registry.values())
+
+
 def run_status(run_id: str):
     return _registry.get(run_id)
 

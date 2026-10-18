@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from agent_fleet import models
 from agent_fleet.db import session_scope
+from agent_fleet.models import iso_utc
 from agent_fleet.services import scan_service
 from agent_fleet.settings import get_settings
 
@@ -70,13 +71,11 @@ class Schedule:
         return {
             "enabled": self.enabled,
             "interval_seconds": self.interval_seconds,
-            "running": bool(scan_service.active_runs()),
+            "running": scan_service.is_scanning(),
             "last_run_id": self._last_run_id,
-            "last_run_at": (
-                self._last_run_at.isoformat() + "Z" if self._last_run_at else None
-            ),
+            "last_run_at": iso_utc(self._last_run_at),
             "skipped_because_busy": self._skipped,
-            "next_run_at": next_at.isoformat() + "Z" if next_at else None,
+            "next_run_at": iso_utc(next_at),
         }
 
     def update(self, enabled=None, interval_seconds=None) -> dict:

@@ -119,7 +119,7 @@ class PiAdapter(AgentAdapter):
         # Status is decided before apply_scope, which adds its own bookkeeping
         # keys to cfg.settings. "empty" is about the user settings file
         # specifically; the system policy file is normally absent.
-        user_missing = bool(s_src is None or s_src.status == "missing")
+        user_missing = s_src is None or s_src.status == "missing"
         cfg.parse_status = "parsed" if (cfg.model or cfg.model_provider) else (
             "empty" if user_missing else "partial"
         )

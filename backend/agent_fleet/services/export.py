@@ -6,20 +6,13 @@ payload the UI shows, not a new path to raw configuration.
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy import select
 
 from agent_fleet import models
 from agent_fleet.db import session_scope
 
 
-def _iso(value):
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.isoformat() + "Z"
-    return str(value)
+_iso = models.iso_utc
 
 
 def build_export(runtime_id=None, agent_id=None, detected_only=False) -> dict:
@@ -101,7 +94,7 @@ def build_export(runtime_id=None, agent_id=None, detected_only=False) -> dict:
 
     return {
         "schema": "agent-fleet-export/1",
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": models.iso_utc(models.utcnow()),
         "filters": {
             "runtime_id": runtime_id,
             "agent_id": agent_id,

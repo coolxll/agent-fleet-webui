@@ -23,9 +23,7 @@ router = APIRouter()
 
 STALE_GRACE = 60  # seconds of slack before a snapshot counts as stale
 
-
-def _iso(dt):
-    return dt.isoformat() + "Z" if dt else None
+_iso = models.iso_utc
 
 
 def _age(dt):

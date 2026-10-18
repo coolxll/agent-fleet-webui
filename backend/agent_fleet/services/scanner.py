@@ -6,6 +6,7 @@ remote shell is not POSIX). Individual failures never abort a run.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 
@@ -131,37 +132,21 @@ async def probe_runtime(rt, settings) -> RuntimeScanResult:
     runner = build_runner(rt, settings)
     result.transport = runner.describe()
 
-    if rt.transport == "windows":
-        # PowerShell runs each chunk in its own process; merge the outputs.
-        scripts = build_windows_probe_script(merged_probe_spec())
-        per_chunk = max(10, settings.command_timeout // max(1, len(scripts)))
-        chunks = []
-        for script in scripts:
-            chunk_result = await runner.run_script(script, per_chunk)
-            if chunk_result.timed_out:
-                result.error = f"probe timed out after {per_chunk}s via {runner.describe()}"
-                result.duration_ms = int((time.monotonic() - started) * 1000)
-                return result
-            if chunk_result.error:
-                result.error = f"{chunk_result.error} via {runner.describe()}"
-                result.duration_ms = int((time.monotonic() - started) * 1000)
-                return result
-            chunks.append(chunk_result.stdout)
-        res = ExecResult(stdout=NL.join(chunks), stderr="", exit_code=0)
-    else:
-        res = await runner.run_script(
-            build_probe_script(merged_probe_spec()), settings.command_timeout
-        )
-        if res.timed_out:
-            result.error = (
-                f"probe timed out after {settings.command_timeout}s via {runner.describe()}"
-            )
-            result.duration_ms = int((time.monotonic() - started) * 1000)
-            return result
-        if res.error:
-            result.error = f"{res.error} via {runner.describe()}"
-            result.duration_ms = int((time.monotonic() - started) * 1000)
-            return result
+    # PowerShell runs each chunk in its own process; the POSIX probe is one script.
+    scripts = (
+        build_windows_probe_script(merged_probe_spec())
+        if rt.transport == "windows"
+        else [build_probe_script(merged_probe_spec())]
+    )
+    res = await _run_probe_scripts(runner, scripts, settings.command_timeout)
+    if res.timed_out:
+        result.error = f"probe timed out via {runner.describe()}"
+        result.duration_ms = int((time.monotonic() - started) * 1000)
+        return result
+    if res.error:
+        result.error = f"{res.error} via {runner.describe()}"
+        result.duration_ms = int((time.monotonic() - started) * 1000)
+        return result
 
     facts = parse_probe_output(res.stdout)
     if not facts.os and res.exit_code != 0:
@@ -196,9 +181,31 @@ async def probe_runtime(rt, settings) -> RuntimeScanResult:
 MAX_PROJECT_SCOPE_FILES = 30
 
 
+async def _run_probe_scripts(runner, scripts, timeout):
+    """Run each probe chunk and merge the record streams.
+
+    Each chunk is a separate process/connection. For Windows, divide the budget
+    across chunks; otherwise run in parallel on the single shared budget.
+    """
+    if len(scripts) == 1:
+        return await runner.run_script(scripts[0], timeout)
+    per_chunk = max(15, timeout // len(scripts))
+    results = await asyncio.gather(*(runner.run_script(s, per_chunk) for s in scripts))
+    for res in results:
+        if res.timed_out:
+            return ExecResult(exit_code=-1, timed_out=True, error="probe chunk timed out")
+        if res.error:
+            return res
+    return ExecResult(
+        stdout=NL.join(res.stdout for res in results), stderr="", exit_code=0
+    )
+
+
 async def _collect_project_scopes(rt, settings, runner, facts):
     if rt.transport == "windows":
-        script_builder = build_windows_probe_script
+        # Files only: OS detection already ran in the main probe.
+        def script_builder(spec):
+            return build_windows_probe_script(spec, header=False)
     else:
         script_builder = build_probe_script
     spec = ProbeSpec()
@@ -212,21 +219,17 @@ async def _collect_project_scopes(rt, settings, runner, facts):
     if not spec.files:
         return facts
     try:
-        # The Windows builder returns one script per chunk; run them in order
-        # and merge the record streams, like the main Windows probe does.
         scripts = script_builder(spec)
         if isinstance(scripts, str):
             scripts = [scripts]
-        chunks = []
-        for script in scripts:
-            res = await runner.run_script(script, max(15, settings.command_timeout))
-            if res.error or res.timed_out:
-                return facts
-            chunks.append(res.stdout)
-        merged = parse_probe_output(NL.join(chunks))
-        return merge_facts(facts, merged)
+        res = await _run_probe_scripts(
+            runner, scripts, max(15, settings.command_timeout)
+        )
     except Exception:
         return facts
+    if res.error or res.timed_out:
+        return facts
+    return merge_facts(facts, parse_probe_output(res.stdout))
 
 
 def _os_label(facts) -> str:

@@ -42,41 +42,41 @@ HEADER = [
 ]
 
 
-def build_windows_probe_script(spec) -> list:
-    """Return a list of independently runnable PowerShell scripts."""
+def build_windows_probe_script(spec, header=True) -> list:
+    """Return a list of independently runnable PowerShell scripts.
+
+    header=False builds a files-only script, used for the project-scope pass
+    where OS detection has already run and would only cost a round trip.
+    """
     from agent_fleet.remotes.probe import MAX_DIR_ENTRIES, MAX_FILE_BYTES, _safe_path
 
     blocks: list = []
 
-    blocks.append(
-        [
-            'r2 os "Windows"',
-            "r2 arch $env:PROCESSOR_ARCHITECTURE",
-            "r2 home $H",
-            "r2 user $env:USERNAME",
-            "r2 osrelease ((Get-CimInstance Win32_OperatingSystem).Caption)",
-            'r2 haswsl $(if (Get-Command wsl.exe) { "yes" } else { "no" })',
-        ]
-    )
+    if header:
+        blocks.append(
+            [
+                'r2 os "Windows"',
+                "r2 arch $env:PROCESSOR_ARCHITECTURE",
+                "r2 home $H",
+                "r2 user $env:USERNAME",
+                "r2 osrelease ((Get-CimInstance Win32_OperatingSystem).Caption)",
+                'r2 haswsl $(if (Get-Command wsl.exe) { "yes" } else { "no" })',
+            ]
+        )
 
+    # Version args are per-binary, so they ride in their own | field.
     entries = []
     for b in spec.bins:
         cands = ";".join(c for c in b.candidates if c.startswith("~"))
-        entries.append(b.key + "|" + b.binary + ("|" + cands if cands else ""))
-    # Version args are per-binary; embedding the last one only worked while
-    # every adapter happened to use --version. Probe without args instead of
-    # silently running another binary's arguments.
-    probe_args = sorted({tuple(b.version_args) for b in spec.bins if b.version_args})
-    version_args = " ".join(
-        _ps_q(a) for a in (probe_args[0] if len(probe_args) == 1 else ())
-    )
+        args = " ".join(_ps_q(a) for a in b.version_args or [])
+        entries.append(b.key + "|" + b.binary + "|" + cands + "|" + args)
     blocks.append(
         [
             "foreach ($e in " + _ps_list(entries) + ") {",
             "  $f = $e.Split('|')",
             "  r2 probed $f[0] 1",
             "  $_p = (Get-Command $f[1]).Source",
-            "  if (-not $_p -and $f.Count -gt 2) {",
+            "  if (-not $_p -and $f[2]) {",
             "    foreach ($c in $f[2].Split(';')) {",
             "      $cp = ($H + $c.Substring(1).Replace('/', $B))",
             "      if (Test-Path -LiteralPath $cp) { $_p = $cp; break }",
@@ -84,7 +84,7 @@ def build_windows_probe_script(spec) -> list:
             "  }",
             "  if ($_p) { r3 which $f[0] $_p }",
             "  $_o = ''; $_r = 127",
-            "  if ($_p) { $_o = (& $_p " + version_args + " 2>&1 | Out-String); $_r = $LASTEXITCODE }",
+            "  if ($_p) { $_o = (& $_p $f[3] 2>&1 | Out-String); $_r = $LASTEXITCODE }",
             "  $_o = (($_o -split " + LF + ") -join ' ')",
             "  $_o = (($_o -split " + CR + ") -join ' ')",
             "  $_o = $_o.Trim()",

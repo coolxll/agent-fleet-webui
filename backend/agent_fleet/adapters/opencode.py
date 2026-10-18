@@ -133,20 +133,23 @@ class OpenCodeAdapter(AgentAdapter):
             cfg.sanitized = self._view(cfg)
             return cfg
 
-        # Precedence: system < user < project. Only one document is parsed, so
-        # the highest-precedence readable source wins.
-        scope_rank = {"system": 0, "user": 1, "project": 2}
+        # Precedence: system < user < project, taken from PRECEDENCE_CHAIN so
+        # the order is declared once. Only one document is parsed, so try from
+        # the highest scope down and stop at the first one that loads.
+        chain = [scope for scope, _ in self.PRECEDENCE_CHAIN]
+        usable.sort(
+            key=lambda s: chain.index(s.scope) if s.scope in chain else -1,
+            reverse=True,
+        )
         data = None
         used = None
         for s in usable:
             try:
-                candidate = _load(s)
+                data = _load(s)
+                used = s
+                break
             except Exception as exc:
                 cfg.warnings.append(f"{s.path}: {type(exc).__name__}: {exc}"[:300])
-                continue
-            if data is None or scope_rank.get(s.scope, 0) > scope_rank.get(used.scope, 0):
-                data = candidate
-                used = s
         if data is None:
             cfg.parse_status = "error"
             apply_scope(cfg, self, sources, self.project_roots(facts))

@@ -38,6 +38,15 @@ def utcnow() -> datetime:
     return datetime.utcnow()
 
 
+def iso_utc(value) -> str | None:
+    """Serialize a naive-UTC datetime for the API (browsers need the Z)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat() + "Z"
+    return str(value)
+
+
 class Host(Base):
     __tablename__ = "hosts"
 

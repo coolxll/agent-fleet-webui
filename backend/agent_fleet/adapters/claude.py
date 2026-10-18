@@ -279,18 +279,15 @@ class ClaudeAdapter(AgentAdapter):
             ][:40]
 
         # ---- status and resolution -------------------------------------
-        # Any readable file counts, including ~/.claude.json (MCP servers) and
-        # project settings, both of which are merged above. Unreadable scopes
-        # must surface as errors, not "empty", or a broken scan looks like an
-        # absent config and the persist layer discards the last-known-good one.
-        any_usable = any(
-            src.usable and src.kind in ("config", "state", "mcp") for src in sources
-        )
-        any_unreadable = any(
-            src.status in ("unreadable", "toolarge", "truncated") for src in sources
-        )
+        # Any readable file counts, including ~/.claude.json (MCP servers),
+        # project settings and the managed policy, all merged above. Unreadable
+        # scopes must surface as errors, not "empty", or a broken scan looks
+        # like an absent config and the persist layer drops the last good one.
+        # resolution_for owns the "which statuses mean unreadable" rule.
+        _, unresolved = self.resolution_for(sources)
+        any_usable = any(src.usable for src in sources)
         if not any_usable:
-            cfg.parse_status = "error" if any_unreadable else "empty"
+            cfg.parse_status = "error" if unresolved else "empty"
         elif cfg.model or cfg.mcp_servers or cfg.settings:
             cfg.parse_status = "parsed"
         else:

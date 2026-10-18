@@ -112,8 +112,11 @@ def persist_result(runtime_id, result: RuntimeScanResult, run_id, settings) -> d
                 cfg = _store_config(s, inst, ar.config, now)
                 # config_status describes the stored config, not this run: when
                 # nothing usable was parsed we keep showing the last good one.
-                inst.config_status = cfg.parse_status if cfg else ar.config.parse_status
-                inst.config_id = cfg.id if cfg else None
+                if cfg:
+                    inst.config_status = cfg.parse_status
+                    inst.config_id = cfg.id
+                elif inst.config_id is None:
+                    inst.config_status = ar.config.parse_status
             if det.detected:
                 agents_found += 1
 
@@ -166,12 +169,9 @@ def _store_config(s, inst, cfg, now):
     # Gate on parse_status alone: keep (and still point at) the previous config
     # when this run produced nothing usable.
     if cfg.parse_status in ("empty", "error", "unsupported"):
-        return s.execute(
-            select(models.AgentConfiguration)
-            .where(models.AgentConfiguration.installation_id == inst.id)
-            .order_by(models.AgentConfiguration.collected_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+        # At most one config row exists per installation (replaced below), and
+        # inst.config_id points at it, so this is a primary-key lookup.
+        return s.get(models.AgentConfiguration, inst.config_id) if inst.config_id else None
     row = models.AgentConfiguration(
         id=models.new_id(),
         installation_id=inst.id,
