@@ -160,18 +160,23 @@ def _load_ref(runtime_id):
 
 
 def _ensure_wsl_runtimes(parent_runtime_id, distros):
+    """Create missing WSL runtimes and prune rows whose distro is gone.
+
+    Pruning is deliberately narrow: only rows that never produced a successful
+    collection are removed, so a temporarily unreachable distro keeps its data.
+    """
+    live_keys = {f"wsl:{d}" for d in distros}
     with session_scope() as s:
         parent = s.get(models.Runtime, parent_runtime_id)
         if parent is None:
             return
+        rows = s.execute(
+            select(models.Runtime).where(models.Runtime.host_id == parent.host_id)
+        ).scalars().all()
         for d in distros:
             key = f"wsl:{d}"
-            exists = s.execute(
-                select(models.Runtime).where(
-                    models.Runtime.host_id == parent.host_id, models.Runtime.key == key
-                )
-            ).scalar_one_or_none()
-            if exists is None:
+            existing = next((r for r in rows if r.key == key), None)
+            if existing is None:
                 s.add(
                     models.Runtime(
                         id=models.new_id(),
@@ -188,6 +193,24 @@ def _ensure_wsl_runtimes(parent_runtime_id, distros):
                         enabled=True,
                     )
                 )
+            elif existing.collect_user is None:
+                existing.collect_user = parent.collect_user
+        for r in rows:
+            if not r.key.startswith("wsl:") or r.key in live_keys:
+                continue
+            # The distro is gone from this host.
+            if r.last_success_at is None:
+                # nothing was ever collected from it: drop the stale row
+                for inst in list(r.installations):
+                    s.delete(inst)
+                s.delete(r)
+                continue
+            # it has history: keep the data, stop scanning it, say why
+            r.enabled = False
+            r.last_error = (
+                "WSL distro is no longer present on this host "
+                "(last successful collection kept for reference)"
+            )
         s.commit()
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime
 
 import pytest
 from sqlalchemy import select
@@ -270,6 +271,103 @@ def test_scan_service_records_per_runtime_tasks(fleet_db, monkeypatch):
         # snapshot written for the successful runtimes only
         snaps = s.execute(select(models.Snapshot)).scalars().all()
         assert sorted(snap.runtime_id for snap in snaps) == sorted(ids[:2])
+
+
+def test_stale_wsl_runtime_is_pruned_after_discovery(fleet_db, monkeypatch):
+    """A distro that no longer exists must not leave a row behind forever."""
+    parent = _make_runtime(fleet_db, name="wsl-host")
+    stale_key = "wsl:Gone-Distro"
+    with session_scope() as s:
+        s.add(
+            models.Runtime(
+                id=models.new_id(),
+                host_id=s.get(models.Runtime, parent).host_id,
+                key=stale_key,
+                kind="wsl",
+                transport="wsl",
+                wsl_distro="Gone-Distro",
+            )
+        )
+        s.commit()
+
+    from agent_fleet.services.scan_service import _ensure_wsl_runtimes
+
+    _ensure_wsl_runtimes(parent, ["Ubuntu"])
+
+    with session_scope() as s:
+        host_id = s.get(models.Runtime, parent).host_id
+        keys = [
+            r.key
+            for r in s.execute(
+                select(models.Runtime).where(models.Runtime.host_id == host_id)
+            ).scalars()
+        ]
+        assert stale_key not in keys
+        assert "wsl:Ubuntu" in keys
+        # nothing left dangling for the removed runtime
+        leftovers = s.execute(
+            select(models.AgentInstallation).where(
+                models.AgentInstallation.runtime_id == stale_key
+            )
+        ).scalars().all()
+        assert leftovers == []
+
+
+def test_removed_distro_with_history_is_disabled_not_deleted(fleet_db, monkeypatch):
+    """A distro that was deleted keeps its last snapshot but stops scanning."""
+    parent = _make_runtime(fleet_db, name="wsl-host3")
+    with session_scope() as s:
+        host_id = s.get(models.Runtime, parent).host_id
+        rt = models.Runtime(
+            id=models.new_id(),
+            host_id=host_id,
+            key="wsl:Old",
+            kind="wsl",
+            transport="wsl",
+            wsl_distro="Old",
+            last_success_at=datetime.utcnow(),
+        )
+        s.add(rt)
+        s.flush()
+        rid = rt.id
+        s.commit()
+
+    from agent_fleet.services.scan_service import _ensure_wsl_runtimes
+
+    _ensure_wsl_runtimes(parent, ["Ubuntu"])
+
+    with session_scope() as s:
+        row = s.get(models.Runtime, rid)
+        assert row is not None, "history must not be silently dropped"
+        assert row.enabled is False
+        assert "no longer present" in (row.last_error or "")
+
+
+def test_live_wsl_runtime_survives_a_missing_scan(fleet_db, monkeypatch):
+    """A distro that exists but failed to probe keeps its last good data."""
+    parent = _make_runtime(fleet_db, name="wsl-host2")
+    with session_scope() as s:
+        host_id = s.get(models.Runtime, parent).host_id
+        rt = models.Runtime(
+            id=models.new_id(),
+            host_id=host_id,
+            key="wsl:Ubuntu",
+            kind="wsl",
+            transport="wsl",
+            wsl_distro="Ubuntu",
+            last_success_at=datetime.utcnow(),
+        )
+        s.add(rt)
+        s.flush()
+        good = rt.id
+        s.commit()
+
+    from agent_fleet.services.scan_service import _ensure_wsl_runtimes
+
+    _ensure_wsl_runtimes(parent, ["Ubuntu"])
+
+    with session_scope() as s:
+        assert s.get(models.Runtime, good) is not None
 
 
 def test_config_only_when_binary_missing(fleet_db, monkeypatch):
