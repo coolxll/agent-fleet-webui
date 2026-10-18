@@ -13,7 +13,9 @@ const COLORS: Record<string, string> = {
   claude: '#d97757',
   opencode: '#7c8aff',
   pi: '#f0b429',
-  hermes: '#a371f7'
+  hermes: '#a371f7',
+  agy: '#4285f4',
+  codebuddy: '#00b96f'
 }
 
 const LABELS: Record<string, string> = {
@@ -21,7 +23,9 @@ const LABELS: Record<string, string> = {
   claude: 'Claude Code',
   opencode: 'OpenCode',
   pi: 'Pi Coding Agent',
-  hermes: 'Hermes Agent'
+  hermes: 'Hermes Agent',
+  agy: 'Antigravity (AGY)',
+  codebuddy: 'CodeBuddy'
 }
 
 export function agentLabel(agent: string): string {
@@ -76,6 +80,26 @@ function Pi() {
   )
 }
 
+function Agy() {
+  // orbital ring with a node: Antigravity's agent-in-the-loop mark
+  return (
+    <>
+      <circle cx="12" cy="12" r="3.2" fill="currentColor" />
+      <ellipse cx="12" cy="12" rx="9" ry="4.2" fill="none" stroke="currentColor" strokeWidth="1.7" transform="rotate(-28 12 12)" />
+    </>
+  )
+}
+
+function CodeBuddy() {
+  // paired chevrons: a reviewer and a writer working on one file
+  return (
+    <>
+      <path d="M4 8l5 4-5 4" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M11 8l5 4-5 4" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" opacity="0.55" />
+    </>
+  )
+}
+
 function Hermes() {
   // winged helm
   return (
@@ -93,7 +117,9 @@ const SHAPES: Record<string, () => JSX.Element> = {
   claude: Claude,
   opencode: OpenCode,
   pi: Pi,
-  hermes: Hermes
+  hermes: Hermes,
+  agy: Agy,
+  codebuddy: CodeBuddy
 }
 
 export default function AgentIcon({ agent, size = 16, title }: Props) {

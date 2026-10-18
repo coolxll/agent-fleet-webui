@@ -464,20 +464,34 @@ def _skills_from_dir(facts, path: str) -> list:
 
 
 def _mcp_common(entry: dict, name: str) -> dict:
-    """Normalize one MCP server entry across agents, dropping secrets."""
+    """Normalize one MCP server entry across agents, dropping secrets.
+
+    Handles both the Claude-style shape (url / command / args / env) and the
+    Gemini/Antigravity shape (serverUrl / headers / disabled).
+    """
     transport = "stdio"
     if isinstance(entry, dict):
-        if entry.get("url") or entry.get("type") in ("http", "sse", "streamable-http", "url"):
+        if entry.get("url") or entry.get("serverUrl") or entry.get("type") in (
+            "http",
+            "sse",
+            "streamable-http",
+            "url",
+        ):
             transport = entry.get("type") or "http"
     item = {
         "name": name,
         "transport": transport,
         "command": entry.get("command") if isinstance(entry.get("command"), str) else None,
         "args": entry.get("args")[:10] if isinstance(entry.get("args"), list) else [],
-        "enabled": entry.get("enabled", None),
+        "enabled": None if entry.get("enabled") is None else bool(entry.get("enabled")),
     }
-    if isinstance(entry.get("url"), str):
-        masked, changed = mask_url(entry["url"])
+    raw_url = None
+    if isinstance(entry, dict):
+        raw_url = entry.get("url") if isinstance(entry.get("url"), str) else None
+        if raw_url is None and isinstance(entry.get("serverUrl"), str):
+            raw_url = entry["serverUrl"]
+    if raw_url:
+        masked, changed = mask_url(raw_url)
         item["url"] = masked
         item["url_masked"] = changed
     else:
@@ -486,4 +500,6 @@ def _mcp_common(entry: dict, name: str) -> dict:
     if isinstance(env, dict) and env:
         item["env_keys"] = sorted([str(k)[:60] for k in env.keys()])[:20]
         item["secret_keys_redacted"] = True
+    if isinstance(entry, dict) and entry.get("disabled") is not None:
+        item["enabled"] = not bool(entry["disabled"])
     return item

@@ -1,0 +1,10 @@
+{
+  "trustedDirectories": ["/Users/fixture/work/a", "/Users/fixture/work/b"],
+  "model": "fixture-model-v2",
+  "hooks": {
+    "SessionStart": [{"matcher": "*", "hooks": [{"type": "command", "command": "echo hi"}]}],
+    "Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "echo bye"}]}]
+  },
+  "apiKey": "sk-fixture-codebuddy-key-abcdef012345",
+  "somethingUnknown": "keep-out"
+}

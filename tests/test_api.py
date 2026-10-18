@@ -14,6 +14,12 @@ from agent_fleet.db import session_scope
 from test_scan import FakeRunner, _codex_stream, _make_runtime
 
 
+def agent_ids():
+    from agent_fleet.adapters.registry import agent_ids as _ids
+
+    return _ids()
+
+
 @pytest.fixture()
 def client(fleet_db, monkeypatch):
     monkeypatch.setenv("AGENT_FLEET_INCLUDE_LOCAL_RUNTIME", "false")
@@ -130,7 +136,7 @@ def test_disabled_host_is_hidden_from_fleet_views(client, fleet_db, monkeypatch)
     assert len(client.get('/api/matrix').json()['columns']) == 0
     # the data itself is untouched and still reachable directly
     inst = client.get('/api/installations?runtime_id=' + rid).json()['installations']
-    assert len(inst) == 5
+    assert len(inst) == len(agent_ids())
 
     client.post('/api/hosts/' + host_id + '/enabled', json={'enabled': True})
     assert client.get('/api/overview').json()['totals']['runtimes'] == 1

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "fixture-search": {
+      "disabled": false,
+      "headers": {
+        "Authorization": "Bearer sk-fixture-agy-bearer-abcdef012345"
+      },
+      "serverUrl": "http://fixture-gateway.internal:8790/mcp?token=secret"
+    }
+  }
+}

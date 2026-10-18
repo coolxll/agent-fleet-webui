@@ -114,6 +114,28 @@ Also fixed in the same pass: a kind hint in inventory.yaml was overwriting the
 kind observed by a probe on every restart, so wujie showed "linux" although it
 is a WSL distro. Hints now only apply before the first scan.
 
+### 9. Antigravity (AGY) and CodeBuddy (done)
+
+Two more agents, both verified on the local machine:
+
+- Antigravity (AGY) - binary agy (1.4.x). Config lives under
+  ~/.gemini/antigravity/: MCP servers in mcp_config.json (Gemini-style
+  mcpServers with serverUrl/headers), skills in antigravity/skills and
+  ~/.agents/skills, and the selected model inside the protobuf-text state
+  file antigravity_state.pbtxt. The models subcommand does a network call and
+  hangs, so only --version is probed.
+- CodeBuddy - binary codebuddy (2.168.x). Config is
+  ~/.codebuddy/settings.json (model, hooks, trustedDirectories); MCP servers
+  are project-scope .mcp.json files, and project roots come from
+  trustedDirectories.
+
+Both are fixture-verified (installed / absent / empty / malformed / secrets)
+and the sanitizer was re-checked against the Gemini-level mcp_config.json,
+which really does carry an Authorization Bearer header - only the header name
+is reported.
+
+Agent count is now 7, all with config parsing.
+
 ## Fleet scope (2026-10-18)
 
 The fleet now contains exactly the machines the user asked for. Everything

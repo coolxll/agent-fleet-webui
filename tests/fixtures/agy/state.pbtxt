@@ -1,0 +1,8 @@
+post_onboarding: {
+  completed_steps: POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME
+  completed_steps: POST_ONBOARDING_STEP_TYPE_USAGE_MODE
+}
+agent_onboarding_completed: AGENT_ONBOARDING_STATE_COMPLETED
+last_selected_agent_model: MODEL_PLACEHOLDER_M319
+installation_uuid: "86b79c5b-f903-4f0f-8cc7-36520494ac09"
+migrate_convos_into_projects: MIGRATION_STATUS_COMPLETED

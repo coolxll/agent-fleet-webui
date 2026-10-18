@@ -1,0 +1,17 @@
+{
+  // user-scope MCP servers, JSONC with comments and trailing commas
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["chrome-devtools-mcp@latest", "--autoConnect"],
+      "disabled": true
+    },
+    "fixture-stdio": {
+      "command": "/usr/local/bin/fixture-mcp",
+      "args": ["serve"],
+      "env": {
+        "FIXTURE_API_KEY": "sk-fixture-agy-mcp-key-0123456789"
+      }
+    }
+  }
+}

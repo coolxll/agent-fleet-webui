@@ -25,17 +25,19 @@ def _seed(settings, monkeypatch, count=2):
 
 
 def test_export_shape(fleet_db, monkeypatch):
+    from agent_fleet.adapters.registry import agent_ids
+
     _seed(fleet_db, monkeypatch, count=2)
     doc = build_export()
     assert doc["schema"] == "agent-fleet-export/1"
     assert doc["generated_at"]
     assert doc["counts"]["runtimes"] == 2
-    assert doc["counts"]["installations"] == 10
+    assert doc["counts"]["installations"] == 2 * len(agent_ids())
     host = doc["hosts"][0]
     assert host["host"].startswith("exp-")
     assert host["runtime"]["kind"] == "linux"
     agents = {a["agent"]: a for a in host["agents"]}
-    assert set(agents) == {"codex", "claude", "opencode", "pi", "hermes"}
+    assert set(agents) == set(agent_ids())
     codex = agents["codex"]
     assert codex["version"] == "1.2.3"
     assert codex["config"]["model"] == "gpt-5-fixture"

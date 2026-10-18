@@ -1,0 +1,4 @@
+{
+  "fixture-marketplace": {"url": "https://plugins.fixture.example.com", "priority": 1},
+  "fixture-official": {"url": "https://official.fixture.example.com"}
+}

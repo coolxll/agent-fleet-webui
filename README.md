@@ -9,8 +9,9 @@ machine, never installs anything, and never executes a command that comes from
 the web UI. The requirements it satisfies (and the verification behind each)
 are in `docs/requirements.md`.
 
-Supported agents: **Codex CLI, Claude Code, OpenCode, Pi, Hermes**.
-Supported targets: **macOS, Linux, Windows (PowerShell) and WSL distros**,
+Supported agents: Codex CLI, Claude Code, OpenCode, Pi, Hermes,
+Antigravity (AGY) and CodeBuddy.
+Supported targets: macOS, Linux, Windows (PowerShell) and WSL distros,
 reached over your existing SSH configuration.
 
 Requirements: Python 3.13, Node 20+, and the `ssh` client on the controller.
