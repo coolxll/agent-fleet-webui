@@ -20,6 +20,7 @@ type Props = {
   target: UpgradeTarget
   onClose: () => void
   onUpgraded?: (result: UpgradeTask) => void
+  onSubmitted?: (task: UpgradeTask) => void
 }
 
 export function UpgradeIcon({
@@ -53,13 +54,14 @@ export function UpgradeIcon({
   )
 }
 
-export default function UpgradeModal({ target, onClose, onUpgraded }: Props) {
+export default function UpgradeModal({ target, onClose, onUpgraded, onSubmitted }: Props) {
   const { t, language } = useI18n()
   const [copiedType, setCopiedType] = useState<'remote' | 'local' | null>(null)
   const [tab, setTab] = useState<'remote' | 'local'>('remote')
 
   // Background task execution states
   const [upgrading, setUpgrading] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const [upgradeTask, setUpgradeTask] = useState<UpgradeTask | null>(null)
   const [upgradeError, setUpgradeError] = useState<string | null>(null)
   const [showLogs, setShowLogs] = useState(false)
@@ -129,10 +131,34 @@ export default function UpgradeModal({ target, onClose, onUpgraded }: Props) {
     }, 2000)
   }
 
-  const handleExecuteUpgrade = async () => {
+  // Submit and immediately run in background (auto-closes modal)
+  const handleSubmitInBackground = async () => {
+    setSubmitting(true)
+    setUpgradeError(null)
+    try {
+      let task: UpgradeTask
+      if (target.installationId) {
+        task = await api.upgradeInstallation(target.installationId)
+      } else if (target.runtimeId) {
+        task = await api.upgradeRuntimeAgent(target.runtimeId, target.agent)
+      } else {
+        throw new Error('No target installation ID available to trigger upgrade')
+      }
+      onSubmitted?.(task)
+      onClose()
+    } catch (err: any) {
+      setUpgradeError(err.message || 'Failed to start upgrade task')
+      setSubmitting(false)
+      setShowLogs(true)
+    }
+  }
+
+  // Submit and stay in modal to watch live console output
+  const handleExecuteUpgradeAndWatch = async () => {
     setUpgrading(true)
     setUpgradeError(null)
     setUpgradeTask(null)
+    setShowLogs(true)
 
     try {
       let task: UpgradeTask
@@ -145,6 +171,8 @@ export default function UpgradeModal({ target, onClose, onUpgraded }: Props) {
       }
 
       setUpgradeTask(task)
+      onSubmitted?.(task)
+
       if (task.status === 'completed' || task.status === 'failed') {
         setUpgrading(false)
         if (task.ok) {
@@ -153,7 +181,6 @@ export default function UpgradeModal({ target, onClose, onUpgraded }: Props) {
           setShowLogs(true)
         }
       } else {
-        // Asynchronous background task running: start polling
         pollTask(task.task_id)
       }
     } catch (err: any) {
@@ -220,33 +247,64 @@ export default function UpgradeModal({ target, onClose, onUpgraded }: Props) {
                 border: '1px solid var(--border)'
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>
-                    {t('upgrade.executeBtn')}
-                  </div>
-                  <div className="muted small">
-                    {language === 'zh'
-                      ? '后台异步任务队列执行，自动注入环境变量与重测入库，可随时关闭窗口'
-                      : 'Runs as an async background queue task. You can close this dialog anytime.'}
-                  </div>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>
+                  {t('upgrade.executeBtn')}
                 </div>
-                <button
-                  className="btn primary"
-                  onClick={handleExecuteUpgrade}
-                  disabled={upgrading || Boolean(upgradeTask?.ok)}
-                  style={{ minWidth: 120, whiteSpace: 'nowrap' }}
-                >
-                  {upgrading ? (
-                    <>
-                      <span className="spinner small" /> {t('upgrade.executing')}
-                    </>
-                  ) : upgradeTask?.ok ? (
-                    '✓ 已完成'
-                  ) : (
-                    t('upgrade.executeBtn')
-                  )}
-                </button>
+                <div className="muted small">
+                  {language === 'zh'
+                    ? '通过后台受控队列自动注入环境变量升级与重测，可一键挂后台'
+                    : 'Dispatches safe upgrade over background queue with automatic environment bootstrap.'}
+                </div>
+              </div>
+
+              {/* Action Buttons Row */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                {!upgrading && !upgradeTask?.ok && (
+                  <>
+                    <button
+                      className="btn primary"
+                      onClick={handleSubmitInBackground}
+                      disabled={submitting}
+                      title={language === 'zh' ? '提交任务后立即自动关闭弹窗并在后台执行' : 'Submit task and auto-close modal'}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                    >
+                      {submitting ? (
+                        <>
+                          <span className="spinner small" /> {language === 'zh' ? '正在提交...' : 'Submitting...'}
+                        </>
+                      ) : (
+                        t('upgrade.submitBackground')
+                      )}
+                    </button>
+
+                    <button
+                      className="btn small"
+                      onClick={handleExecuteUpgradeAndWatch}
+                      disabled={submitting}
+                      title={language === 'zh' ? '停留在弹窗内查看实时输出日志' : 'Watch live console logs'}
+                    >
+                      {t('upgrade.watchLive')}
+                    </button>
+                  </>
+                )}
+
+                {upgrading && (
+                  <button
+                    className="btn primary small"
+                    onClick={onClose}
+                    title={language === 'zh' ? '转入后台继续运行并关闭弹窗' : 'Minimize and close modal'}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                  >
+                    <span>⚡ {t('upgrade.minimizeAndClose')}</span>
+                  </button>
+                )}
+
+                {upgradeTask?.ok && (
+                  <div style={{ color: 'var(--ok)', fontWeight: 600, fontSize: 13 }}>
+                    ✓ {language === 'zh' ? '当前已升级为最新版本' : 'Up to date'}
+                  </div>
+                )}
               </div>
 
               {/* Running Status Badge */}
@@ -262,15 +320,25 @@ export default function UpgradeModal({ target, onClose, onUpgraded }: Props) {
                     fontSize: 12,
                     display: 'flex',
                     alignItems: 'center',
+                    justifyContent: 'space-between',
                     gap: 8
                   }}
                 >
-                  <span className="spinner small" />
-                  <span>
-                    {language === 'zh'
-                      ? '远程升级正在后台执行中，完成后将自动刷新数据...'
-                      : 'Remote upgrade is executing in the background, data will refresh automatically...'}
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="spinner small" />
+                    <span>
+                      {language === 'zh'
+                        ? '远程升级正在后台执行中，您可以随时关闭窗口...'
+                        : 'Remote upgrade running in background, you can close this anytime...'}
+                    </span>
+                  </div>
+                  <button
+                    className="btn small"
+                    onClick={onClose}
+                    style={{ padding: '2px 8px', fontSize: 11 }}
+                  >
+                    {language === 'zh' ? '关闭窗口' : 'Close'}
+                  </button>
                 </div>
               )}
 
@@ -347,7 +415,8 @@ export default function UpgradeModal({ target, onClose, onUpgraded }: Props) {
                       overflowY: 'auto',
                       fontSize: 11,
                       lineHeight: 1.4,
-                      background: 'rgba(0,0,0,0.5)',
+                      background: '#0d1117',
+                      color: '#c9d1d9',
                       padding: 8,
                       borderRadius: 4
                     }}

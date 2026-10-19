@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, type InstallationDetail } from '../api'
 import AgentIcon, { agentLabel, agentColor } from '../components/AgentIcon'
 import AgentDetail from '../components/AgentDetail'
@@ -16,14 +16,18 @@ function ago(iso: string | null, t: any): string {
 }
 
 export default function MachinesView({
-  initialHostId
+  initialHostId,
+  refreshSignal
 }: {
   initialHostId?: string
+  refreshSignal?: number
   onOpenMachine?: (id: string, name?: string) => void
 } = {}) {
   const { t, language } = useI18n()
   const [hosts, setHosts] = useState<any[]>([])
-  const [selectedHostId, setSelectedHostId] = useState<string | null>(initialHostId || null)
+  const [selectedHostId, setSelectedHostId] = useState<string | null>(() => {
+    return initialHostId || localStorage.getItem('agent_fleet_selected_host') || null
+  })
   const [hostDetail, setHostDetail] = useState<any>(null)
   const [activeRuntimeKey, setActiveRuntimeKey] = useState<string>('all')
   const [activeInstId, setActiveInstId] = useState<string | null>(null)
@@ -40,23 +44,41 @@ export default function MachinesView({
   const [copiedHost, setCopiedHost] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  // Load hosts list
-  const loadHosts = () =>
+  const selectHost = useCallback((id: string | null) => {
+    setSelectedHostId(id)
+    if (id) {
+      localStorage.setItem('agent_fleet_selected_host', id)
+    }
+  }, [])
+
+  // Load hosts list while strictly preserving currently selected host
+  const loadHosts = useCallback(() =>
     api
       .hosts()
       .then((r) => {
         setHosts(r.hosts)
-        // If no host selected yet, pick local machine first, or first host
-        if (!selectedHostId && r.hosts.length > 0) {
+        setSelectedHostId((prev) => {
+          if (prev && r.hosts.some((h: any) => h.id === prev)) {
+            return prev
+          }
+          const saved = localStorage.getItem('agent_fleet_selected_host')
+          if (saved && r.hosts.some((h: any) => h.id === saved)) {
+            return saved
+          }
           const local = r.hosts.find(
             (h: any) =>
               h.name.includes('local') ||
               h.runtimes?.some((rt: any) => rt.transport === 'local')
           )
-          setSelectedHostId(local ? local.id : r.hosts[0].id)
-        }
+          const chosen = local ? local.id : r.hosts[0]?.id || null
+          if (chosen) {
+            localStorage.setItem('agent_fleet_selected_host', chosen)
+          }
+          return chosen
+        })
       })
-      .catch((e: any) => setError(String(e.message || e)))
+      .catch((e: any) => setError(String(e.message || e))),
+  [])
 
   useEffect(() => {
     loadHosts()
@@ -64,37 +86,40 @@ export default function MachinesView({
     return () => {
       clearInterval(timer)
     }
+  }, [loadHosts])
+
+  // Load machine details preserving active runtime & active installation if still valid
+  const loadHostDetail = useCallback((hostId: string) => {
+    return api
+      .machine(hostId)
+      .then((d) => {
+        setHostDetail(d)
+        setActiveRuntimeKey((prev) => {
+          if (prev === 'all') return 'all'
+          const exists = d.runtimes?.some((r: any) => r.key === prev)
+          return exists ? prev : 'all'
+        })
+        const allInsts = (d.runtimes || []).flatMap((r: any) => r.installations || [])
+        const firstDetected = allInsts.find((i: any) => i.detected) || allInsts[0]
+        setActiveInstId((prev) => {
+          if (prev && allInsts.some((i: any) => i.id === prev)) {
+            return prev
+          }
+          return firstDetected ? firstDetected.id : null
+        })
+      })
+      .catch((e: any) => setError(String(e.message || e)))
   }, [])
 
-  // Load machine details when selected host changes
   useEffect(() => {
     if (!selectedHostId) {
       setHostDetail(null)
       return
     }
-    let alive = true
-    api
-      .machine(selectedHostId)
-      .then((d) => {
-        if (!alive) return
-        setHostDetail(d)
-        setActiveRuntimeKey('all')
-        // Automatically select first detected installation
-        const allInsts = d.runtimes.flatMap((r: any) => r.installations || [])
-        const firstDetected = allInsts.find((i: any) => i.detected) || allInsts[0]
-        if (firstDetected) {
-          setActiveInstId(firstDetected.id)
-        } else {
-          setActiveInstId(null)
-        }
-      })
-      .catch((e: any) => alive && setError(String(e.message || e)))
-    return () => {
-      alive = false
-    }
-  }, [selectedHostId])
+    loadHostDetail(selectedHostId)
+  }, [selectedHostId, loadHostDetail])
 
-  // Load single installation detail when active installation changes
+  // Load single installation detail when active installation or refresh signal changes
   useEffect(() => {
     if (!activeInstId) {
       setInstDetail(null)
@@ -117,7 +142,16 @@ export default function MachinesView({
     return () => {
       alive = false
     }
-  }, [activeInstId])
+  }, [activeInstId, refreshSignal])
+
+  // Trigger in-place non-destructive reload when refreshSignal fires
+  useEffect(() => {
+    if (refreshSignal === undefined || refreshSignal === 0) return
+    loadHosts()
+    if (selectedHostId) {
+      loadHostDetail(selectedHostId)
+    }
+  }, [refreshSignal, selectedHostId, loadHosts, loadHostDetail])
 
   const handleRescanHost = async (e: React.MouseEvent, h: any) => {
     e.stopPropagation()
@@ -130,8 +164,7 @@ export default function MachinesView({
       setTimeout(async () => {
         await loadHosts()
         if (selectedHostId === h.id) {
-          const d = await api.machine(h.id)
-          setHostDetail(d)
+          await loadHostDetail(h.id)
         }
         setRescanningHost(null)
       }, 1500)
@@ -303,7 +336,7 @@ export default function MachinesView({
                   <div
                     key={h.id}
                     className={'workbench-nav-item ' + (isSelected ? 'active' : '')}
-                    onClick={() => setSelectedHostId(h.id)}
+                    onClick={() => selectHost(h.id)}
                     style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6, padding: '10px 12px' }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -594,7 +627,7 @@ export default function MachinesView({
                           <span
                             className="ts-machine-name"
                             onClick={() => {
-                              setSelectedHostId(h.id)
+                              selectHost(h.id)
                               setViewMode('workbench')
                             }}
                             title={h.name}
@@ -704,7 +737,7 @@ export default function MachinesView({
                           <button
                             className="btn small"
                             onClick={() => {
-                              setSelectedHostId(h.id)
+                              selectHost(h.id)
                               setViewMode('workbench')
                             }}
                             title={language === 'zh' ? '在工作台中打开' : 'Open in Workbench'}
@@ -729,7 +762,7 @@ export default function MachinesView({
           onUpgraded={() => {
             loadHosts()
             if (selectedHostId) {
-              api.machine(selectedHostId).then((d) => setHostDetail(d))
+              loadHostDetail(selectedHostId)
             }
           }}
         />

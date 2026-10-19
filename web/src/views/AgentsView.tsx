@@ -18,13 +18,17 @@ const ALL_AGENT_IDS = [
 
 export default function AgentsView({
   selectedAgentId,
+  refreshSignal,
   onSelectAgent
 }: {
   selectedAgentId?: string
+  refreshSignal?: number
   onSelectAgent?: (id: string | null) => void
 } = {}) {
   const { t, language } = useI18n()
-  const [activeAgent, setActiveAgent] = useState<string>(selectedAgentId || 'claude')
+  const [activeAgent, setActiveAgent] = useState<string>(() => {
+    return selectedAgentId || localStorage.getItem('agent_fleet_active_agent') || 'claude'
+  })
   const [agentSummaries, setAgentSummaries] = useState<
     Record<string, { count: number; behind: number; variants: number }>
   >({})
@@ -40,6 +44,11 @@ export default function AgentsView({
   const [selectedInsts, setSelectedInsts] = useState<string[]>([])
   const [diffResult, setDiffResult] = useState<InstallationDiff | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
+
+  useEffect(() => {
+    if (refreshSignal === undefined || refreshSignal === 0) return
+    setRefreshCount((c) => c + 1)
+  }, [refreshSignal])
 
   // Load summary counts and upgrade status across all agents immediately
   useEffect(() => {
@@ -92,16 +101,20 @@ export default function AgentsView({
     return () => {
       alive = false
     }
-  }, [])
+  }, [refreshCount])
 
-  // When active agent changes, load its agent-view data
+  // Clear comparison when activeAgent changes
+  useEffect(() => {
+    setSelectedInsts([])
+    setDiffResult(null)
+  }, [activeAgent])
+
+  // When active agent changes or refresh occurs, load its agent-view data
   useEffect(() => {
     if (!activeAgent) return
     let alive = true
     setLoading(true)
     setError(null)
-    setSelectedInsts([])
-    setDiffResult(null)
 
     api
       .agentView(activeAgent)
@@ -134,6 +147,7 @@ export default function AgentsView({
 
   const handleSelectAgent = (aid: string) => {
     setActiveAgent(aid)
+    localStorage.setItem('agent_fleet_active_agent', aid)
     onSelectAgent?.(aid)
   }
 

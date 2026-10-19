@@ -17,3 +17,4 @@ web/dist/
 
 # local scratch
 scratch_*.py
+*.tsbuildinfo

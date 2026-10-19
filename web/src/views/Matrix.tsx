@@ -5,8 +5,10 @@ import InstallationDrawer from '../components/InstallationDrawer'
 import { useI18n, type TranslationKey } from '../i18n'
 
 export default function Matrix({
+  refreshSignal,
   onOpenInstallation
 }: {
+  refreshSignal?: number
   onOpenInstallation?: (id: string, agentName?: string, hostName?: string) => void
 } = {}) {
   const { t, language } = useI18n()
@@ -55,7 +57,7 @@ export default function Matrix({
       alive = false
       clearInterval(timer)
     }
-  }, [])
+  }, [refreshSignal])
 
   const handleCellClick = (cell?: MatrixCell, agentId?: string, hostName?: string) => {
     if (!cell?.installation_id) return

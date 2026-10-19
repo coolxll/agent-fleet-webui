@@ -4,6 +4,7 @@ import MachinesView from './views/MachinesView'
 import AgentsView from './views/AgentsView'
 import Matrix from './views/Matrix'
 import SettingsModal from './components/SettingsModal'
+import TasksDrawer from './components/TasksDrawer'
 import { useI18n } from './i18n'
 
 type ViewTab = 'machines' | 'agents' | 'matrix'
@@ -23,6 +24,8 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showTasksDrawer, setShowTasksDrawer] = useState(false)
+  const [activeUpgradeCount, setActiveUpgradeCount] = useState(0)
   const [refreshKey, setRefreshKey] = useState(0)
 
   const handleTabSwitch = (nextTab: ViewTab) => {
@@ -84,6 +87,48 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [toast])
 
+  // Poll background upgrade tasks to maintain active count and trigger auto-refresh on completion
+  useEffect(() => {
+    let alive = true
+    let prevActiveCount = 0
+
+    const checkUpgrades = async () => {
+      try {
+        const res = await api.listUpgradeTasks()
+        if (!alive) return
+        const active = (res.tasks || []).filter(
+          (u) => u.status === 'running' || u.status === 'pending'
+        )
+        setActiveUpgradeCount(active.length)
+
+        // If an active upgrade just finished, refresh data automatically
+        if (prevActiveCount > 0 && active.length < prevActiveCount) {
+          setRefreshKey((k) => k + 1)
+          const justFinished = (res.tasks || []).find(
+            (u) => u.status === 'completed' && u.ok
+          )
+          if (justFinished) {
+            setToast(
+              language === 'zh'
+                ? `🎉 ${justFinished.agent} (${justFinished.host}) 升级成功！`
+                : `🎉 Upgrade succeeded for ${justFinished.agent} (${justFinished.host})!`
+            )
+          }
+        }
+        prevActiveCount = active.length
+      } catch {
+        /* ignore */
+      }
+    }
+
+    checkUpgrades()
+    const timer = setInterval(checkUpgrades, 2500)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [language])
+
   return (
     <div>
       <header className="app-header">
@@ -136,6 +181,26 @@ export default function App() {
             </div>
           ) : null}
 
+          {/* Tasks button */}
+          <button
+            className={'btn small ' + (activeUpgradeCount > 0 ? 'primary ' : '')}
+            onClick={() => setShowTasksDrawer(true)}
+            title={language === 'zh' ? '查看后台任务中心' : 'Task Center'}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            {activeUpgradeCount > 0 ? (
+              <>
+                <span className="spinner small" />
+                <span>{language === 'zh' ? `任务 (${activeUpgradeCount})` : `Tasks (${activeUpgradeCount})`}</span>
+              </>
+            ) : (
+              <>
+                <span>📋</span>
+                <span>{language === 'zh' ? '任务' : 'Tasks'}</span>
+              </>
+            )}
+          </button>
+
           <button
             className="btn primary small"
             onClick={scanAll}
@@ -165,15 +230,21 @@ export default function App() {
         </div>
       )}
 
-      <main className="container" key={refreshKey}>
-        {tab === 'machines' && <MachinesView />}
-        {tab === 'agents' && <AgentsView />}
-        {tab === 'matrix' && <Matrix />}
+      <main className="container">
+        {tab === 'machines' && <MachinesView refreshSignal={refreshKey} />}
+        {tab === 'agents' && <AgentsView refreshSignal={refreshKey} />}
+        {tab === 'matrix' && <Matrix refreshSignal={refreshKey} />}
       </main>
 
       <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
+        onDataChanged={() => setRefreshKey((k) => k + 1)}
+      />
+
+      <TasksDrawer
+        isOpen={showTasksDrawer}
+        onClose={() => setShowTasksDrawer(false)}
         onDataChanged={() => setRefreshKey((k) => k + 1)}
       />
     </div>
