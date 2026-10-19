@@ -6,6 +6,10 @@
         "Authorization": "Bearer sk-fixture-agy-bearer-abcdef012345"
       },
       "serverUrl": "http://fixture-gateway.internal:8790/mcp?token=secret"
+    },
+    "fixture-search-disabled": {
+      "disabled": true,
+      "command": "/usr/local/bin/fixture-search-mcp"
     }
   }
 }

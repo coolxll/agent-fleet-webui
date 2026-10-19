@@ -17,6 +17,73 @@ def test_compare_versions():
     assert compare_versions("1.2", "1.2.0") == 0
     assert compare_versions("0.9.9", "1.0.0") == -1
     assert compare_versions("2.1.281", "2.1.302") == -1
+    # a v prefix is noise
+    assert compare_versions("v0.22.2", "0.22.2") == 0
+
+
+def test_compare_versions_prerelease_semantics():
+    """A prerelease is LOWER than its release, not equal (semver)."""
+    assert compare_versions("2.1.303-beta.1", "2.1.303") == -1
+    assert compare_versions("2.1.303", "2.1.303-beta.1") == 1
+    assert compare_versions("2.1.303-beta.1", "2.1.303-beta.2") == -1
+    assert compare_versions("2.1.303-beta.10", "2.1.303-beta.9") == 1
+    # numeric identifiers sort below alphanumeric ones
+    assert compare_versions("1.0.0-1", "1.0.0-alpha") == -1
+    # build metadata is ignored
+    assert compare_versions("1.2.3+build.5", "1.2.3") == 0
+
+
+def test_compare_versions_unparseable():
+    assert compare_versions("", "1.0.0") is None
+    assert compare_versions("not-a-version", "1.0.0") is None
+
+
+def test_effective_latest_stable_channel_ignores_prerelease():
+    from agent_fleet.services.updates import effective_latest
+
+    info = {
+        "latest_available": "2.1.303",
+        "prerelease": {"next": "2.2.0-next.1"},
+    }
+    # a stable install is never offered the prerelease channel
+    assert effective_latest("2.1.300", info) == "2.1.303"
+
+
+def test_effective_latest_prerelease_channel_uses_tag():
+    from agent_fleet.services.updates import effective_latest
+
+    info = {
+        "latest_available": "2.1.303",
+        "prerelease": {"next": "2.2.0-next.1"},
+    }
+    # already ahead of stable == riding the channel, so compare within it
+    assert effective_latest("2.2.0-next.0", info) == "2.2.0-next.1"
+    # already at the channel head: nothing to do
+    assert effective_latest("2.2.0-next.1", info) == "2.2.0-next.1"
+    # a tag behind the local version is not a downgrade target
+    assert effective_latest("2.2.0-next.2", info) == "2.2.0-next.1"
+
+
+def test_effective_latest_without_prerelease_data():
+    from agent_fleet.services.updates import effective_latest
+
+    assert effective_latest("1.0.0", {"latest_available": "1.1.0"}) == "1.1.0"
+    assert effective_latest("", {"latest_available": "1.1.0"}) == "1.1.0"
+    assert effective_latest("1.0.0", {}) is None
+
+
+def test_github_display_version_prefers_semver_over_calendar():
+    from agent_fleet.services.updates import _display_version
+
+    # historic Hermes releases carry both; the semantic one must win
+    assert _display_version("Hermes Agent v0.21.5 (v2026.9.24)") == "0.21.5"
+    assert _display_version("Hermes Agent v0.22.2") == "0.22.2"
+    assert _display_version("v0.22.0 — The Threshold Release") == "0.22.0"
+    # a pure calendar tag must be rejected outright
+    assert _display_version("v2026.9.24") is None
+    assert _display_version("2026.9.24") is None
+    assert _display_version("") is None
+    assert _display_version(None) is None
 
 
 def test_version_states():
@@ -105,6 +172,7 @@ def test_unknown_agent_has_no_feed(monkeypatch):
         "source": "unknown",
         "package": None,
         "latest_available": None,
+        "prerelease": {},
         "release_url": None,
     }
 

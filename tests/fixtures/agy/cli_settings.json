@@ -1,0 +1,7 @@
+{
+  // 1.4.2+ CLI settings; "model" is the live human-readable model
+  "colorScheme": "dark",
+  "model": "Gemini 3.8 Flash (High)",
+  "toolPermission": "always-proceed",
+  "verbosity": "high"
+}

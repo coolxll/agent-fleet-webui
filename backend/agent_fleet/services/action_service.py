@@ -24,12 +24,29 @@ UPGRADE_RULES: dict[str, dict[str, str]] = {
     "codex": {"package": "@openai/codex", "type": "npm"},
     "claude": {"package": "@anthropic-ai/claude-code", "type": "npm_or_cli"},
     "opencode": {"package": "opencode-ai", "type": "npm_or_cli"},
-    "pi": {"package": "@earendil-works/pi-coding-agent", "type": "npm"},
+    "pi": {"package": "@earendil-works/pi-coding-agent", "type": "npm_or_cli"},
     "codebuddy": {"package": "@tencent-ai/codebuddy-code", "type": "npm"},
     "qoder": {"package": "@qoder-ai/qodercli", "type": "npm_or_cli"},
     "agy": {"package": "antigravity-cli", "type": "agy"},
     "hermes": {"package": "hermes-agent", "type": "hermes"},
 }
+
+# Official self-updaters. When present they are tried first and the package
+# manager is the fallback, so a working vendor updater never needs a full
+# reinstall and a broken one still recovers.
+OFFICIAL_UPDATERS: dict[str, tuple[str, str]] = {
+    "claude": ("claude", "update"),
+    "qoder": ("qodercli", "update"),
+    "opencode": ("opencode", "upgrade"),
+    "pi": ("pi", "update"),
+}
+
+# Hermes ships its own updater; the upstream install script is the fallback
+# (cc-switch uses the same chain). PyPI is NOT a safe fallback: hermes-agent
+# stopped publishing there at 0.19.0 while GitHub releases moved to 0.22.x.
+HERMES_INSTALL_URL = (
+    "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh"
+)
 
 WIN_PATH_BOOTSTRAP = """$ProgressPreference = "SilentlyContinue"
 $ErrorActionPreference = "Continue"
@@ -85,8 +102,10 @@ def build_upgrade_script(agent_id: str, platform: str) -> str:
                 f"exit $LASTEXITCODE"
             )
         elif rule_type == "npm_or_cli":
-            cli = "claude" if agent_id == "claude" else ("opencode" if agent_id == "opencode" else "qodercli")
-            sub = "upgrade" if agent_id == "opencode" else "update"
+            cli, sub = OFFICIAL_UPDATERS.get(
+                agent_id,
+                (agent_id, "update"),
+            )
             body = (
                 f"if (Get-Command {cli} -ErrorAction SilentlyContinue) {{\n"
                 f"  & {cli} {sub}\n"
@@ -117,11 +136,17 @@ def build_upgrade_script(agent_id: str, platform: str) -> str:
                 f"exit $LASTEXITCODE"
             )
         elif rule_type == "hermes":
+            # pip install hermes-agent would pin to 0.19.0 (PyPI is stale);
+            # try the official updater, then the upstream installer.
+            upstream = (
+                "irm " + HERMES_INSTALL_URL + " | iex"
+            )
             body = (
-                f"if (Get-Command pip.exe -ErrorAction SilentlyContinue) {{\n"
-                f"  & pip.exe install --upgrade hermes-agent\n"
-                f"}} else {{\n"
-                f"  & pip install --upgrade hermes-agent\n"
+                f"if (Get-Command hermes -ErrorAction SilentlyContinue) {{\n"
+                f"  & hermes update\n"
+                f"}}\n"
+                f"if ($LASTEXITCODE -ne 0) {{\n"
+                f"  {upstream}\n"
                 f"}}\n"
                 f"exit $LASTEXITCODE"
             )
@@ -134,21 +159,21 @@ def build_upgrade_script(agent_id: str, platform: str) -> str:
     if rule_type == "npm":
         cmd = f"npm install -g {pkg}@latest"
     elif rule_type == "npm_or_cli":
-        if agent_id == "claude":
-            cmd = f"claude update 2>&1 || npm install -g {pkg}@latest"
-        elif agent_id == "qoder":
-            cmd = f"qodercli update 2>&1 || npm install -g {pkg}@latest"
-        elif agent_id == "opencode":
-            cmd = f"opencode upgrade 2>&1 || npm install -g {pkg}@latest"
+        official = OFFICIAL_UPDATERS.get(agent_id)
+        if official:
+            cli, sub = official
+            cmd = f"{cli} {sub} 2>&1 || npm install -g {pkg}@latest"
         else:
             cmd = f"npm install -g {pkg}@latest"
     elif rule_type == "agy":
         cmd = "agy update 2>&1"
     elif rule_type == "hermes":
+        # Official updater first (git pull + reinstall, restarts the gateway);
+        # upstream install script as the fallback. Never pip: PyPI is stale.
         cmd = (
-            'if [ -d "$HOME/.hermes/hermes-agent/.git" ]; then '
-            '(cd "$HOME/.hermes/hermes-agent" && git pull && .hermes/bin/pip install -e .) ; '
-            "else pip install --upgrade hermes-agent ; fi"
+            'hermes update || '
+            "bash -c 'tmp=$(mktemp) && curl -fsSL " + HERMES_INSTALL_URL + " -o $tmp"
+            " && bash $tmp; status=$?; rm -f $tmp; exit $status'"
         )
     else:
         cmd = f"npm install -g {pkg}@latest"

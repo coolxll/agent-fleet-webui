@@ -15,7 +15,12 @@ from agent_fleet.services import diff
 from agent_fleet.services import persist as _persist  # noqa: F401
 from agent_fleet.services import scan_service
 from agent_fleet.services.export import build_export
-from agent_fleet.services.updates import latest_available, version_state
+from agent_fleet.services.updates import (
+    effective_latest,
+    latest_available,
+    version_state,
+    version_state_for,
+)
 from agent_fleet.services.scheduler import get_schedule
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
 from agent_fleet.settings import get_settings
@@ -59,7 +64,7 @@ def _rt_summary(s, rt, ttl):
         if inst.detected:
             installed += 1
             latest_info = latest_available(inst.agent_id)
-            latest_ver = latest_info.get("latest_available")
+            latest_ver = effective_latest(inst.version, latest_info)
             agent_details.append(
                 {
                     "id": inst.id,
@@ -234,15 +239,12 @@ def get_machine(host_id: str):
                             "error": i.error,
                             "config_summary": _config_summary(i),
                             "version_state": (
-                                version_state(
-                                    i.version,
-                                    latest_available(i.agent_id).get("latest_available"),
-                                )
+                                version_state_for(i.version, latest_available(i.agent_id))
                                 if i.status == "installed"
                                 else "unknown"
                             ),
-                            "latest_available": latest_available(i.agent_id).get(
-                                "latest_available"
+                            "latest_available": effective_latest(
+                                i.version, latest_available(i.agent_id)
                             ),
                             "package": latest_available(i.agent_id).get("package"),
                             "source": latest_available(i.agent_id).get("source"),
@@ -791,7 +793,7 @@ def agent_view(agent_id: str, include_disabled_hosts: bool = Query(False)):
     configurations consistent.
     """
     from agent_fleet.adapters.registry import get_adapter as _get_adapter
-    from agent_fleet.services.updates import latest_available, version_state
+    from agent_fleet.services.updates import effective_latest, latest_available
 
     if agent_id not in agent_ids():
         raise HTTPException(404, f"unknown agent: {agent_id}")
@@ -838,12 +840,15 @@ def agent_view(agent_id: str, include_disabled_hosts: bool = Query(False)):
     currency = latest_available(agent_id)
     latest = currency.get("latest_available")
     for i in detected:
+        # Per install, because a machine riding a prerelease channel is
+        # compared against that channel rather than stable `latest`.
+        effective = effective_latest(i["version"], currency)
         i["version_state"] = (
-            version_state(i["version"], latest)
+            version_state(i["version"], effective)
             if i["status"] == "installed"
             else "unknown"
         )
-        i["latest_available"] = latest
+        i["latest_available"] = effective
         i["package"] = currency.get("package")
         i["source"] = currency.get("source")
 

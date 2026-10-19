@@ -54,6 +54,28 @@ def test_build_upgrade_script_windows_claude():
     assert "@anthropic-ai/claude-code@latest" in script
 
 
+def test_build_upgrade_script_posix_pi():
+    script = build_upgrade_script("pi", "posix")
+    assert "pi update" in script
+    assert "npm install -g @earendil-works/pi-coding-agent@latest" in script
+
+
+def test_build_upgrade_script_posix_hermes_never_uses_pip():
+    """PyPI's hermes-agent is stuck at 0.19.0; pip would downgrade the fleet."""
+    script = build_upgrade_script("hermes", "posix")
+    assert "hermes update" in script
+    assert "scripts/install.sh" in script
+    assert "pip install --upgrade hermes-agent" not in script
+    assert "git pull" not in script
+
+
+def test_build_upgrade_script_windows_hermes_never_uses_pip():
+    script = build_upgrade_script("hermes", "windows")
+    assert "& hermes update" in script
+    assert "scripts/install.sh" in script
+    assert "pip install --upgrade hermes-agent" not in script
+
+
 def test_build_upgrade_script_injection_rejected():
     with pytest.raises(ValueError, match="does not support automated upgrades"):
         build_upgrade_script("malicious_agent; rm -rf /", "posix")

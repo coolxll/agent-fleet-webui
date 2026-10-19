@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "fixture-cli": {
+      "type": "http",
+      "serverUrl": "http://fixture-cli.internal:9000/mcp",
+      "headers": { "Authorization": "Bearer sk-fixture-agy-cli-0123456789" }
+    },
+    // same name as the pre-1.4.2 user file: the CLI copy must win and the
+    // older entry must not be reported twice
+    "fixture-stdio": {
+      "command": "/usr/local/bin/fixture-cli-mcp",
+      "args": ["serve"]
+    }
+  }
+}

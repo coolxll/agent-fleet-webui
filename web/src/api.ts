@@ -413,7 +413,84 @@ export const api = {
   upgradeAgentAll: (agentId: string) =>
     post<{ tasks: UpgradeTask[]; queued: number; agent_id: string }>('/agents/' + agentId + '/upgrade-all'),
   upgradeFleetAll: () =>
-    post<{ tasks: UpgradeTask[]; queued: number }>('/fleet/upgrade-all')
+    post<{ tasks: UpgradeTask[]; queued: number }>('/fleet/upgrade-all'),
+  listSessions: (params?: {
+    q?: string
+    host_name?: string
+    agent_id?: string
+    project?: string
+    pinned_only?: boolean
+    limit?: number
+    offset?: number
+  }) => {
+    const sp = new URLSearchParams()
+    if (params?.q) sp.set('q', params.q)
+    if (params?.host_name) sp.set('host_name', params.host_name)
+    if (params?.agent_id) sp.set('agent_id', params.agent_id)
+    if (params?.project) sp.set('project', params.project)
+    if (params?.pinned_only) sp.set('pinned_only', 'true')
+    if (params?.limit) sp.set('limit', String(params.limit))
+    if (params?.offset) sp.set('offset', String(params.offset))
+    const qs = sp.toString()
+    return get<SessionsResponse>('/sessions' + (qs ? '?' + qs : ''))
+  },
+  syncSessions: () =>
+    post<{ ok: boolean; total_sessions: number; runtimes_scanned: number; errors: string[] }>('/sessions/sync'),
+  getSession: (sessionId: string) =>
+    get<SessionSummary>('/sessions/' + sessionId),
+  getSessionTranscript: (sessionId: string) =>
+    get<SessionTranscriptResponse>('/sessions/' + sessionId + '/transcript'),
+  toggleSessionPin: (sessionId: string) =>
+    post<{ ok: boolean; session_id: string; is_pinned: boolean }>('/sessions/' + sessionId + '/pin'),
+  getSessionResumeCommand: (sessionId: string) =>
+    get<{ session_id: string; resume_command: string }>('/sessions/' + sessionId + '/resume-command')
+}
+
+export type SessionSummary = {
+  id: string
+  runtime_id: string
+  host_name: string
+  agent_id: string
+  session_key: string
+  title: string
+  project_path: string | null
+  project_name: string
+  file_path: string | null
+  started_at: string | null
+  updated_at: string | null
+  message_count: number
+  token_count: number | null
+  is_pinned: boolean
+  summary: string | null
+  resume_command: string
+  has_cached_transcript: boolean
+}
+
+export type SessionsResponse = {
+  items: SessionSummary[]
+  total: number
+  facets: {
+    agents: string[]
+    hosts: string[]
+    projects: string[]
+  }
+}
+
+export type ConversationTurn = {
+  role: 'user' | 'assistant' | 'tool'
+  content: string
+  thinking?: string | null
+  tool_calls?: Array<{ id?: string; name?: string; input?: any }> | null
+  timestamp?: string | null
+}
+
+export type SessionTranscriptResponse = {
+  session_id: string
+  turns: ConversationTurn[]
+  has_secrets_masked: boolean
+  masked_count: number
+  cached: boolean
+  cached_at: string | null
 }
 
 export type UpgradeTask = {
@@ -441,21 +518,34 @@ export type UpgradeResult = UpgradeTask
 
 
 
+const HERMES_INSTALL_URL =
+  'https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh'
+
 export function getUpdateCommand(
   agent: string,
   pkg?: string | null,
   targetHost?: string | null
 ): { local: string; remote: string } {
+  const npmFallback = pkg ? `npm install -g ${pkg}@latest` : ''
   let cmd = ''
-  if (agent === 'claude') cmd = 'claude update'
-  else if (agent === 'qoder') cmd = 'qodercli update'
+  if (agent === 'claude') cmd = withFallback('claude update', npmFallback)
+  else if (agent === 'qoder') cmd = withFallback('qodercli update', npmFallback)
+  else if (agent === 'opencode') cmd = withFallback('opencode upgrade', npmFallback)
+  else if (agent === 'pi') cmd = withFallback('pi update', npmFallback)
   else if (agent === 'agy') cmd = 'agy update'
-  else if (agent === 'hermes') cmd = 'hermes update'
-  else if (agent === 'opencode') cmd = 'opencode upgrade'
-  else if (pkg) cmd = `npm install -g ${pkg}@latest`
+  else if (agent === 'hermes')
+    cmd = `hermes update || bash -c 'tmp=$(mktemp) && curl -fsSL ${HERMES_INSTALL_URL} -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'`
+  else if (pkg) cmd = npmFallback
   else cmd = `npm install -g ${agent}@latest`
 
   const remote =
-    targetHost && targetHost !== 'local-controller' ? `ssh ${targetHost} "${cmd}"` : cmd
+    targetHost && targetHost !== 'macbook-air' && targetHost !== 'local-controller'
+      ? `ssh ${targetHost} "${cmd}"`
+      : cmd
   return { local: cmd, remote }
 }
+
+function withFallback(primary: string, fallback: string): string {
+  return fallback ? `${primary} || ${fallback}` : primary
+}
+
