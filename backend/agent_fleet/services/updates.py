@@ -18,6 +18,7 @@ NPM_PACKAGES = {
     "opencode": "opencode-ai",
     "pi": "@earendil-works/pi-coding-agent",
     "codebuddy": "@tencent-ai/codebuddy-code",
+    "qoder": "@qoder-ai/qodercli",
 }
 
 CACHE_TTL = 3600

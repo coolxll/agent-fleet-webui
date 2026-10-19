@@ -36,6 +36,7 @@ def test_npm_packages_are_verified_names():
     assert NPM_PACKAGES["opencode"] == "opencode-ai"
     assert NPM_PACKAGES["pi"] == "@earendil-works/pi-coding-agent"
     assert NPM_PACKAGES["codebuddy"] == "@tencent-ai/codebuddy-code"
+    assert NPM_PACKAGES["qoder"] == "@qoder-ai/qodercli"
     # agy and hermes are not npm-distributed: they must report unknown
     assert "agy" not in NPM_PACKAGES
     assert "hermes" not in NPM_PACKAGES

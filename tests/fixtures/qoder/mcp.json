@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fixture-sse-mcp": {
+      "type": "sse",
+      "url": "https://mcp.fixture.com/sse?token=sk-fixture-token-999"
+    }
+  }
+}

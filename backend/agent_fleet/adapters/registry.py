@@ -21,9 +21,10 @@ ADAPTER_MODULES = (
     "agent_fleet.adapters.hermes:HermesAdapter",
     "agent_fleet.adapters.agy:AntigravityAdapter",
     "agent_fleet.adapters.codebuddy:CodeBuddyAdapter",
+    "agent_fleet.adapters.qoder:QoderAdapter",
 )
 
-AGENT_ORDER = ("codex", "claude", "opencode", "pi", "hermes", "agy", "codebuddy")
+AGENT_ORDER = ("codex", "claude", "opencode", "pi", "hermes", "agy", "codebuddy", "qoder")
 
 _cache: Dict[str, AgentAdapter] = {}
 _order: List[str] = []

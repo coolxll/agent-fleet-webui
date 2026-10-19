@@ -23,6 +23,7 @@ def make_facts(
     probed: set | None = None,
     skills: dict | None = None,
     dirs: dict | None = None,
+    ls: dict | None = None,
 ) -> RemoteFacts:
     """Compose a RemoteFacts object the same way a probe run would."""
     facts = RemoteFacts(os=os_name, home=home, user=user)
@@ -48,6 +49,7 @@ def make_facts(
         )
     facts.skills = dict(skills or {})
     facts.dirs = dict(dirs or {})
+    facts.ls = dict(ls or {})
     for path, entries in (skills or {}).items():
         facts.skills[path] = entries
     return facts

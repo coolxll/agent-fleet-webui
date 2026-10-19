@@ -1,0 +1,21 @@
+{
+  "trustedDirectories": ["/Users/fixture/work/a", "/Users/fixture/work/b"],
+  "model": "qwen-coder-plus",
+  "language": "zh-CN",
+  "autoMemoryEnabled": true,
+  "hooks": {
+    "PreToolUse": [{"matcher": "*", "command": "echo check"}],
+    "Stop": [{"matcher": "*", "command": "echo bye"}]
+  },
+  "mcpServers": {
+    "fixture-user-mcp": {
+      "command": "npx",
+      "args": ["-y", "@fixture/mcp-server"],
+      "env": {
+        "FIXTURE_KEY": "sk-fixture-qoder-secret-abcdef"
+      }
+    }
+  },
+  "apiKey": "sk-fixture-qoder-key-abcdef012345",
+  "unknownPrivateSetting": "should-be-dropped"
+}
