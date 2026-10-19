@@ -4,6 +4,7 @@ import AgentIcon, { agentLabel, agentColor } from '../components/AgentIcon'
 import AgentDetail from '../components/AgentDetail'
 import UpgradeModal, { UpgradeIcon, UpgradeTarget } from '../components/UpgradeModal'
 import { useI18n } from '../i18n'
+import { useUpgrades } from '../context/UpgradesContext'
 
 function ago(iso: string | null, t: any): string {
   if (!iso) return ''
@@ -24,6 +25,7 @@ export default function MachinesView({
   onOpenMachine?: (id: string, name?: string) => void
 } = {}) {
   const { t, language } = useI18n()
+  const { isUpgrading, triggerUpgrade, openTasksDrawer } = useUpgrades()
   const [hosts, setHosts] = useState<any[]>([])
   const [selectedHostId, setSelectedHostId] = useState<string | null>(() => {
     return initialHostId || localStorage.getItem('agent_fleet_selected_host') || null
@@ -501,14 +503,39 @@ export default function MachinesView({
                               {isBehind && (
                                 <UpgradeIcon
                                   size={13}
-                                  title={t('version.behind', { version: i.latest_available || '' })}
+                                  upgrading={isUpgrading(i.id)}
+                                  title={
+                                    isUpgrading(i.id)
+                                      ? (language === 'zh' ? '正在后台升级中... (点击查看任务中心)' : 'Upgrading in background... (click to view tasks)')
+                                      : (language === 'zh'
+                                          ? `${t('version.behind', { version: i.latest_available || '' })} (点击直接升级，Alt+点击查看命令)`
+                                          : `${t('version.behind', { version: i.latest_available || '' })} (Click to upgrade directly, Alt+click for manual command)`)
+                                  }
                                   onClick={(e) => {
                                     e.stopPropagation()
-                                    setUpgradeTarget({
+                                    if (isUpgrading(i.id)) {
+                                      openTasksDrawer()
+                                      return
+                                    }
+                                    if (e.altKey || e.shiftKey) {
+                                      setUpgradeTarget({
+                                        agent: i.agent,
+                                        currentVersion: i.version,
+                                        latestVersion: i.latest_available,
+                                        host: hostDetail?.name,
+                                        runtimeKey: i.runtimeKey,
+                                        packageName: i.package,
+                                        releaseUrl: i.release_url,
+                                        installationId: i.id,
+                                        runtimeId: i.runtimeId
+                                      })
+                                      return
+                                    }
+                                    triggerUpgrade(i.id, {
                                       agent: i.agent,
+                                      host: hostDetail?.name,
                                       currentVersion: i.version,
                                       latestVersion: i.latest_available,
-                                      host: hostDetail.name,
                                       runtimeKey: i.runtimeKey,
                                       packageName: i.package,
                                       releaseUrl: i.release_url,
@@ -678,21 +705,48 @@ export default function MachinesView({
                                   {isBehind && (
                                     <UpgradeIcon
                                       size={12}
-                                      title={t('version.behind', { version: ad.latest_available || '' })}
+                                      upgrading={isUpgrading(ad.instId)}
+                                      title={
+                                        isUpgrading(ad.instId)
+                                          ? (language === 'zh' ? '正在后台升级中... (点击查看任务中心)' : 'Upgrading in background... (click to view tasks)')
+                                          : (language === 'zh'
+                                              ? `${t('version.behind', { version: ad.latest_available || '' })} (点击直接升级，Alt+点击查看命令)`
+                                              : `${t('version.behind', { version: ad.latest_available || '' })} (Click to upgrade directly, Alt+click for manual command)`)
+                                      }
                                       onClick={(e) => {
                                         e.stopPropagation()
-                                        setUpgradeTarget({
-                                          agent: ad.agent,
-                                          currentVersion: ad.version,
-                                          latestVersion: ad.latest_available,
-                                          host: ad.host,
-                                          runtimeKey: ad.rtKey,
-                                          osName: ad.osName,
-                                          packageName: ad.package,
-                                          releaseUrl: ad.release_url,
-                                          installationId: ad.instId,
-                                          runtimeId: ad.rtId
-                                        })
+                                        if (isUpgrading(ad.instId)) {
+                                          openTasksDrawer()
+                                          return
+                                        }
+                                        if (e.altKey || e.shiftKey) {
+                                          setUpgradeTarget({
+                                            agent: ad.agent,
+                                            currentVersion: ad.version,
+                                            latestVersion: ad.latest_available,
+                                            host: ad.host,
+                                            runtimeKey: ad.rtKey,
+                                            osName: ad.osName,
+                                            packageName: ad.package,
+                                            releaseUrl: ad.release_url,
+                                            installationId: ad.instId,
+                                            runtimeId: ad.rtId
+                                          })
+                                          return
+                                        }
+                                        if (ad.instId) {
+                                          triggerUpgrade(ad.instId, {
+                                            agent: ad.agent,
+                                            host: ad.host,
+                                            currentVersion: ad.version,
+                                            latestVersion: ad.latest_available,
+                                            runtimeKey: ad.rtKey,
+                                            packageName: ad.package,
+                                            releaseUrl: ad.release_url,
+                                            installationId: ad.instId,
+                                            runtimeId: ad.rtId
+                                          })
+                                        }
                                       }}
                                     />
                                   )}

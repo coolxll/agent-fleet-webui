@@ -364,6 +364,22 @@ select, input[type='text'] {
   color: #fff;
   transform: translateY(-1px);
 }
+.tailscale-upgrade-btn.upgrading {
+  background: rgba(76, 154, 255, 0.18);
+  border-color: rgba(76, 154, 255, 0.7);
+  color: var(--accent);
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(76, 154, 255, 0.35);
+}
+.tailscale-upgrade-btn.upgrading:hover {
+  background: rgba(76, 154, 255, 0.3);
+  border-color: var(--accent);
+  transform: none;
+}
+.tailscale-upgrade-btn.upgrading .spin-icon {
+  animation: spin 0.85s linear infinite;
+  transform-origin: center;
+}
 
 /* Modal Backdrop & Card */
 .modal-backdrop {

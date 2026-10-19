@@ -4,6 +4,7 @@ import AgentIcon, { agentLabel } from '../components/AgentIcon'
 import InstallationDrawer from '../components/InstallationDrawer'
 import UpgradeModal, { UpgradeIcon, UpgradeTarget } from '../components/UpgradeModal'
 import { useI18n } from '../i18n'
+import { useUpgrades } from '../context/UpgradesContext'
 
 const ALL_AGENT_IDS = [
   'claude',
@@ -26,6 +27,7 @@ export default function AgentsView({
   onSelectAgent?: (id: string | null) => void
 } = {}) {
   const { t, language } = useI18n()
+  const { isUpgrading, triggerUpgrade, openTasksDrawer } = useUpgrades()
   const [activeAgent, setActiveAgent] = useState<string>(() => {
     return selectedAgentId || localStorage.getItem('agent_fleet_active_agent') || 'claude'
   })
@@ -486,16 +488,41 @@ export default function AgentsView({
                               <div className="ts-version-line">
                                 {isBehind && (
                                   <UpgradeIcon
-                                    title={t('version.behind', { version: v?.latest_available || '' })}
+                                    upgrading={isUpgrading(i.id)}
+                                    title={
+                                      isUpgrading(i.id)
+                                        ? (language === 'zh' ? '正在后台升级中... (点击查看任务中心)' : 'Upgrading in background... (click to view tasks)')
+                                        : (language === 'zh'
+                                            ? `${t('version.behind', { version: v?.latest_available || '' })} (点击直接升级，Alt+点击查看命令)`
+                                            : `${t('version.behind', { version: v?.latest_available || '' })} (Click to upgrade directly, Alt+click for manual command)`)
+                                    }
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      setUpgradeTarget({
+                                      if (isUpgrading(i.id)) {
+                                        openTasksDrawer()
+                                        return
+                                      }
+                                      if (e.altKey || e.shiftKey) {
+                                        setUpgradeTarget({
+                                          agent: data.agent,
+                                          currentVersion: i.version,
+                                          latestVersion: v?.latest_available,
+                                          host: i.host,
+                                          runtimeKey: i.runtime_key,
+                                          osName: i.os_name,
+                                          packageName: v?.package,
+                                          releaseUrl: data.release_url,
+                                          installationId: i.id,
+                                          runtimeId: i.runtime_id
+                                        })
+                                        return
+                                      }
+                                      triggerUpgrade(i.id, {
                                         agent: data.agent,
+                                        host: i.host,
                                         currentVersion: i.version,
                                         latestVersion: v?.latest_available,
-                                        host: i.host,
                                         runtimeKey: i.runtime_key,
-                                        osName: i.os_name,
                                         packageName: v?.package,
                                         releaseUrl: data.release_url,
                                         installationId: i.id,
@@ -531,30 +558,52 @@ export default function AgentsView({
                                 {isBehind && (
                                   <button
                                     className="btn small"
-                                    onClick={() =>
-                                      setUpgradeTarget({
+                                    onClick={(e) => {
+                                      if (isUpgrading(i.id)) {
+                                        openTasksDrawer()
+                                        return
+                                      }
+                                      if (e.altKey || e.shiftKey) {
+                                        setUpgradeTarget({
+                                          agent: data.agent,
+                                          currentVersion: i.version,
+                                          latestVersion: v?.latest_available,
+                                          host: i.host,
+                                          runtimeKey: i.runtime_key,
+                                          osName: i.os_name,
+                                          packageName: v?.package,
+                                          releaseUrl: data.release_url,
+                                          installationId: i.id,
+                                          runtimeId: i.runtime_id
+                                        })
+                                        return
+                                      }
+                                      triggerUpgrade(i.id, {
                                         agent: data.agent,
+                                        host: i.host,
                                         currentVersion: i.version,
                                         latestVersion: v?.latest_available,
-                                        host: i.host,
                                         runtimeKey: i.runtime_key,
-                                        osName: i.os_name,
                                         packageName: v?.package,
                                         releaseUrl: data.release_url,
                                         installationId: i.id,
                                         runtimeId: i.runtime_id
                                       })
-                                    }
+                                    }}
                                     style={{
                                       display: 'inline-flex',
                                       alignItems: 'center',
                                       gap: 4,
-                                      borderColor: 'rgba(210, 153, 34, 0.45)',
-                                      color: '#e3b341'
+                                      borderColor: isUpgrading(i.id) ? 'rgba(76, 154, 255, 0.45)' : 'rgba(210, 153, 34, 0.45)',
+                                      color: isUpgrading(i.id) ? 'var(--accent)' : '#e3b341'
                                     }}
                                   >
-                                    <UpgradeIcon size={12} />
-                                    <span>{language === 'zh' ? '升级' : 'Upgrade'}</span>
+                                    <UpgradeIcon size={12} upgrading={isUpgrading(i.id)} />
+                                    <span>
+                                      {isUpgrading(i.id)
+                                        ? (language === 'zh' ? '更新中...' : 'Updating...')
+                                        : (language === 'zh' ? '升级' : 'Upgrade')}
+                                    </span>
                                   </button>
                                 )}
                                 <button

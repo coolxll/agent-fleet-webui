@@ -6,11 +6,27 @@ import Matrix from './views/Matrix'
 import SettingsModal from './components/SettingsModal'
 import TasksDrawer from './components/TasksDrawer'
 import { useI18n } from './i18n'
+import { UpgradesProvider, useUpgrades } from './context/UpgradesContext'
 
 type ViewTab = 'machines' | 'agents' | 'matrix'
 
-export default function App() {
+function AppShell({
+  toast,
+  setToast
+}: {
+  toast: string | null
+  setToast: (msg: string | null) => void
+}) {
   const { t, language } = useI18n()
+  const {
+    activeCount,
+    tasksDrawerOpen,
+    setTasksDrawerOpen,
+    openTasksDrawer,
+    refreshSignal,
+    triggerRefresh
+  } = useUpgrades()
+
   const [tab, setTab] = useState<ViewTab>(() => {
     return (localStorage.getItem('agent_fleet_active_tab') as ViewTab) || 'machines'
   })
@@ -22,11 +38,7 @@ export default function App() {
     failed: number
   } | null>(null)
   const [busy, setBusy] = useState(false)
-  const [toast, setToast] = useState<string | null>(null)
   const [showSettings, setShowSettings] = useState(false)
-  const [showTasksDrawer, setShowTasksDrawer] = useState(false)
-  const [activeUpgradeCount, setActiveUpgradeCount] = useState(0)
-  const [refreshKey, setRefreshKey] = useState(0)
 
   const handleTabSwitch = (nextTab: ViewTab) => {
     setTab(nextTab)
@@ -53,7 +65,7 @@ export default function App() {
         if (run.status !== 'running') {
           setRunId(null)
           setProgress(null)
-          setRefreshKey((k) => k + 1)
+          triggerRefresh()
           setToast(t('toast.scanFinished', { ok: run.succeeded, failed: run.failed }))
         }
       } catch {
@@ -66,7 +78,7 @@ export default function App() {
       alive = false
       clearInterval(tInterval)
     }
-  }, [runId, t])
+  }, [runId, t, triggerRefresh, setToast])
 
   const scanAll = useCallback(async () => {
     setBusy(true)
@@ -79,55 +91,13 @@ export default function App() {
     } finally {
       setBusy(false)
     }
-  }, [t])
+  }, [t, setToast])
 
   useEffect(() => {
     if (!toast) return
     const timer = setTimeout(() => setToast(null), 4000)
     return () => clearTimeout(timer)
-  }, [toast])
-
-  // Poll background upgrade tasks to maintain active count and trigger auto-refresh on completion
-  useEffect(() => {
-    let alive = true
-    let prevActiveCount = 0
-
-    const checkUpgrades = async () => {
-      try {
-        const res = await api.listUpgradeTasks()
-        if (!alive) return
-        const active = (res.tasks || []).filter(
-          (u) => u.status === 'running' || u.status === 'pending'
-        )
-        setActiveUpgradeCount(active.length)
-
-        // If an active upgrade just finished, refresh data automatically
-        if (prevActiveCount > 0 && active.length < prevActiveCount) {
-          setRefreshKey((k) => k + 1)
-          const justFinished = (res.tasks || []).find(
-            (u) => u.status === 'completed' && u.ok
-          )
-          if (justFinished) {
-            setToast(
-              language === 'zh'
-                ? `🎉 ${justFinished.agent} (${justFinished.host}) 升级成功！`
-                : `🎉 Upgrade succeeded for ${justFinished.agent} (${justFinished.host})!`
-            )
-          }
-        }
-        prevActiveCount = active.length
-      } catch {
-        /* ignore */
-      }
-    }
-
-    checkUpgrades()
-    const timer = setInterval(checkUpgrades, 2500)
-    return () => {
-      alive = false
-      clearInterval(timer)
-    }
-  }, [language])
+  }, [toast, setToast])
 
   return (
     <div>
@@ -183,15 +153,15 @@ export default function App() {
 
           {/* Tasks button */}
           <button
-            className={'btn small ' + (activeUpgradeCount > 0 ? 'primary ' : '')}
-            onClick={() => setShowTasksDrawer(true)}
+            className={'btn small ' + (activeCount > 0 ? 'primary ' : '')}
+            onClick={openTasksDrawer}
             title={language === 'zh' ? '查看后台任务中心' : 'Task Center'}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
           >
-            {activeUpgradeCount > 0 ? (
+            {activeCount > 0 ? (
               <>
                 <span className="spinner small" />
-                <span>{language === 'zh' ? `任务 (${activeUpgradeCount})` : `Tasks (${activeUpgradeCount})`}</span>
+                <span>{language === 'zh' ? `任务 (${activeCount})` : `Tasks (${activeCount})`}</span>
               </>
             ) : (
               <>
@@ -231,22 +201,37 @@ export default function App() {
       )}
 
       <main className="container">
-        {tab === 'machines' && <MachinesView refreshSignal={refreshKey} />}
-        {tab === 'agents' && <AgentsView refreshSignal={refreshKey} />}
-        {tab === 'matrix' && <Matrix refreshSignal={refreshKey} />}
+        {tab === 'machines' && <MachinesView refreshSignal={refreshSignal} />}
+        {tab === 'agents' && <AgentsView refreshSignal={refreshSignal} />}
+        {tab === 'matrix' && <Matrix refreshSignal={refreshSignal} />}
       </main>
 
       <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
-        onDataChanged={() => setRefreshKey((k) => k + 1)}
+        onDataChanged={triggerRefresh}
       />
 
       <TasksDrawer
-        isOpen={showTasksDrawer}
-        onClose={() => setShowTasksDrawer(false)}
-        onDataChanged={() => setRefreshKey((k) => k + 1)}
+        isOpen={tasksDrawerOpen}
+        onClose={() => setTasksDrawerOpen(false)}
+        onDataChanged={triggerRefresh}
       />
     </div>
   )
 }
+
+export default function App() {
+  const [toast, setToast] = useState<string | null>(null)
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg)
+  }, [])
+
+  return (
+    <UpgradesProvider onToast={showToast}>
+      <AppShell toast={toast} setToast={setToast} />
+    </UpgradesProvider>
+  )
+}
+

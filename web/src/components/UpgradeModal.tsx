@@ -26,30 +26,46 @@ type Props = {
 export function UpgradeIcon({
   size = 14,
   title,
+  upgrading = false,
   onClick
 }: {
   size?: number
   title?: string
+  upgrading?: boolean
   onClick?: (e: React.MouseEvent) => void
 }) {
   return (
     <span
-      className="tailscale-upgrade-btn"
-      title={title || 'Update available'}
+      className={'tailscale-upgrade-btn ' + (upgrading ? 'upgrading' : '')}
+      title={title || (upgrading ? 'Upgrading in background...' : 'Update available')}
       onClick={onClick}
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
     >
-      <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
-        <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.2" />
-        <path
-          d="M8 11.5V4.5M8 4.5L5 7.5M8 4.5L11 7.5"
-          stroke="currentColor"
-          strokeWidth="1.3"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
+      {upgrading ? (
+        <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className="spin-icon">
+          <circle
+            cx="8"
+            cy="8"
+            r="6"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeDasharray="22 10"
+            strokeLinecap="round"
+          />
+        </svg>
+      ) : (
+        <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.2" />
+          <path
+            d="M8 11.5V4.5M8 4.5L5 7.5M8 4.5L11 7.5"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
     </span>
   )
 }
