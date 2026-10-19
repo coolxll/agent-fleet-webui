@@ -654,6 +654,45 @@ def list_upgrades_route(limit: int = Query(30)):
     return {"tasks": list_upgrade_tasks(limit)}
 
 
+class BatchUpgradeRequest(BaseModel):
+    installation_ids: list[str]
+
+
+@router.post("/upgrades/batch")
+def batch_upgrade_route(payload: BatchUpgradeRequest):
+    from agent_fleet.services.action_service import start_batch_upgrade
+
+    tasks = start_batch_upgrade(payload.installation_ids)
+    return {"tasks": tasks, "queued": len(tasks)}
+
+
+@router.post("/machines/{host_id}/upgrade-all")
+def upgrade_machine_all_route(host_id: str):
+    from agent_fleet.services.action_service import find_outdated_installations, start_batch_upgrade
+
+    outdated_ids = find_outdated_installations(host_id=host_id)
+    tasks = start_batch_upgrade(outdated_ids)
+    return {"tasks": tasks, "queued": len(tasks), "host_id": host_id}
+
+
+@router.post("/agents/{agent_id}/upgrade-all")
+def upgrade_agent_all_route(agent_id: str):
+    from agent_fleet.services.action_service import find_outdated_installations, start_batch_upgrade
+
+    outdated_ids = find_outdated_installations(agent_id=agent_id)
+    tasks = start_batch_upgrade(outdated_ids)
+    return {"tasks": tasks, "queued": len(tasks), "agent_id": agent_id}
+
+
+@router.post("/fleet/upgrade-all")
+def upgrade_fleet_all_route():
+    from agent_fleet.services.action_service import find_outdated_installations, start_batch_upgrade
+
+    outdated_ids = find_outdated_installations()
+    tasks = start_batch_upgrade(outdated_ids)
+    return {"tasks": tasks, "queued": len(tasks)}
+
+
 @router.get("/snapshots")
 def list_snapshots(runtime_id: str = Query(None), limit: int = Query(50)):
     with session_scope() as s:

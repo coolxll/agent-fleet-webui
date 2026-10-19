@@ -403,7 +403,17 @@ export const api = {
   getActiveUpgradeForInstallation: (instId: string) =>
     get<{ active_task: UpgradeTask | null }>('/installations/' + instId + '/upgrade/active'),
   listUpgradeTasks: () =>
-    get<{ tasks: UpgradeTask[] }>('/upgrades')
+    get<{ tasks: UpgradeTask[] }>('/upgrades'),
+  upgradeBatch: (installationIds: string[]) =>
+    post<{ tasks: UpgradeTask[]; queued: number }>('/upgrades/batch', {
+      installation_ids: installationIds
+    }),
+  upgradeMachineAll: (hostId: string) =>
+    post<{ tasks: UpgradeTask[]; queued: number; host_id: string }>('/machines/' + hostId + '/upgrade-all'),
+  upgradeAgentAll: (agentId: string) =>
+    post<{ tasks: UpgradeTask[]; queued: number; agent_id: string }>('/agents/' + agentId + '/upgrade-all'),
+  upgradeFleetAll: () =>
+    post<{ tasks: UpgradeTask[]; queued: number }>('/fleet/upgrade-all')
 }
 
 export type UpgradeTask = {

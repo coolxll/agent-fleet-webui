@@ -27,7 +27,13 @@ export default function AgentsView({
   onSelectAgent?: (id: string | null) => void
 } = {}) {
   const { t, language } = useI18n()
-  const { isUpgrading, triggerUpgrade, openTasksDrawer } = useUpgrades()
+  const {
+    isUpgrading,
+    triggerUpgrade,
+    triggerBatchUpgrade,
+    triggerAgentUpgradeAll,
+    openTasksDrawer
+  } = useUpgrades()
   const [activeAgent, setActiveAgent] = useState<string>(() => {
     return selectedAgentId || localStorage.getItem('agent_fleet_active_agent') || 'claude'
   })
@@ -304,10 +310,35 @@ export default function AgentsView({
 
               <div className="card">
                 <div className="label">{t('agents.upToDate')}</div>
-                <div className="value" style={{ color: 'var(--ok)', fontSize: 20 }}>
-                  {v?.up_to_date || 0}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div className="value" style={{ color: 'var(--ok)', fontSize: 20 }}>
+                    {v?.up_to_date || 0}
+                  </div>
+                  {v?.behind > 0 && (
+                    <button
+                      className="btn small"
+                      onClick={() => triggerAgentUpgradeAll(data.agent)}
+                      style={{
+                        borderColor: 'rgba(210, 153, 34, 0.5)',
+                        color: '#e3b341',
+                        fontSize: 11,
+                        padding: '2px 8px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4
+                      }}
+                      title={language === 'zh' ? `一键升级全机队所有落后的 ${data.name}` : `Upgrade all outdated ${data.name} across fleet`}
+                    >
+                      <span>⚡</span>
+                      <span>
+                        {language === 'zh'
+                          ? `一键更新全机队 (${v.behind})`
+                          : `Upgrade All (${v.behind})`}
+                      </span>
+                    </button>
+                  )}
                 </div>
-                <div className="hint">
+                <div className="hint" style={{ marginTop: 4 }}>
                   {v?.behind ? (
                     <span style={{ color: 'var(--warn)' }}>{t('agents.behind', { count: v.behind })}</span>
                   ) : (
@@ -422,9 +453,52 @@ export default function AgentsView({
             {/* Installations Table */}
             <div className="panel">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', borderBottom: '1px solid var(--border)' }}>
-                <span style={{ fontWeight: 600, fontSize: 13, textTransform: 'uppercase', color: 'var(--muted)', letterSpacing: 0.5 }}>
-                  {t('agents.tableTitle')}
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontWeight: 600, fontSize: 13, textTransform: 'uppercase', color: 'var(--muted)', letterSpacing: 0.5 }}>
+                    {t('agents.tableTitle')}
+                  </span>
+                  {selectedInsts.length > 0 && (
+                    <button
+                      className="btn small primary"
+                      onClick={() => triggerBatchUpgrade(selectedInsts)}
+                      style={{ fontSize: 11.5, padding: '2px 8px', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                    >
+                      <span>⚡</span>
+                      <span>
+                        {language === 'zh'
+                          ? `批量更新选中项 (${selectedInsts.length})`
+                          : `Upgrade Selected (${selectedInsts.length})`}
+                      </span>
+                    </button>
+                  )}
+                  {v?.behind > 1 && selectedInsts.length === 0 && (
+                    <button
+                      className="btn small"
+                      onClick={() => {
+                        const behindIds = data.installations
+                          .filter((i: any) => i.version_state === 'behind')
+                          .map((i: any) => i.id)
+                        triggerBatchUpgrade(behindIds)
+                      }}
+                      style={{
+                        borderColor: 'rgba(210, 153, 34, 0.45)',
+                        color: '#e3b341',
+                        fontSize: 11.5,
+                        padding: '2px 8px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4
+                      }}
+                    >
+                      <span>⚡</span>
+                      <span>
+                        {language === 'zh'
+                          ? `批量更新落后项 (${v.behind})`
+                          : `Upgrade All Behind (${v.behind})`}
+                      </span>
+                    </button>
+                  )}
+                </div>
                 <span className="small muted">
                   {language === 'zh'
                     ? '勾选 2 台主机即可就地对比字段级配置差异'

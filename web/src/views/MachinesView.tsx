@@ -25,7 +25,13 @@ export default function MachinesView({
   onOpenMachine?: (id: string, name?: string) => void
 } = {}) {
   const { t, language } = useI18n()
-  const { isUpgrading, triggerUpgrade, openTasksDrawer } = useUpgrades()
+  const {
+    isUpgrading,
+    triggerUpgrade,
+    triggerMachineUpgradeAll,
+    triggerFleetUpgradeAll,
+    openTasksDrawer
+  } = useUpgrades()
   const [hosts, setHosts] = useState<any[]>([])
   const [selectedHostId, setSelectedHostId] = useState<string | null>(() => {
     return initialHostId || localStorage.getItem('agent_fleet_selected_host') || null
@@ -240,6 +246,18 @@ export default function MachinesView({
   const installedAgents = currentInstallations.filter((i: any) => i.detected)
   const uninstalledAgents = currentInstallations.filter((i: any) => !i.detected)
 
+  const totalBehindCount = useMemo(() => {
+    let count = 0
+    for (const h of hosts) {
+      for (const rt of h.runtimes || []) {
+        for (const ad of rt.agent_details || []) {
+          if (ad.version_state === 'behind') count++
+        }
+      }
+    }
+    return count
+  }, [hosts])
+
   if (error) return <div className="err">{error}</div>
 
   return (
@@ -269,6 +287,28 @@ export default function MachinesView({
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {totalBehindCount > 0 && (
+            <button
+              className="btn small"
+              onClick={triggerFleetUpgradeAll}
+              style={{
+                borderColor: 'rgba(210, 153, 34, 0.5)',
+                color: '#e3b341',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5
+              }}
+              title={language === 'zh' ? '一键更新全机队所有落后的 Agent' : 'Upgrade all outdated agents across fleet'}
+            >
+              <span>⚡</span>
+              <span>
+                {language === 'zh'
+                  ? `一键更新全机队 (${totalBehindCount})`
+                  : `Upgrade All Fleet (${totalBehindCount})`}
+              </span>
+            </button>
+          )}
+
           <input
             type="text"
             placeholder={language === 'zh' ? '搜索机器...' : 'Filter machines...'}
@@ -471,9 +511,34 @@ export default function MachinesView({
                     <span style={{ fontWeight: 600, fontSize: 13, textTransform: 'uppercase', color: 'var(--muted)', letterSpacing: 0.5 }}>
                       {language === 'zh' ? '已安装 AGENT (点击即刻切换下方配置)' : 'INSTALLED AGENTS'}
                     </span>
-                    <span className="small muted">
-                      {installedAgents.length} {language === 'zh' ? '个已检出' : 'installed'}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {installedAgents.some((i: any) => i.version_state === 'behind') && hostDetail && (
+                        <button
+                          className="btn small"
+                          onClick={() => triggerMachineUpgradeAll(selectedHostId!, hostDetail.name)}
+                          style={{
+                            borderColor: 'rgba(210, 153, 34, 0.5)',
+                            color: '#e3b341',
+                            padding: '2px 8px',
+                            fontSize: 11.5,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }}
+                          title={language === 'zh' ? '一键更新此机器上的所有落后 Agent' : 'Upgrade all behind agents on this machine'}
+                        >
+                          <span>⚡</span>
+                          <span>
+                            {language === 'zh'
+                              ? `一键更新本机 (${installedAgents.filter((i: any) => i.version_state === 'behind').length})`
+                              : `Upgrade All Behind (${installedAgents.filter((i: any) => i.version_state === 'behind').length})`}
+                          </span>
+                        </button>
+                      )}
+                      <span className="small muted">
+                        {installedAgents.length} {language === 'zh' ? '个已检出' : 'installed'}
+                      </span>
+                    </div>
                   </div>
 
                   {installedAgents.length === 0 ? (
@@ -773,6 +838,17 @@ export default function MachinesView({
 
                       <td style={{ textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                          {agentDetails.some((ad: any) => ad.version_state === 'behind') && (
+                            <button
+                              className="btn small"
+                              onClick={() => triggerMachineUpgradeAll(h.id, h.name)}
+                              style={{ borderColor: 'rgba(210, 153, 34, 0.45)', color: '#e3b341', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                              title={language === 'zh' ? '一键更新此机器上的所有落后 Agent' : 'Upgrade all behind on this machine'}
+                            >
+                              <span>⚡</span>
+                              <span>{language === 'zh' ? '一键更新' : 'Upgrade All'}</span>
+                            </button>
+                          )}
                           <button
                             className="btn small"
                             onClick={(e) => handleRescanHost(e, h)}

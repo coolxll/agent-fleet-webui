@@ -372,3 +372,57 @@ async def _run_background_upgrade(
             "scan_refreshed": scan_ok,
             "finished_at": time.time(),
         })
+
+
+def find_outdated_installations(
+    *,
+    host_id: str | None = None,
+    agent_id: str | None = None,
+) -> list[str]:
+    """Find installation IDs that are currently detected and behind the latest available version."""
+    from sqlalchemy import select
+    from agent_fleet.services.updates import latest_available, version_state
+
+    with session_scope() as s:
+        stmt = (
+            select(models.AgentInstallation)
+            .join(models.Runtime)
+            .where(
+                models.AgentInstallation.detected.is_(True),
+                models.Runtime.enabled.is_(True),
+            )
+        )
+        if host_id:
+            stmt = stmt.where(models.Runtime.host_id == host_id)
+        if agent_id:
+            stmt = stmt.where(models.AgentInstallation.agent_id == agent_id)
+
+        insts = list(s.scalars(stmt).all())
+
+        outdated_ids: list[str] = []
+        for inst in insts:
+            if inst.agent_id not in UPGRADE_RULES:
+                continue
+            update_info = latest_available(inst.agent_id)
+            latest = update_info.get("latest_available")
+            if latest and version_state(inst.version, latest) == "behind":
+                outdated_ids.append(inst.id)
+
+        return outdated_ids
+
+
+def start_batch_upgrade(inst_ids: list[str]) -> list[dict[str, Any]]:
+    """Enqueue a batch of installations for background upgrade."""
+    tasks: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for inst_id in inst_ids:
+        if not inst_id or inst_id in seen:
+            continue
+        seen.add(inst_id)
+        try:
+            task = start_upgrade_task(inst_id)
+            tasks.append(task)
+        except Exception:
+            # Skip invalid or unsupported entries without halting batch
+            pass
+    return tasks

@@ -50,3 +50,15 @@ def test_build_upgrade_script_injection_rejected():
 
 def test_get_upgrade_task_unknown():
     assert get_upgrade_task("nonexistent") is None
+
+
+def test_start_batch_upgrade_empty_and_dedup():
+    from agent_fleet.services.action_service import start_batch_upgrade
+
+    # Empty list
+    assert start_batch_upgrade([]) == []
+
+    # Nonexistent IDs skipped gracefully without crashing
+    tasks = start_batch_upgrade(["fake_1", "fake_2", "fake_1"])
+    assert tasks == []
+

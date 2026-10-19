@@ -20,6 +20,10 @@ type UpgradesContextType = {
   activeCount: number
   isUpgrading: (instId?: string | null) => boolean
   triggerUpgrade: (instId: string, meta?: UpgradeTargetMeta) => Promise<UpgradeTask | void>
+  triggerBatchUpgrade: (instIds: string[], label?: string) => Promise<void>
+  triggerMachineUpgradeAll: (hostId: string, hostName?: string) => Promise<void>
+  triggerAgentUpgradeAll: (agentId: string) => Promise<void>
+  triggerFleetUpgradeAll: () => Promise<void>
   tasksDrawerOpen: boolean
   setTasksDrawerOpen: (open: boolean) => void
   openTasksDrawer: () => void
@@ -157,6 +161,155 @@ export function UpgradesProvider({
     [isUpgrading, openTasksDrawer, onToast, language, checkTasks]
   )
 
+  const triggerBatchUpgrade = useCallback(
+    async (instIds: string[], _label?: string) => {
+      const candidates = instIds.filter((id) => !isUpgrading(id))
+      if (candidates.length === 0) {
+        if (onToast) {
+          onToast(
+            language === 'zh'
+              ? '选中的安装项已在升级中或无待升级项'
+              : 'Selected installations are already upgrading'
+          )
+        }
+        return
+      }
+
+      setOptimisticIds((prev) => {
+        const next = new Set(prev)
+        candidates.forEach((id) => next.add(id))
+        return next
+      })
+
+      try {
+        const res = await api.upgradeBatch(candidates)
+        checkTasks()
+        if (onToast) {
+          onToast(
+            language === 'zh'
+              ? `⚡ 已提交 ${res.queued} 个安装项的批量升级任务，后台排队执行中...`
+              : `⚡ Queued ${res.queued} upgrade task(s) in background`
+          )
+        }
+      } catch (e: any) {
+        setOptimisticIds((prev) => {
+          const next = new Set(prev)
+          candidates.forEach((id) => next.delete(id))
+          return next
+        })
+        if (onToast) {
+          onToast(`❌ 批量升级失败: ${String(e?.message || e)}`)
+        }
+      }
+    },
+    [isUpgrading, onToast, language, checkTasks]
+  )
+
+  const triggerMachineUpgradeAll = useCallback(
+    async (hostId: string, hostName?: string) => {
+      try {
+        const res = await api.upgradeMachineAll(hostId)
+        if (res.queued > 0) {
+          setOptimisticIds((prev) => {
+            const next = new Set(prev)
+            for (const task of res.tasks || []) {
+              if (task.installation_id) next.add(task.installation_id)
+            }
+            return next
+          })
+          checkTasks()
+          if (onToast) {
+            onToast(
+              language === 'zh'
+                ? `⚡ 已开始升级 ${hostName || hostId} 上的 ${res.queued} 个落后项`
+                : `⚡ Started upgrading ${res.queued} outdated item(s) on ${hostName || hostId}`
+            )
+          }
+        } else {
+          if (onToast) {
+            onToast(
+              language === 'zh'
+                ? `🎉 ${hostName || hostId} 上所有 Agent 均已是最新版`
+                : `🎉 All agents on ${hostName || hostId} are already up to date`
+            )
+          }
+        }
+      } catch (e: any) {
+        if (onToast) onToast(`❌ 一键升级主机失败: ${String(e?.message || e)}`)
+      }
+    },
+    [onToast, language, checkTasks]
+  )
+
+  const triggerAgentUpgradeAll = useCallback(
+    async (agentId: string) => {
+      try {
+        const res = await api.upgradeAgentAll(agentId)
+        if (res.queued > 0) {
+          setOptimisticIds((prev) => {
+            const next = new Set(prev)
+            for (const task of res.tasks || []) {
+              if (task.installation_id) next.add(task.installation_id)
+            }
+            return next
+          })
+          checkTasks()
+          if (onToast) {
+            onToast(
+              language === 'zh'
+                ? `⚡ 已提交全机队 ${agentId} 的一键升级任务 (${res.queued} 处)`
+                : `⚡ Started fleet-wide upgrade for ${agentId} (${res.queued} installations)`
+            )
+          }
+        } else {
+          if (onToast) {
+            onToast(
+              language === 'zh'
+                ? `🎉 全机队 ${agentId} 均已是最新版`
+                : `🎉 All ${agentId} fleet installations are already up to date`
+            )
+          }
+        }
+      } catch (e: any) {
+        if (onToast) onToast(`❌ 一键升级 Agent 失败: ${String(e?.message || e)}`)
+      }
+    },
+    [onToast, language, checkTasks]
+  )
+
+  const triggerFleetUpgradeAll = useCallback(async () => {
+    try {
+      const res = await api.upgradeFleetAll()
+      if (res.queued > 0) {
+        setOptimisticIds((prev) => {
+          const next = new Set(prev)
+          for (const task of res.tasks || []) {
+            if (task.installation_id) next.add(task.installation_id)
+          }
+          return next
+        })
+        checkTasks()
+        if (onToast) {
+          onToast(
+            language === 'zh'
+              ? `⚡ 已提交全机队所有落后项的一键批量升级 (${res.queued} 个任务)`
+              : `⚡ Queued fleet-wide upgrade for all ${res.queued} outdated installation(s)`
+          )
+        }
+      } else {
+        if (onToast) {
+          onToast(
+            language === 'zh'
+              ? '🎉 全机队所有 Agent 均已是最新版'
+              : '🎉 All agents across fleet are already up to date'
+          )
+        }
+      }
+    } catch (e: any) {
+      if (onToast) onToast(`❌ 一键全机队升级失败: ${String(e?.message || e)}`)
+    }
+  }, [onToast, language, checkTasks])
+
   return (
     <UpgradesContext.Provider
       value={{
@@ -165,6 +318,10 @@ export function UpgradesProvider({
         activeCount,
         isUpgrading,
         triggerUpgrade,
+        triggerBatchUpgrade,
+        triggerMachineUpgradeAll,
+        triggerAgentUpgradeAll,
+        triggerFleetUpgradeAll,
         tasksDrawerOpen,
         setTasksDrawerOpen,
         openTasksDrawer,
