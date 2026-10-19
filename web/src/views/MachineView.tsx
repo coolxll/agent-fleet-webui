@@ -9,7 +9,7 @@ export default function MachineView({
   onOpenAgent
 }: {
   hostId: string
-  onOpenAgent: (id: string) => void
+  onOpenAgent: (id: string, agentName?: string) => void
 }) {
   const { t } = useI18n()
   const [data, setData] = useState<any>(null)
@@ -36,6 +36,8 @@ export default function MachineView({
   if (error) return <div className="err">{error}</div>
   if (!data) return <div className="muted">{t('common.loading')}</div>
 
+  const isSingleNative = data.runtimes.length === 1 && data.runtimes[0].key === 'native'
+
   return (
     <div>
       <div className="cards">
@@ -47,10 +49,12 @@ export default function MachineView({
           <div className="hint">{data.hostname || ''}</div>
         </div>
         <div className="card">
-          <div className="label">{t('machine.runtimes')}</div>
-          <div className="value">{data.runtimes.length}</div>
+          <div className="label">{t('machine.platform')}</div>
+          <div className="value" style={{ fontSize: 18 }}>
+            {data.runtimes.map((r: any) => r.os_name || r.kind).filter(Boolean)[0] || t('common.unknown')}
+          </div>
           <div className="hint">
-            {data.runtimes.map((r: any) => r.kind).join(', ')}
+            {data.runtimes.map((r: any) => (r.kind === 'wsl' ? 'WSL' : r.kind)).join(', ')}
           </div>
         </div>
         <div className="card">
@@ -78,8 +82,13 @@ export default function MachineView({
       {data.runtimes.map((rt: any) => (
         <div className="panel" key={rt.id}>
           <h2>
-            <span className="mono">{rt.key}</span>
-            <span className="tag">{rt.kind}</span>
+            <span>
+              {isSingleNative
+                ? t('machine.installedAgents')
+                : rt.kind === 'wsl'
+                  ? 'WSL'
+                  : t('machine.nativeEnvironment')}
+            </span>
             {rt.os_name ? <span className="muted small">{rt.os_name}</span> : null}
             <span
               className={
@@ -96,7 +105,7 @@ export default function MachineView({
           </h2>
           <div className="body">
             {rt.installations.length === 0 ? (
-              <div className="muted small">{t('machine.noAgentsOnRuntime')}</div>
+              <div className="muted small">{t('machine.noAgentsOnMachine')}</div>
             ) : (
               <div className="agent-cards">
                 {rt.installations.map((i: any) => {
@@ -105,7 +114,7 @@ export default function MachineView({
                     <div
                       className="agent-card"
                       key={i.id}
-                      onClick={() => onOpenAgent(i.id)}
+                      onClick={() => onOpenAgent(i.id, agentLabel(i.agent))}
                     >
                       <div className="agent-card-top">
                         <AgentIcon agent={i.agent} size={22} />
@@ -132,7 +141,8 @@ export default function MachineView({
                                   host: data.name,
                                   runtimeKey: rt.key,
                                   osName: rt.os_name,
-                                  packageName: i.package
+                                  packageName: i.package,
+                                  releaseUrl: i.release_url
                                 })
                               }}
                             />

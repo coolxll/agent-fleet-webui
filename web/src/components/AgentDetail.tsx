@@ -13,10 +13,12 @@ export const STATUS_TAG: Record<string, string> = {
 
 export default function AgentDetail({
   detail,
-  runtimeName
+  runtimeName,
+  machineName
 }: {
   detail: InstallationDetail
-  runtimeName: string
+  runtimeName?: string
+  machineName?: string
 }) {
   const { t } = useI18n()
   const c = detail.config
@@ -28,6 +30,8 @@ export default function AgentDetail({
     return label !== key ? label : status
   }
 
+  const hostDisplay = machineName || runtimeName || detail.runtime?.host || '?'
+
   return (
     <div>
       <div className="panel">
@@ -36,7 +40,7 @@ export default function AgentDetail({
             <AgentIcon agent={detail.agent} size={18} />
             {agentLabel(detail.agent)}
           </span>{' '}
-          @ {runtimeName}
+          @ {hostDisplay}
         </h2>
         <div className="body">
           <dl className="kv">
@@ -56,9 +60,9 @@ export default function AgentDetail({
             <dd className="mono">{detail.config_dir || '-'}</dd>
             <dt>{t('agentDetail.detectedAt')}</dt>
             <dd className="small">{detail.detected_at || t('common.never')}</dd>
-            <dt>{t('agentDetail.runtime')}</dt>
+            <dt>{t('agentDetail.platform')}</dt>
             <dd className="small">
-              {detail.runtime?.kind || '?'} · {detail.runtime?.os_name || 'unknown OS'} · {t('common.user')}{' '}
+              {detail.runtime?.os_name || detail.runtime?.kind || 'unknown'} · {t('common.user')}{' '}
               {detail.runtime?.collect_user || '?'}
             </dd>
             {detail.error ? (

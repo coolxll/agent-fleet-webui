@@ -4,7 +4,7 @@ import AgentIcon, { agentColor } from '../components/AgentIcon'
 import UpgradeModal, { UpgradeIcon, UpgradeTarget } from '../components/UpgradeModal'
 import { useI18n } from '../i18n'
 
-export default function MachinesView({ onOpenMachine }: { onOpenMachine: (id: string) => void }) {
+export default function MachinesView({ onOpenMachine }: { onOpenMachine: (id: string, name?: string) => void }) {
   const { t } = useI18n()
   const [hosts, setHosts] = useState<any[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -147,7 +147,7 @@ export default function MachinesView({ onOpenMachine }: { onOpenMachine: (id: st
                           <span className={'dot ' + (online ? 'on' : offline ? 'off' : 'unk')} />
                           <span
                             className="ts-machine-name"
-                            onClick={() => onOpenMachine(h.id)}
+                            onClick={() => onOpenMachine(h.id, h.name)}
                             title={h.name}
                           >
                             {h.name}
@@ -202,7 +202,8 @@ export default function MachinesView({ onOpenMachine }: { onOpenMachine: (id: st
                                           host: ad.host,
                                           runtimeKey: ad.rtKey,
                                           osName: ad.osName,
-                                          packageName: ad.package
+                                          packageName: ad.package,
+                                          releaseUrl: ad.release_url
                                         })
                                       }}
                                     />
@@ -247,7 +248,7 @@ export default function MachinesView({ onOpenMachine }: { onOpenMachine: (id: st
                           </button>
                           <button
                             className="btn small"
-                            onClick={() => onOpenMachine(h.id)}
+                            onClick={() => onOpenMachine(h.id, h.name)}
                             title={t('machines.action.view')}
                           >
                             ➔
@@ -273,7 +274,7 @@ export default function MachinesView({ onOpenMachine }: { onOpenMachine: (id: st
             const total = rts.reduce((n: number, r: any) => n + (r.agents_installed || 0), 0)
             const stale = rts.some((r: any) => r.stale)
             return (
-              <div className="machine-card" key={h.id} onClick={() => onOpenMachine(h.id)}>
+              <div className="machine-card" key={h.id} onClick={() => onOpenMachine(h.id, h.name)}>
                 <div className="machine-card-head">
                   <span className={'dot ' + (online ? 'on' : offline ? 'off' : 'unk')} />
                   <span className="machine-name">{h.name}</span>
@@ -299,9 +300,7 @@ export default function MachinesView({ onOpenMachine }: { onOpenMachine: (id: st
                 <div className="machine-foot muted small">
                   {t('machines.footer', {
                     instTotal: total,
-                    instPlural: total === 1 ? '' : 's',
-                    rtCount: rts.length,
-                    rtPlural: rts.length === 1 ? '' : 's'
+                    instPlural: total === 1 ? '' : 's'
                   })}
                 </div>
               </div>

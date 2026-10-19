@@ -129,7 +129,7 @@ export default function Diff() {
                 <option value="">{t('diff.machineAPlaceholder')}</option>
                 {candidates.map((c) => (
                   <option key={c.installation_id} value={c.installation_id}>
-                    {c.host}/{c.runtime_key} ({c.kind}) v{c.version || '?'}
+                    {c.host + (c.runtime_key && c.runtime_key !== 'native' ? ` [${c.runtime_key}]` : '') + (c.version ? ` v${c.version}` : '')}
                   </option>
                 ))}
               </select>
@@ -137,7 +137,7 @@ export default function Diff() {
                 <option value="">{t('diff.machineBPlaceholder')}</option>
                 {candidates.map((c) => (
                   <option key={c.installation_id} value={c.installation_id}>
-                    {c.host}/{c.runtime_key} ({c.kind}) v{c.version || '?'}
+                    {c.host + (c.runtime_key && c.runtime_key !== 'native' ? ` [${c.runtime_key}]` : '') + (c.version ? ` v${c.version}` : '')}
                   </option>
                 ))}
               </select>
@@ -156,12 +156,12 @@ export default function Diff() {
       ) : (
         <>
           <div className="panel">
-            <h2>{t('diff.runtime')}</h2>
+            <h2>{t('diff.machine')}</h2>
             <div className="body filters">
               <select value={runtimeId} onChange={(e) => setRuntimeId(e.target.value)}>
                 {runtimes.map((r) => (
                   <option key={r.id} value={r.id}>
-                    {r.host}/{r.key} ({r.kind})
+                    {r.host + (r.key && r.key !== 'native' ? ` [${r.key}]` : '')}
                   </option>
                 ))}
               </select>
@@ -234,9 +234,7 @@ function ChangesTable({ diff }: { diff: any }) {
         <div className="body muted small">
           {t('diff.identicallyConfigured', {
             hostA: diff.a.runtime.host,
-            keyA: diff.a.runtime.key,
-            hostB: diff.b.runtime.host,
-            keyB: diff.b.runtime.key
+            hostB: diff.b.runtime.host
           })}
         </div>
       </div>
@@ -244,7 +242,9 @@ function ChangesTable({ diff }: { diff: any }) {
   }
   const label = (side: any) =>
     side.runtime
-      ? side.runtime.host + '/' + side.runtime.key + (side.runtime.collect_user ? ' @ ' + side.runtime.collect_user : '')
+      ? side.runtime.host +
+        (side.runtime.key && side.runtime.key !== 'native' ? ` [${side.runtime.key}]` : '') +
+        (side.runtime.collect_user ? ' @ ' + side.runtime.collect_user : '')
       : side.id
   return (
     <div className="panel">

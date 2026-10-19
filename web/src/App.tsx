@@ -4,6 +4,7 @@ import MachinesView from './views/MachinesView'
 import MachineView from './views/MachineView'
 import AgentsView from './views/AgentsView'
 import AgentDetail from './components/AgentDetail'
+import { agentLabel } from './components/AgentIcon'
 import Matrix from './views/Matrix'
 import Diff from './views/Diff'
 import Overview from './views/Overview'
@@ -11,9 +12,9 @@ import { useI18n } from './i18n'
 
 type Route =
   | { name: 'fleet' }
-  | { name: 'agents' }
-  | { name: 'machine'; hostId: string }
-  | { name: 'agent'; installationId: string }
+  | { name: 'agents'; agentId?: string }
+  | { name: 'machine'; hostId: string; hostName?: string; from?: Route }
+  | { name: 'agent'; installationId: string; agentName?: string; hostName?: string; from?: Route }
   | { name: 'compare' }
   | { name: 'matrix' }
   | { name: 'overview' }
@@ -30,6 +31,7 @@ type ScheduleState = {
 export default function App() {
   const { t, language, toggleLanguage } = useI18n()
   const [route, setRoute] = useState<Route>({ name: 'fleet' })
+  const [history, setHistory] = useState<Route[]>([])
   const [runId, setRunId] = useState<string | null>(null)
   const [progress, setProgress] = useState<{
     done: number
@@ -44,6 +46,44 @@ export default function App() {
 
   // poll an in-flight scan and refresh when it lands
   const [refreshKey, setRefreshKey] = useState(0)
+
+  const navigateTo = useCallback((nextRoute: Route) => {
+    setHistory((prev) => [...prev, route])
+    setRoute(nextRoute)
+  }, [route])
+
+  const switchTab = useCallback((nextRoute: Route) => {
+    setHistory([])
+    setRoute(nextRoute)
+  }, [])
+
+  const goBack = useCallback(() => {
+    if (history.length > 0) {
+      const prev = history[history.length - 1]
+      setHistory((h) => h.slice(0, -1))
+      setRoute(prev)
+    } else {
+      if (route.name === 'agent') {
+        if (route.from) {
+          setRoute(route.from)
+        } else if (route.hostName || (route as any).hostId) {
+          setRoute({ name: 'machine', hostId: (route as any).hostId || route.hostName || '' })
+        } else {
+          setRoute({ name: 'fleet' })
+        }
+      } else if (route.name === 'machine') {
+        if (route.from) {
+          setRoute(route.from)
+        } else {
+          setRoute({ name: 'fleet' })
+        }
+      } else if (route.name === 'agents' && route.agentId) {
+        setRoute({ name: 'agents' })
+      } else {
+        setRoute({ name: 'fleet' })
+      }
+    }
+  }, [history, route])
 
   useEffect(() => {
     fetch('/api/schedule')
@@ -152,7 +192,7 @@ export default function App() {
       URL.revokeObjectURL(url)
       setToast(
         t('toast.exported', {
-          runtimes: data.counts?.runtimes ?? 0,
+          hosts: data.counts?.hosts ?? data.counts?.runtimes ?? 0,
           installations: data.counts?.installations ?? 0
         })
       )
@@ -167,33 +207,97 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [toast])
 
-  const crumbs: { label: string; route?: Route }[] = [{ label: t('nav.machines'), route: { name: 'fleet' } }]
-  if (route.name === 'machine' || route.name === 'agent') {
-    crumbs.push({ label: t('nav.machine'), route: { name: 'machine', hostId: (route as any).hostId } })
+  const isDrilledDown =
+    route.name === 'machine' ||
+    route.name === 'agent' ||
+    (route.name === 'agents' && !!route.agentId)
+  const canGoBack = isDrilledDown || history.length > 0
+
+  const crumbs: { label: string; onClick?: () => void; active?: boolean }[] = []
+
+  if (route.name === 'fleet') {
+    crumbs.push({ label: t('nav.machines'), active: true })
+  } else if (route.name === 'machine') {
+    crumbs.push({ label: t('nav.machines'), onClick: () => switchTab({ name: 'fleet' }) })
+    crumbs.push({ label: route.hostName || route.hostId, active: true })
+  } else if (route.name === 'agents') {
+    if (route.agentId) {
+      crumbs.push({ label: t('nav.agents'), onClick: () => navigateTo({ name: 'agents' }) })
+      crumbs.push({ label: agentLabel(route.agentId), active: true })
+    } else {
+      crumbs.push({ label: t('nav.agents'), active: true })
+    }
+  } else if (route.name === 'agent') {
+    if (route.from?.name === 'agents') {
+      const fromAgent = route.from
+      crumbs.push({ label: t('nav.agents'), onClick: () => switchTab({ name: 'agents' }) })
+      if (fromAgent.agentId) {
+        crumbs.push({
+          label: agentLabel(fromAgent.agentId),
+          onClick: () => navigateTo({ name: 'agents', agentId: fromAgent.agentId })
+        })
+      }
+      crumbs.push({
+        label: (route.agentName ? `${route.agentName} @ ` : '') + (route.hostName || t('nav.agent')),
+        active: true
+      })
+    } else if (route.from?.name === 'matrix') {
+      crumbs.push({ label: t('nav.matrix'), onClick: () => switchTab({ name: 'matrix' }) })
+      crumbs.push({
+        label: (route.agentName ? `${route.agentName} @ ` : '') + (route.hostName || t('nav.agent')),
+        active: true
+      })
+    } else if (route.from?.name === 'machine') {
+      const fromMachine = route.from
+      crumbs.push({ label: t('nav.machines'), onClick: () => switchTab({ name: 'fleet' }) })
+      crumbs.push({
+        label: route.hostName || fromMachine.hostId,
+        onClick: () =>
+          navigateTo({
+            name: 'machine',
+            hostId: fromMachine.hostId,
+            hostName: route.hostName
+          })
+      })
+      crumbs.push({ label: route.agentName || t('nav.agent'), active: true })
+    } else {
+      crumbs.push({ label: t('nav.machines'), onClick: () => switchTab({ name: 'fleet' }) })
+      crumbs.push({
+        label: (route.agentName ? `${route.agentName} @ ` : '') + (route.hostName || t('nav.agent')),
+        active: true
+      })
+    }
+  } else if (route.name === 'overview') {
+    crumbs.push({ label: t('nav.overview'), active: true })
+  } else if (route.name === 'matrix') {
+    crumbs.push({ label: t('nav.matrix'), active: true })
+  } else if (route.name === 'compare') {
+    crumbs.push({ label: t('nav.compare'), active: true })
   }
-  if (route.name === 'agent') {
-    crumbs.push({ label: t('nav.agent') })
-  }
-  if (route.name === 'agents') crumbs.push({ label: t('nav.agents') })
-  if (route.name === 'compare') crumbs.push({ label: t('nav.compare') })
-  if (route.name === 'matrix') crumbs.push({ label: t('nav.matrix') })
-  if (route.name === 'overview') crumbs.push({ label: t('nav.overview') })
 
   return (
     <div>
       <div className="app-header">
         <div className="crumbs">
-          {crumbs.map((c, i) => (
-            <span key={i}>
-              {i > 0 ? <span className="muted"> / </span> : null}
-              <span
-                className={'crumb' + (c.route ? ' link' : '')}
-                onClick={c.route ? () => setRoute(c.route!) : undefined}
-              >
-                {c.label}
+          {canGoBack && (
+            <button className="back-btn" onClick={goBack} title={t('common.back')}>
+              <span style={{ fontSize: 13, lineHeight: 1 }}>←</span>
+              <span>{t('common.back')}</span>
+            </button>
+          )}
+          <div className="crumb-trail">
+            {crumbs.map((c, i) => (
+              <span key={i} className="crumb-segment">
+                {i > 0 && <span className="muted crumb-sep"> / </span>}
+                <span
+                  className={'crumb' + (c.onClick ? ' link' : '') + (c.active ? ' active' : '')}
+                  onClick={c.onClick}
+                >
+                  {c.label}
+                </span>
               </span>
-            </span>
-          ))}
+            ))}
+          </div>
         </div>
         <div className="scan-bar" style={{ marginLeft: 12 }}>
           {progress ? (
@@ -230,26 +334,32 @@ export default function App() {
         </div>
         <div className="tabs">
           <button
+            className={route.name === 'fleet' || route.name === 'machine' ? 'active' : ''}
+            onClick={() => switchTab({ name: 'fleet' })}
+          >
+            {t('nav.machines')}
+          </button>
+          <button
             className={route.name === 'agents' ? 'active' : ''}
-            onClick={() => setRoute({ name: 'agents' })}
+            onClick={() => switchTab({ name: 'agents' })}
           >
             {t('nav.agents')}
           </button>
           <button
             className={route.name === 'overview' ? 'active' : ''}
-            onClick={() => setRoute({ name: 'overview' })}
+            onClick={() => switchTab({ name: 'overview' })}
           >
             {t('nav.overview')}
           </button>
           <button
             className={route.name === 'matrix' ? 'active' : ''}
-            onClick={() => setRoute({ name: 'matrix' })}
+            onClick={() => switchTab({ name: 'matrix' })}
           >
             {t('nav.matrix')}
           </button>
           <button
             className={route.name === 'compare' ? 'active' : ''}
-            onClick={() => setRoute({ name: 'compare' })}
+            onClick={() => switchTab({ name: 'compare' })}
           >
             {t('nav.compare')}
           </button>
@@ -303,24 +413,85 @@ export default function App() {
 
       <div className="container" key={refreshKey}>
         {route.name === 'fleet' ? (
-          <MachinesView onOpenMachine={(hostId) => setRoute({ name: 'machine', hostId })} />
+          <MachinesView
+            onOpenMachine={(hostId, hostName) =>
+              navigateTo({ name: 'machine', hostId, hostName })
+            }
+          />
         ) : null}
-        {route.name === 'agents' ? <AgentsView /> : null}
+        {route.name === 'agents' ? (
+          <AgentsView
+            selectedAgentId={route.agentId}
+            onSelectAgent={(agentId) => {
+              if (agentId) {
+                navigateTo({ name: 'agents', agentId })
+              } else {
+                goBack()
+              }
+            }}
+            onOpenInstallation={(instId, agentName, hostName) =>
+              navigateTo({
+                name: 'agent',
+                installationId: instId,
+                agentName,
+                hostName,
+                from: { name: 'agents', agentId: route.agentId }
+              })
+            }
+          />
+        ) : null}
         {route.name === 'machine' ? (
           <MachineView
             hostId={route.hostId}
-            onOpenAgent={(id) => setRoute({ name: 'agent', installationId: id })}
+            onOpenAgent={(id, agentName) =>
+              navigateTo({
+                name: 'agent',
+                installationId: id,
+                agentName,
+                hostName: route.hostName,
+                from: { name: 'machine', hostId: route.hostId, hostName: route.hostName }
+              })
+            }
           />
         ) : null}
-        {route.name === 'agent' ? <AgentPage installationId={route.installationId} /> : null}
+        {route.name === 'agent' ? (
+          <AgentPage
+            installationId={route.installationId}
+            onLoaded={(info) => {
+              if (!route.agentName || !route.hostName) {
+                setRoute((r) =>
+                  r.name === 'agent'
+                    ? {
+                        ...r,
+                        agentName: r.agentName || info.agentName,
+                        hostName: r.hostName || info.hostName
+                      }
+                    : r
+                )
+              }
+            }}
+          />
+        ) : null}
         {route.name === 'overview' ? (
           <Overview
-            onOpenRuntime={(id) => setRoute({ name: 'machine', hostId: id })}
-            onScanRuntime={scanRuntime}
+            onOpenMachine={(hostId, hostName) =>
+              navigateTo({ name: 'machine', hostId, hostName, from: { name: 'overview' } })
+            }
+            onScanMachine={scanRuntime}
           />
         ) : null}
         {route.name === 'matrix' ? (
-          <Matrix onOpenInstallation={(id) => setRoute({ name: 'agent', installationId: id })} />
+          <Matrix
+            onOpenInstallation={(id, agentName, hostName) =>
+              navigateTo({
+                name: 'agent',
+                installationId: id,
+                agentName,
+                hostName,
+                from: { name: 'matrix' }
+              })
+            }
+          />
         ) : null}
         {route.name === 'compare' ? <Diff /> : null}
       </div>
@@ -328,7 +499,13 @@ export default function App() {
   )
 }
 
-function AgentPage({ installationId }: { installationId: string }) {
+function AgentPage({
+  installationId,
+  onLoaded
+}: {
+  installationId: string
+  onLoaded?: (info: { agentName: string; hostName: string }) => void
+}) {
   const { t } = useI18n()
   const [detail, setDetail] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
@@ -337,7 +514,16 @@ function AgentPage({ installationId }: { installationId: string }) {
     let alive = true
     api
       .installation(installationId)
-      .then((d) => alive && setDetail(d))
+      .then((d) => {
+        if (!alive) return
+        setDetail(d)
+        if (onLoaded && d) {
+          onLoaded({
+            agentName: agentLabel(d.agent),
+            hostName: d.runtime?.host || (d as any).host || ''
+          })
+        }
+      })
       .catch((e: any) => alive && setError(String(e.message || e)))
     return () => {
       alive = false
@@ -347,6 +533,6 @@ function AgentPage({ installationId }: { installationId: string }) {
   if (error) return <div className="err">{error}</div>
   if (!detail) return <div className="muted">{t('common.loading')}</div>
   const rt = detail.runtime || {}
-  const runtimeName = (rt.host || '?') + '/' + (rt.key || '?')
-  return <AgentDetail detail={detail} runtimeName={runtimeName} />
+  const hostLabel = (rt.host || (detail as any).host || '?') + (rt.kind === 'wsl' ? ' [WSL]' : '')
+  return <AgentDetail detail={detail} machineName={hostLabel} />
 }

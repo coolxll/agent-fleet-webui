@@ -4,11 +4,25 @@ import AgentIcon from '../components/AgentIcon'
 import UpgradeModal, { UpgradeIcon, UpgradeTarget } from '../components/UpgradeModal'
 import { useI18n } from '../i18n'
 
-export default function AgentsView() {
+export default function AgentsView({
+  selectedAgentId,
+  onSelectAgent,
+  onOpenInstallation
+}: {
+  selectedAgentId?: string
+  onSelectAgent?: (id: string | null) => void
+  onOpenInstallation?: (id: string, agentName?: string, hostName?: string) => void
+} = {}) {
   const { t } = useI18n()
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([])
   const [counts, setCounts] = useState<Record<string, number>>({})
-  const [selected, setSelected] = useState<string | null>(null)
+  const [internalSelected, setInternalSelected] = useState<string | null>(null)
+
+  const selected = selectedAgentId !== undefined ? selectedAgentId : internalSelected
+  const setSelected = (id: string | null) => {
+    setInternalSelected(id)
+    onSelectAgent?.(id)
+  }
 
   useEffect(() => {
     let alive = true
@@ -23,7 +37,13 @@ export default function AgentsView() {
   }, [])
 
   if (selected) {
-    return <AgentFleet agentId={selected} onBack={() => setSelected(null)} />
+    return (
+      <AgentFleet
+        agentId={selected}
+        onBack={() => setSelected(null)}
+        onOpenInstallation={onOpenInstallation}
+      />
+    )
   }
 
   return (
@@ -50,7 +70,15 @@ export default function AgentsView() {
   )
 }
 
-function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }) {
+function AgentFleet({
+  agentId,
+  onBack,
+  onOpenInstallation
+}: {
+  agentId: string
+  onBack: () => void
+  onOpenInstallation?: (id: string, agentName?: string, hostName?: string) => void
+}) {
   const { t } = useI18n()
   const [data, setData] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
@@ -93,15 +121,28 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
         </div>
         <div className="card">
           <div className="label">
-            {v.unknown_source ? t('agents.latestVersion') : t('agents.latestOnNpm')}
+            {v.unknown_source
+              ? t('agents.latestVersion')
+              : v.source === 'github'
+                ? t('agents.latestOnGithub')
+                : t('agents.latestOnNpm')}
           </div>
           <div className="value mono" style={{ fontSize: 18 }}>
             {v.latest_available || <span className="muted">{t('common.unknown')}</span>}
           </div>
           <div className="hint">
-            {v.unknown_source
-              ? t('agents.noRegistry')
-              : t('agents.viaPackage', { pkg: v.package })}
+            {v.unknown_source ? (
+              t('agents.noRegistry')
+            ) : (
+              <a
+                href={data.release_url || undefined}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: 'var(--accent)', textDecoration: 'none' }}
+              >
+                {v.package}
+              </a>
+            )}
           </div>
         </div>
         <div className="card">
@@ -141,11 +182,17 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
                 .slice()
                 .sort((a: any, b: any) => (a.host + a.runtime_key).localeCompare(b.host + b.runtime_key))
                 .map((i: any) => (
-                  <tr key={i.id}>
+                  <tr
+                    key={i.id}
+                    onClick={() => onOpenInstallation?.(i.id, data.name, i.host)}
+                    style={{ cursor: onOpenInstallation ? 'pointer' : undefined }}
+                  >
                     <td>
                       <div className="mono bold" style={{ fontSize: 13.5 }}>
                         {i.host}
-                        <span className="muted" style={{ fontWeight: 400 }}>/{i.runtime_key}</span>
+                        {i.runtime_key && i.runtime_key !== 'native' ? (
+                          <span className="ts-tag" style={{ marginLeft: 6 }}>{i.runtime_key}</span>
+                        ) : null}
                         {i.collect_user ? <span className="muted small"> @{i.collect_user}</span> : null}
                       </div>
                       <div className="ts-os-line">
@@ -158,7 +205,8 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
                         {i.version_state === 'behind' && (
                           <UpgradeIcon
                             title={t('version.behind', { version: v?.latest_available || '' })}
-                            onClick={() =>
+                            onClick={(e) => {
+                              e.stopPropagation()
                               setUpgradeTarget({
                                 agent: data.agent,
                                 currentVersion: i.version,
@@ -166,9 +214,10 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
                                 host: i.host,
                                 runtimeKey: i.runtime_key,
                                 osName: i.os_name,
-                                packageName: v?.package
+                                packageName: v?.package,
+                                releaseUrl: data.release_url
                               })
-                            }
+                            }}
                           />
                         )}
                         <span className="mono bold">{i.version ? `v${i.version}` : '—'}</span>
@@ -192,7 +241,7 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
                         {i.status}
                       </span>
                     </td>
-                    <td style={{ textAlign: 'right' }}>
+                    <td style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
                       {i.version_state === 'behind' ? (
                         <button
                           className="btn small"
@@ -204,7 +253,8 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
                               host: i.host,
                               runtimeKey: i.runtime_key,
                               osName: i.os_name,
-                              packageName: v?.package
+                              packageName: v?.package,
+                              releaseUrl: data.release_url
                             })
                           }
                           style={{

@@ -6,7 +6,7 @@ import { useI18n, type TranslationKey } from '../i18n'
 export default function Matrix({
   onOpenInstallation
 }: {
-  onOpenInstallation: (id: string) => void
+  onOpenInstallation: (id: string, agentName?: string, hostName?: string) => void
 }) {
   const { t } = useI18n()
   const [columns, setColumns] = useState<MatrixColumn[]>([])
@@ -64,7 +64,11 @@ export default function Matrix({
                 {sorted.map((c) => (
                   <th key={c.runtime.id} className="small">
                     <div className="mono">{c.runtime.host}</div>
-                    <div className="muted">{c.runtime.key}</div>
+                    {c.runtime.key && c.runtime.key !== 'native' ? (
+                      <span className="ts-tag" style={{ fontSize: 10, padding: '0 4px', marginTop: 2 }}>
+                        {c.runtime.key}
+                      </span>
+                    ) : null}
                     {c.runtime.stale ? <span className="tag warn">{t('common.stale')}</span> : null}
                   </th>
                 ))}
@@ -88,7 +92,10 @@ export default function Matrix({
                         <button
                           className={'cell ' + state}
                           title={cell?.error || label}
-                          onClick={() => cell?.installation_id && onOpenInstallation(cell.installation_id)}
+                          onClick={() =>
+                            cell?.installation_id &&
+                            onOpenInstallation(cell.installation_id, agentLabel(a.id), c.runtime.host)
+                          }
                         >
                           <div>{label}</div>
                           {cell?.version ? <div className="mono">{cell.version}</div> : null}
