@@ -93,6 +93,12 @@ PATH_BOOTSTRAP = (
     + BS + NL
     + '          "$HOME/.volta/bin" "$HOME/.npm-global/bin" "$HOME/.yarn/bin" '
     + BS + NL
+    + '          "$HOME/.local/share/pnpm" "$HOME/.pnpm-global/bin" '
+    + BS + NL
+    + '          "$HOME/.asdf/shims" "$HOME/.asdf/bin" "$HOME/.nodenv/shims" "$HOME/.nodenv/bin" '
+    + BS + NL
+    + '          "$HOME/.qoder-cn/entry" "$HOME/.qoder/entry" '
+    + BS + NL
     + '          "/usr/local/bin" "/usr/local/sbin" "/opt/homebrew/bin" "/snap/bin"; do'
     + NL
     + '  case ":$PATH:" in'
@@ -128,6 +134,22 @@ PATH_BOOTSTRAP = (
     + '    if [ -d "$HOME/.local/share/fnm/$_v/bin" ]; then'
     + NL
     + '      PATH="$HOME/.local/share/fnm/$_v/bin:$PATH"'
+    + NL
+    + "      break"
+    + NL
+    + "    fi"
+    + NL
+    + "  done"
+    + NL
+    + "fi"
+    + NL
+    + 'if [ -d "$HOME/.local/share/pi-node" ]; then'
+    + NL
+    + '  for _v in $(ls -1 "$HOME/.local/share/pi-node" 2>/dev/null | sort -r); do'
+    + NL
+    + '    if [ -d "$HOME/.local/share/pi-node/$_v/bin" ]; then'
+    + NL
+    + '      PATH="$HOME/.local/share/pi-node/$_v/bin:$PATH"'
     + NL
     + "      break"
     + NL

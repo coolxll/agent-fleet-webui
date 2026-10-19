@@ -61,7 +61,11 @@ class CodeBuddyAdapter(AgentAdapter):
                     key="codebuddy:codebuddy",
                     binary="codebuddy",
                     version_args=["--version"],
-                    candidates=["~/.local/bin/codebuddy"],
+                    candidates=[
+                        "~/.local/bin/codebuddy",
+                        "/usr/local/bin/codebuddy",
+                        "/usr/bin/codebuddy",
+                    ],
                 )
             ],
             files=[SETTINGS_PATH, MARKETPLACES_PATH],
