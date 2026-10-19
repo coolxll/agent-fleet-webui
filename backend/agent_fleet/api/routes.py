@@ -15,7 +15,7 @@ from agent_fleet.services import diff
 from agent_fleet.services import persist as _persist  # noqa: F401
 from agent_fleet.services import scan_service
 from agent_fleet.services.export import build_export
-from agent_fleet.services.updates import latest_available  # noqa: F401
+from agent_fleet.services.updates import latest_available, version_state
 from agent_fleet.services.scheduler import get_schedule
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
 from agent_fleet.settings import get_settings
@@ -54,9 +54,26 @@ def _stale(rt, ttl):
 
 def _rt_summary(s, rt, ttl):
     installed = 0
+    agent_details = []
     for inst in rt.installations:
         if inst.detected:
             installed += 1
+            latest_info = latest_available(inst.agent_id)
+            latest_ver = latest_info.get("latest_available")
+            agent_details.append(
+                {
+                    "agent": inst.agent_id,
+                    "version": inst.version,
+                    "status": inst.status,
+                    "version_state": (
+                        version_state(inst.version, latest_ver)
+                        if inst.status == "installed"
+                        else "unknown"
+                    ),
+                    "latest_available": latest_ver,
+                    "package": latest_info.get("package"),
+                }
+            )
     return {
         "id": rt.id,
         "host_id": rt.host_id,
@@ -80,6 +97,7 @@ def _rt_summary(s, rt, ttl):
         "snapshot_age_s": _age(rt.last_success_at),
         "stale": _stale(rt, ttl),
         "agents_installed": installed,
+        "agent_details": agent_details,
     }
 
 
@@ -168,6 +186,11 @@ def agents():
     return {"agents": agent_meta()}
 
 
+@router.get("/updates")
+def list_updates():
+    return {aid: latest_available(aid) for aid in agent_ids()}
+
+
 # --------------------------------------------------------------------------
 # inventory
 # --------------------------------------------------------------------------
@@ -207,6 +230,18 @@ def get_machine(host_id: str):
                             "config_status": i.config_status,
                             "error": i.error,
                             "config_summary": _config_summary(i),
+                            "version_state": (
+                                version_state(
+                                    i.version,
+                                    latest_available(i.agent_id).get("latest_available"),
+                                )
+                                if i.status == "installed"
+                                else "unknown"
+                            ),
+                            "latest_available": latest_available(i.agent_id).get(
+                                "latest_available"
+                            ),
+                            "package": latest_available(i.agent_id).get("package"),
                         }
                         for i in installs
                     ],
@@ -665,6 +700,9 @@ def agent_view(agent_id: str, include_disabled_hosts: bool = Query(False)):
                     "host": rt.host.name if rt.host else None,
                     "runtime_key": rt.key,
                     "kind": rt.kind,
+                    "os_name": rt.os_name,
+                    "arch": rt.arch,
+                    "ssh_target": rt.ssh_alias or rt.ssh_host or (rt.host.name if rt.host else None),
                     "collect_user": rt.collect_user,
                     "runtime_id": i.runtime_id,
                     "status": i.status,
@@ -686,6 +724,8 @@ def agent_view(agent_id: str, include_disabled_hosts: bool = Query(False)):
             if i["status"] == "installed"
             else "unknown"
         )
+        i["latest_available"] = latest
+        i["package"] = currency.get("package")
 
     # config consistency: group detected installs by their declared triple
     groups: dict = {}

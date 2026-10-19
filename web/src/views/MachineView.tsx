@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import AgentIcon, { agentLabel } from '../components/AgentIcon'
+import UpgradeModal, { UpgradeIcon, UpgradeTarget } from '../components/UpgradeModal'
 import { useI18n, type TranslationKey } from '../i18n'
 
 export default function MachineView({
@@ -13,6 +14,7 @@ export default function MachineView({
   const { t } = useI18n()
   const [data, setData] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  const [upgradeTarget, setUpgradeTarget] = useState<UpgradeTarget | null>(null)
 
   const getStatusLabel = (status: string) => {
     const key = `matrix.state.${status}` as TranslationKey
@@ -117,7 +119,26 @@ export default function MachineView({
                         {cs.base_url ? ' · ' + cs.base_url : ''}
                       </div>
                       <div className="agent-card-foot">
-                        <span className="mono small">{i.version ? 'v' + i.version : '—'}</span>
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                          {i.version_state === 'behind' && (
+                            <UpgradeIcon
+                              title={t('version.behind', { version: i.latest_available || '' })}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setUpgradeTarget({
+                                  agent: i.agent,
+                                  currentVersion: i.version,
+                                  latestVersion: i.latest_available,
+                                  host: data.name,
+                                  runtimeKey: rt.key,
+                                  osName: rt.os_name,
+                                  packageName: i.package
+                                })
+                              }}
+                            />
+                          )}
+                          <span className="mono small">{i.version ? 'v' + i.version : '—'}</span>
+                        </div>
                         <span
                           className={
                             'tag ' +
@@ -141,6 +162,10 @@ export default function MachineView({
           </div>
         </div>
       ))}
+
+      {upgradeTarget && (
+        <UpgradeModal target={upgradeTarget} onClose={() => setUpgradeTarget(null)} />
+      )}
     </div>
   )
 }

@@ -22,6 +22,14 @@ export type Runtime = {
   stale: boolean | null
   agents_installed: number
   agents?: string[]
+  agent_details?: {
+    agent: string
+    version: string | null
+    status: string
+    version_state?: string
+    latest_available?: string | null
+    package?: string | null
+  }[]
 }
 
 export type AgentMeta = { id: string; name: string; config_supported: boolean }
@@ -253,6 +261,9 @@ export const api = {
         host: string
         runtime_key: string
         kind: string
+        os_name?: string | null
+        arch?: string | null
+        ssh_target?: string | null
         collect_user: string | null
         status: string
         detected: boolean
@@ -267,6 +278,8 @@ export const api = {
           resolution: string | null
         } | null
         version_state: string
+        latest_available?: string | null
+        package?: string | null
       }[]
       version: {
         package: string | null
@@ -315,6 +328,9 @@ export const api = {
           status: string
           detected: boolean
           version: string | null
+          version_state?: string
+          latest_available?: string | null
+          package?: string | null
           exec_path: string | null
           install_method: string | null
           config_dir: string | null
@@ -340,9 +356,14 @@ export const api = {
         group: string | null
         enabled: boolean
         tags: any
+        runtimes?: Runtime[]
       }[]
       include_disabled: boolean
     }>('/hosts?include_disabled=' + (includeDisabled ? 'true' : 'false')),
+  updates: () =>
+    get<Record<string, { source: string; package: string | null; latest_available: string | null }>>(
+      '/updates'
+    ),
   syncInventory: () => post<{ ok: boolean; hosts_seen?: number }>('/inventory/sync'),
   setHostEnabled: (id: string, enabled: boolean) =>
     post<{ ok: boolean; host?: string }>('/hosts/' + id + '/enabled', { enabled }),
@@ -351,4 +372,22 @@ export const api = {
       if (!r.ok) throw new Error((await r.text()) || 'delete failed')
       return (await r.json()) as { ok: boolean; deleted: string }
     })
+}
+
+export function getUpdateCommand(
+  agent: string,
+  pkg?: string | null,
+  targetHost?: string | null
+): { local: string; remote: string } {
+  let cmd = ''
+  if (agent === 'claude') cmd = 'claude update'
+  else if (agent === 'qoder') cmd = 'qodercli update'
+  else if (agent === 'agy') cmd = 'agy update'
+  else if (agent === 'hermes') cmd = 'hermes update'
+  else if (pkg) cmd = `npm install -g ${pkg}@latest`
+  else cmd = `npm install -g ${agent}@latest`
+
+  const remote =
+    targetHost && targetHost !== 'local-controller' ? `ssh ${targetHost} "${cmd}"` : cmd
+  return { local: cmd, remote }
 }

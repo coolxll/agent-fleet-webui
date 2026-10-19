@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import AgentIcon from '../components/AgentIcon'
+import UpgradeModal, { UpgradeIcon, UpgradeTarget } from '../components/UpgradeModal'
 import { useI18n } from '../i18n'
 
 export default function AgentsView() {
@@ -53,6 +54,7 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
   const { t } = useI18n()
   const [data, setData] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+  const [upgradeTarget, setUpgradeTarget] = useState<UpgradeTarget | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -123,15 +125,15 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
       <div className="panel">
         <h2>{t('agents.tableTitle')}</h2>
         <div className="body">
-          <table>
+          <table className="ts-table">
             <thead>
               <tr>
                 <th>{t('agents.thMachine')}</th>
                 <th>{t('agents.thVersion')}</th>
-                <th>{t('agents.thCurrency')}</th>
                 <th>{t('agents.thModel')}</th>
                 <th>{t('agents.thProvider')}</th>
                 <th>{t('agents.thStatus')}</th>
+                <th style={{ textAlign: 'right' }}>{t('machines.thActions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -140,31 +142,85 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
                 .sort((a: any, b: any) => (a.host + a.runtime_key).localeCompare(b.host + b.runtime_key))
                 .map((i: any) => (
                   <tr key={i.id}>
-                    <td className="mono">
-                      {i.host}/{i.runtime_key}
-                      {i.collect_user ? <span className="muted small"> @{i.collect_user}</span> : null}
-                    </td>
-                    <td className="mono">{i.version || '—'}</td>
                     <td>
-                      <span
-                        className={
-                          'tag ' +
-                          (i.version_state === 'latest'
-                            ? 'ok'
-                            : i.version_state === 'behind'
-                              ? 'warn'
-                              : 'unknown')
-                        }
-                      >
-                        {i.version_state}
-                      </span>
+                      <div className="mono bold" style={{ fontSize: 13.5 }}>
+                        {i.host}
+                        <span className="muted" style={{ fontWeight: 400 }}>/{i.runtime_key}</span>
+                        {i.collect_user ? <span className="muted small"> @{i.collect_user}</span> : null}
+                      </div>
+                      <div className="ts-os-line">
+                        {i.ssh_target ? <span className="ts-tag" style={{ marginRight: 6 }}>{i.ssh_target}</span> : null}
+                        {i.install_method ? <span className="muted">{i.install_method}</span> : null}
+                      </div>
+                    </td>
+                    <td style={{ minWidth: 160 }}>
+                      <div className="ts-version-line">
+                        {i.version_state === 'behind' && (
+                          <UpgradeIcon
+                            title={t('version.behind', { version: v?.latest_available || '' })}
+                            onClick={() =>
+                              setUpgradeTarget({
+                                agent: data.agent,
+                                currentVersion: i.version,
+                                latestVersion: v?.latest_available,
+                                host: i.host,
+                                runtimeKey: i.runtime_key,
+                                osName: i.os_name,
+                                packageName: v?.package
+                              })
+                            }
+                          />
+                        )}
+                        <span className="mono bold">{i.version ? `v${i.version}` : '—'}</span>
+                        {i.version_state === 'latest' && (
+                          <span className="tag ok" style={{ marginLeft: 6, fontSize: 10, padding: '0 5px' }}>
+                            {t('version.upToDate')}
+                          </span>
+                        )}
+                      </div>
+                      <div className="ts-os-line">
+                        {i.os_name || i.kind || '—'}
+                        {i.arch ? ` · ${i.arch}` : ''}
+                      </div>
                     </td>
                     <td className="mono small">
                       {i.config_summary?.model || <span className="muted">—</span>}
                     </td>
                     <td className="small">{i.config_summary?.provider || '—'}</td>
                     <td>
-                      <span className="tag">{i.status}</span>
+                      <span className={'tag ' + (i.status === 'installed' ? 'ok' : i.status === 'config_only' ? 'warn' : 'unknown')}>
+                        {i.status}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {i.version_state === 'behind' ? (
+                        <button
+                          className="btn small"
+                          onClick={() =>
+                            setUpgradeTarget({
+                              agent: data.agent,
+                              currentVersion: i.version,
+                              latestVersion: v?.latest_available,
+                              host: i.host,
+                              runtimeKey: i.runtime_key,
+                              osName: i.os_name,
+                              packageName: v?.package
+                            })
+                          }
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            borderColor: 'rgba(210, 153, 34, 0.45)',
+                            color: '#e3b341'
+                          }}
+                        >
+                          <UpgradeIcon size={12} />
+                          {t('upgrade.updateAvailable')}
+                        </button>
+                      ) : (
+                        <span className="muted small">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -172,6 +228,10 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
           </table>
         </div>
       </div>
+
+      {upgradeTarget && (
+        <UpgradeModal target={upgradeTarget} onClose={() => setUpgradeTarget(null)} />
+      )}
 
       <div className="panel">
         <h2>{t('agents.variantsTitle')}</h2>

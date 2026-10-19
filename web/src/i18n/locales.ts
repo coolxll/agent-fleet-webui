@@ -56,6 +56,9 @@ export const translations = {
     'common.partial': 'partial',
     'common.completed': 'completed',
     'common.user': 'user',
+    'common.copy': 'Copy',
+    'common.copied': 'Copied!',
+    'common.close': 'Close',
 
     // Time relative
     'time.ago.s': '{n}s ago',
@@ -67,6 +70,26 @@ export const translations = {
     'machines.noMachines': 'No machines yet — press Re-sync inventory.',
     'machines.noAgents': 'no agents',
     'machines.footer': '{instTotal} installation{instPlural} · {rtCount} runtime{rtPlural}',
+    'machines.viewMode.cards': 'Cards',
+    'machines.viewMode.table': 'Table',
+    'machines.thMachine': 'MACHINE',
+    'machines.thAddresses': 'ADDRESSES',
+    'machines.thVersion': 'VERSION',
+    'machines.thActions': 'ACTIONS',
+    'machines.action.view': 'View Machine',
+    'machines.action.rescan': 'Rescan Machine',
+    'machines.action.copySsh': 'Copy SSH Command',
+
+    // Upgrades
+    'upgrade.title': 'Upgrade {agent}',
+    'upgrade.updateAvailable': 'Update available',
+    'upgrade.currentVersion': 'Current installed',
+    'upgrade.latestAvailable': 'Latest release',
+    'upgrade.tabRemote': 'Remote Command (SSH)',
+    'upgrade.tabLocal': 'Local Command',
+    'upgrade.packageLabel': 'Package',
+    'version.upToDate': 'Up to date',
+    'version.behind': 'Update available to {version}',
 
     // Agents View
     'agents.pick': 'Pick an agent',
@@ -295,6 +318,9 @@ export const translations = {
     'common.partial': '部分成功',
     'common.completed': '已完成',
     'common.user': '用户',
+    'common.copy': '复制',
+    'common.copied': '已复制！',
+    'common.close': '关闭',
 
     // Time relative
     'time.ago.s': '{n}秒前',
@@ -306,6 +332,26 @@ export const translations = {
     'machines.noMachines': '暂无主机数据 — 请点击“重新同步”。',
     'machines.noAgents': '未检测到 Agent',
     'machines.footer': '{instTotal} 处安装 · {rtCount} 个运行时',
+    'machines.viewMode.cards': '卡片',
+    'machines.viewMode.table': '表格 (Tailscale)',
+    'machines.thMachine': '机器',
+    'machines.thAddresses': '接入地址',
+    'machines.thVersion': '版本与 AGENT',
+    'machines.thActions': '操作',
+    'machines.action.view': '查看机器详情',
+    'machines.action.rescan': '重新扫描',
+    'machines.action.copySsh': '复制 SSH 命令',
+
+    // Upgrades
+    'upgrade.title': '升级 {agent}',
+    'upgrade.updateAvailable': '发现新版本',
+    'upgrade.currentVersion': '当前安装',
+    'upgrade.latestAvailable': '最新发布',
+    'upgrade.tabRemote': '远程执行命令 (SSH)',
+    'upgrade.tabLocal': '目标机本地命令',
+    'upgrade.packageLabel': '发布包',
+    'version.upToDate': '已是最新版',
+    'version.behind': '可升级至 {version}',
 
     // Agents View
     'agents.pick': '选择 Agent',
