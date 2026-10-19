@@ -451,6 +451,7 @@ export function getUpdateCommand(
   else if (agent === 'qoder') cmd = 'qodercli update'
   else if (agent === 'agy') cmd = 'agy update'
   else if (agent === 'hermes') cmd = 'hermes update'
+  else if (agent === 'opencode') cmd = 'opencode upgrade'
   else if (pkg) cmd = `npm install -g ${pkg}@latest`
   else cmd = `npm install -g ${agent}@latest`
 

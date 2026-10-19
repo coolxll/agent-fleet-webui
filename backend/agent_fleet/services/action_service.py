@@ -23,7 +23,7 @@ from agent_fleet.settings import get_settings
 UPGRADE_RULES: dict[str, dict[str, str]] = {
     "codex": {"package": "@openai/codex", "type": "npm"},
     "claude": {"package": "@anthropic-ai/claude-code", "type": "npm_or_cli"},
-    "opencode": {"package": "opencode-ai", "type": "npm"},
+    "opencode": {"package": "opencode-ai", "type": "npm_or_cli"},
     "pi": {"package": "@earendil-works/pi-coding-agent", "type": "npm"},
     "codebuddy": {"package": "@tencent-ai/codebuddy-code", "type": "npm"},
     "qoder": {"package": "@qoder-ai/qodercli", "type": "npm_or_cli"},
@@ -82,10 +82,11 @@ def build_upgrade_script(agent_id: str, platform: str) -> str:
                 f"exit $LASTEXITCODE"
             )
         elif rule_type == "npm_or_cli":
-            cli = "claude" if agent_id == "claude" else "qodercli"
+            cli = "claude" if agent_id == "claude" else ("opencode" if agent_id == "opencode" else "qodercli")
+            sub = "upgrade" if agent_id == "opencode" else "update"
             body = (
                 f"if (Get-Command {cli}.cmd -ErrorAction SilentlyContinue) {{\n"
-                f"  & {cli}.cmd update\n"
+                f"  & {cli}.cmd {sub}\n"
                 f"  if ($LASTEXITCODE -ne 0) {{\n"
                 f"    if (Get-Command npm.cmd -ErrorAction SilentlyContinue) {{\n"
                 f"      & npm.cmd install -g {pkg}@latest\n"
@@ -134,6 +135,8 @@ def build_upgrade_script(agent_id: str, platform: str) -> str:
             cmd = f"claude update 2>&1 || npm install -g {pkg}@latest"
         elif agent_id == "qoder":
             cmd = f"qodercli update 2>&1 || npm install -g {pkg}@latest"
+        elif agent_id == "opencode":
+            cmd = f"opencode upgrade 2>&1 || npm install -g {pkg}@latest"
         else:
             cmd = f"npm install -g {pkg}@latest"
     elif rule_type == "agy":

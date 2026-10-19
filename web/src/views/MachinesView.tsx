@@ -168,15 +168,29 @@ export default function MachinesView({
     if (!ids.length) return
     setRescanningHost(h.id)
     try {
-      await api.startScan(ids)
-      setTimeout(async () => {
-        await loadHosts()
-        if (selectedHostId === h.id) {
-          await loadHostDetail(h.id)
+      const res = await api.startScan(ids)
+      if (res && res.run_id) {
+        let attempts = 0
+        while (attempts < 60) {
+          await new Promise((resolve) => setTimeout(resolve, 800))
+          attempts++
+          try {
+            const scanRun = await api.scan(res.run_id)
+            if (scanRun && scanRun.status !== 'running') {
+              break
+            }
+          } catch {
+            break
+          }
         }
-        setRescanningHost(null)
-      }, 1500)
+      }
+      await loadHosts()
+      if (selectedHostId === h.id) {
+        await loadHostDetail(h.id)
+      }
     } catch {
+      // ignore
+    } finally {
       setRescanningHost(null)
     }
   }

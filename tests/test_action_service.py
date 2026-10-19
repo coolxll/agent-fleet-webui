@@ -25,6 +25,18 @@ def test_build_upgrade_script_posix_claude():
     assert "@anthropic-ai/claude-code@latest" in script
 
 
+def test_build_upgrade_script_posix_opencode():
+    script = build_upgrade_script("opencode", "posix")
+    assert "opencode upgrade" in script
+    assert "npm install -g opencode-ai@latest" in script
+
+
+def test_build_upgrade_script_windows_opencode():
+    script = build_upgrade_script("opencode", "windows")
+    assert "opencode.cmd upgrade" in script
+    assert "opencode-ai@latest" in script
+
+
 def test_build_upgrade_script_windows():
     script = build_upgrade_script("codex", "windows")
     assert "npm.cmd install -g @openai/codex@latest" in script
