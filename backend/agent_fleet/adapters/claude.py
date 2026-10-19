@@ -40,7 +40,17 @@ MODEL_ENV_KEYS = (
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
     "CLAUDE_CODE_SUBAGENT_MODEL",
 )
-SETTING_KEYS = ("effortLevel", "model", "permissions", "enableAllProjectMcpServers", "theme", "language")
+SETTING_KEYS = (
+    "effortLevel",
+    "model",
+    "permissions",
+    "enableAllProjectMcpServers",
+    "theme",
+    "language",
+    "autoUpdatesChannel",
+    "autoUpdates",
+    "channel",
+)
 
 
 MAX_PROJECT_ROOTS = 5
@@ -206,6 +216,17 @@ class ClaudeAdapter(AgentAdapter):
             cfg.sanitized["env_keys"] = cfg.settings["env_keys"]
         else:
             cfg.model_provider = "anthropic"
+
+        channel = merged_settings.get("autoUpdatesChannel") or merged_settings.get("channel")
+        if not channel and global_src and global_src.usable:
+            try:
+                g = _load(global_src)
+                if isinstance(g, dict):
+                    channel = g.get("autoUpdatesChannel")
+            except Exception:
+                pass
+        if channel:
+            merged_settings["channel"] = channel
 
         cfg.settings.update(merged_settings)
         if settings_src and settings_src.usable:

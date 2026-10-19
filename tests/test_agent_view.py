@@ -38,6 +38,48 @@ def test_compare_versions_unparseable():
     assert compare_versions("not-a-version", "1.0.0") is None
 
 
+def test_effective_latest_stable_channel_claude():
+    from agent_fleet.services.updates import effective_latest, version_state
+
+    info = {
+        "package": "@anthropic-ai/claude-code",
+        "latest_available": "2.1.303",
+        "stable_available": "2.1.292",
+        "prerelease": {"next": "2.1.303"},
+    }
+    # User on stable channel with 2.1.280 is recognized as current on the stable tier
+    eff_280 = effective_latest("2.1.280", info, channel="stable")
+    assert eff_280 == "2.1.280"
+    assert version_state("2.1.280", eff_280) == "latest"
+
+    # User on stable channel with 2.1.285 is also recognized as current
+    eff_285 = effective_latest("2.1.285", info, channel="stable")
+    assert eff_285 == "2.1.285"
+    assert version_state("2.1.285", eff_285) == "latest"
+
+    # Older install on stable channel is offered stable_available
+    eff_old = effective_latest("2.1.270", info, channel="stable")
+    assert eff_old == "2.1.292"
+    assert version_state("2.1.270", eff_old) == "behind"
+
+    # User on default / latest channel is compared against latest_available
+    eff_latest = effective_latest("2.1.280", info, channel=None)
+    assert eff_latest == "2.1.303"
+    assert version_state("2.1.280", eff_latest) == "behind"
+
+
+def test_effective_latest_stable_channel_generic():
+    from agent_fleet.services.updates import effective_latest
+
+    info = {
+        "package": "some-agent",
+        "latest_available": "3.0.0",
+        "stable_available": "2.5.0",
+    }
+    assert effective_latest("2.4.0", info, channel="stable") == "2.5.0"
+    assert effective_latest("2.4.0", info, channel="latest") == "3.0.0"
+
+
 def test_effective_latest_stable_channel_ignores_prerelease():
     from agent_fleet.services.updates import effective_latest
 

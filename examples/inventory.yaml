@@ -5,7 +5,7 @@
 # cannot express (runtime kind, WSL distros, tags, disabled hosts).
 
 hosts:
-  - name: local-controller
+  - name: local-mac
     kind: macos
     tags:
       role: controller

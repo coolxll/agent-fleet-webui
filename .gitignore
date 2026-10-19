@@ -18,3 +18,7 @@ web/dist/
 # local scratch
 scratch_*.py
 *.tsbuildinfo
+
+# local inventory (private host configuration)
+inventory.yaml
+inventory.yml

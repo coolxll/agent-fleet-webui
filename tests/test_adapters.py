@@ -217,6 +217,17 @@ def test_claude_missing_settings_file():
     assert res.config.parse_status in ("empty", "partial")
 
 
+def test_claude_channel_parsed():
+    facts = _claude_facts(
+        json.dumps({"autoUpdatesChannel": "stable", "effortLevel": "high"}),
+        json.dumps({"mcpServers": {}}),
+    )
+    res = get_adapter("claude").run(facts)
+    assert res.config.settings.get("channel") == "stable"
+    assert res.config.settings.get("autoUpdatesChannel") == "stable"
+    assert "autoUpdatesChannel" not in res.config.unsupported_fields
+
+
 # ---------------------------------------------------------------------------
 # OpenCode
 # ---------------------------------------------------------------------------

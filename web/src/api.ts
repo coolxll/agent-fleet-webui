@@ -25,6 +25,7 @@ export type Runtime = {
   agent_details?: {
     agent: string
     version: string | null
+    channel?: string | null
     status: string
     version_state?: string
     latest_available?: string | null
@@ -284,7 +285,9 @@ export const api = {
           base_url: string | null
           parse_status: string | null
           resolution: string | null
+          channel?: string | null
         } | null
+        channel?: string | null
         version_state: string
         latest_available?: string | null
         package?: string | null
@@ -338,6 +341,7 @@ export const api = {
           status: string
           detected: boolean
           version: string | null
+          channel?: string | null
           version_state?: string
           latest_available?: string | null
           package?: string | null
@@ -354,6 +358,7 @@ export const api = {
             base_url: string | null
             parse_status: string | null
             resolution: string | null
+            channel?: string | null
           } | null
         }[]
       }[]

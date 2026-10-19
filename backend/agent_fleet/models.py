@@ -104,6 +104,9 @@ class Runtime(Base):
     installations: Mapped[list["AgentInstallation"]] = relationship(
         back_populates="runtime", cascade="all, delete-orphan"
     )
+    sessions: Mapped[list["Session"]] = relationship(
+        back_populates="runtime", cascade="all, delete-orphan"
+    )
 
     @property
     def runtime_identity(self) -> str:
@@ -264,3 +267,59 @@ class Snapshot(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     agents_found: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Session(Base):
+    """A conversation/session record belonging to an agent in a runtime."""
+
+    __tablename__ = "sessions"
+    __table_args__ = (
+        UniqueConstraint(
+            "runtime_id", "agent_id", "session_key", name="uq_session_runtime_agent_key"
+        ),
+        Index("ix_session_runtime_updated", "runtime_id", "updated_at"),
+        Index("ix_session_agent_updated", "agent_id", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    runtime_id: Mapped[str] = mapped_column(
+        String, ForeignKey("runtimes.id", ondelete="CASCADE"), index=True
+    )
+    agent_id: Mapped[str] = mapped_column(String, index=True)
+    session_key: Mapped[str] = mapped_column(String, index=True)
+    title: Mapped[str] = mapped_column(String, default="")
+    project_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    project_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    file_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    token_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    runtime: Mapped["Runtime"] = relationship(back_populates="sessions")
+    transcript: Mapped["SessionTranscript | None"] = relationship(
+        back_populates="session", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class SessionTranscript(Base):
+    """Locally cached, sanitized conversation turns for a session."""
+
+    __tablename__ = "session_transcripts"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    session_id: Mapped[str] = mapped_column(
+        String, ForeignKey("sessions.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    turns: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    raw_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    has_secrets_masked: Mapped[bool] = mapped_column(Boolean, default=False)
+    masked_count: Mapped[int] = mapped_column(Integer, default=0)
+    cached_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    session: Mapped["Session"] = relationship(back_populates="transcript")
+

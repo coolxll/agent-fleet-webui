@@ -606,6 +606,11 @@ export default function AgentsView({
                                   />
                                 )}
                                 <span className="mono bold">{i.version ? `v${i.version}` : '—'}</span>
+                                {i.channel && (
+                                  <span className="ts-tag" style={{ marginLeft: 6, fontSize: 10, padding: '0 5px' }}>
+                                    {i.channel}
+                                  </span>
+                                )}
                                 {i.version_state === 'latest' && (
                                   <span className="tag ok" style={{ marginLeft: 6, fontSize: 10, padding: '0 5px' }}>
                                     {t('version.upToDate')}

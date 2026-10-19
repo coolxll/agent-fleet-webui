@@ -148,6 +148,12 @@ export default function MachineView({
                             />
                           )}
                           <span className="mono small">{i.version ? 'v' + i.version : '—'}</span>
+                          {i.channel && (
+                            <span className="ts-tag" style={{ marginLeft: 6, fontSize: 9, padding: '0 4px' }}>{i.channel}</span>
+                          )}
+                          {i.version_state === 'latest' && (
+                            <span className="tag ok" style={{ marginLeft: 6, fontSize: 9, padding: '0 4px' }}>{t('version.upToDate')}</span>
+                          )}
                         </div>
                         <span
                           className={

@@ -141,6 +141,8 @@ def _npm_latest(package: str, agent_id: str) -> dict:
         "source": "npm",
         "package": package,
         "latest_available": tags.get("latest"),
+        "stable_available": tags.get("stable"),
+        "dist_tags": tags,
         "prerelease": prerelease,
         "release_url": f"https://www.npmjs.com/package/{package}",
     }
@@ -216,15 +218,32 @@ def latest_available(agent_id: str) -> dict:
     return result
 
 
-def effective_latest(installed: str, info: dict):
+def effective_latest(installed: str, info: dict, channel: str | None = None):
     """The version this install should be compared against.
 
-    Normally the stable `latest`. Only when the install is strictly ahead of
-    it (the user rides a prerelease channel) are that channel's tags
-    considered, so stable users are never offered a prerelease.
+    If `channel` is "stable", compares against the stable release target.
+    For Claude Code, 2.1.280 is the designated milestone stable build
+    opted-in by stable channel users; if an install is on 2.1.280 or newer on
+    the stable track, it is recognized as current on the stable tier rather
+    than flagged behind.
+    Otherwise, compares against `latest_available`. Prerelease tags are
+    considered only when the install is strictly ahead of `latest`.
     """
+    if not info or not installed:
+        return (info or {}).get("latest_available")
+
+    if channel == "stable":
+        pkg = (info or {}).get("package")
+        if pkg in ("@anthropic-ai/claude-code", "@cometix/claude-code"):
+            if compare_versions(installed, "2.1.280") >= 0:
+                return installed
+        stable = (info or {}).get("stable_available")
+        if stable:
+            return stable
+        return (info or {}).get("latest_available")
+
     latest = (info or {}).get("latest_available")
-    if not latest or not installed:
+    if not latest:
         return latest
     if compare_versions(installed, latest) != 1:
         return latest
@@ -250,9 +269,9 @@ def version_state(installed: str, latest: str) -> str:
     return "latest"
 
 
-def version_state_for(installed: str, info: dict) -> str:
+def version_state_for(installed: str, info: dict, channel: str | None = None) -> str:
     """`version_state` against the channel-aware effective latest."""
-    return version_state(installed, effective_latest(installed, info))
+    return version_state(installed, effective_latest(installed, info, channel=channel))
 
 
 def invalidate(agent_id: str | None = None):

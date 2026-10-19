@@ -627,9 +627,17 @@ export default function MachinesView({
                             </div>
 
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-                              <span className="mono bold" style={{ fontSize: 12 }}>
-                                {i.version ? `v${i.version}` : '—'}
-                              </span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                                <span className="mono bold" style={{ fontSize: 12 }}>
+                                  {i.version ? `v${i.version}` : '—'}
+                                </span>
+                                {i.channel && (
+                                  <span className="ts-tag" style={{ fontSize: 9, padding: '0 4px' }}>{i.channel}</span>
+                                )}
+                                {i.version_state === 'latest' && (
+                                  <span className="tag ok" style={{ fontSize: 9, padding: '0 4px' }}>{t('version.upToDate')}</span>
+                                )}
+                              </div>
                               {i.runtimeKey !== 'native' && (
                                 <span className="ts-tag" style={{ fontSize: 10 }}>{i.runtimeKey}</span>
                               )}
@@ -781,6 +789,9 @@ export default function MachinesView({
                                   <span className="mono small" style={{ fontSize: 11.5 }}>
                                     {ad.version ? `v${ad.version}` : '—'}
                                   </span>
+                                  {ad.channel && (
+                                    <span className="ts-tag" style={{ fontSize: 9, padding: '0 3px' }}>{ad.channel}</span>
+                                  )}
                                   {isBehind && (
                                     <UpgradeIcon
                                       size={12}

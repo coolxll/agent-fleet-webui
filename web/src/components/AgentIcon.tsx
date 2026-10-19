@@ -19,7 +19,7 @@ const COLORS: Record<string, string> = {
   hermes: '#a371f7',
   agy: '#4285f4',
   codebuddy: '#00b96f',
-  qoder: '#7366ff'
+  qoder: '#2adb5c'
 }
 
 const LABELS: Record<string, string> = {
@@ -41,7 +41,7 @@ const AGENT_OFFICIAL_URLS: Record<string, string> = {
   hermes: 'https://nousresearch.com',
   agy: 'https://deepmind.google',
   codebuddy: 'https://codebuddy.cn',
-  qoder: 'https://qoder.com'
+  qoder: 'https://qoder.com.cn'
 }
 
 const AGENT_LOCAL_ICONS: Record<string, string> = {

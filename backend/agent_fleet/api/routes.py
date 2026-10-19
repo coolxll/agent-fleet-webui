@@ -63,13 +63,18 @@ def _rt_summary(s, rt, ttl):
     for inst in rt.installations:
         if inst.detected:
             installed += 1
+            cfg = getattr(inst, "config", None)
+            channel = None
+            if cfg and isinstance(cfg.settings, dict):
+                channel = cfg.settings.get("channel") or cfg.settings.get("autoUpdatesChannel")
             latest_info = latest_available(inst.agent_id)
-            latest_ver = effective_latest(inst.version, latest_info)
+            latest_ver = effective_latest(inst.version, latest_info, channel=channel)
             agent_details.append(
                 {
                     "id": inst.id,
                     "agent": inst.agent_id,
                     "version": inst.version,
+                    "channel": channel,
                     "status": inst.status,
                     "version_state": (
                         version_state(inst.version, latest_ver)
@@ -113,12 +118,15 @@ def _config_summary(inst):
     cfg = getattr(inst, "config", None)
     if cfg is None:
         return None
+    settings = cfg.settings if isinstance(cfg.settings, dict) else {}
+    channel = settings.get("channel") or settings.get("autoUpdatesChannel")
     return {
         "model": cfg.model,
         "provider": cfg.model_provider,
         "base_url": cfg.base_url,
         "parse_status": cfg.parse_status,
         "resolution": cfg.resolution,
+        "channel": channel,
     }
 
 
@@ -232,6 +240,7 @@ def get_machine(host_id: str):
                             "status": i.status,
                             "detected": i.detected,
                             "version": i.version,
+                            "channel": (_config_summary(i) or {}).get("channel"),
                             "exec_path": i.exec_path,
                             "install_method": i.install_method,
                             "config_dir": i.config_dir,
@@ -239,12 +248,18 @@ def get_machine(host_id: str):
                             "error": i.error,
                             "config_summary": _config_summary(i),
                             "version_state": (
-                                version_state_for(i.version, latest_available(i.agent_id))
+                                version_state_for(
+                                    i.version,
+                                    latest_available(i.agent_id),
+                                    channel=(_config_summary(i) or {}).get("channel"),
+                                )
                                 if i.status == "installed"
                                 else "unknown"
                             ),
                             "latest_available": effective_latest(
-                                i.version, latest_available(i.agent_id)
+                                i.version,
+                                latest_available(i.agent_id),
+                                channel=(_config_summary(i) or {}).get("channel"),
                             ),
                             "package": latest_available(i.agent_id).get("package"),
                             "source": latest_available(i.agent_id).get("source"),
@@ -842,7 +857,10 @@ def agent_view(agent_id: str, include_disabled_hosts: bool = Query(False)):
     for i in detected:
         # Per install, because a machine riding a prerelease channel is
         # compared against that channel rather than stable `latest`.
-        effective = effective_latest(i["version"], currency)
+        cs = i.get("config_summary") or {}
+        channel = cs.get("channel") or cs.get("autoUpdatesChannel")
+        effective = effective_latest(i["version"], currency, channel=channel)
+        i["channel"] = channel
         i["version_state"] = (
             version_state(i["version"], effective)
             if i["status"] == "installed"
@@ -1110,3 +1128,115 @@ def list_scans(limit: int = Query(20)):
                 for r in runs
             ]
         }
+
+
+# --------------------------------------------------------------------------
+# Multi-host sessions endpoints
+# --------------------------------------------------------------------------
+
+
+@router.get("/sessions")
+def get_sessions(
+    q: str | None = Query(None),
+    runtime_id: str | None = Query(None),
+    host_name: str | None = Query(None),
+    agent_id: str | None = Query(None),
+    project: str | None = Query(None),
+    pinned_only: bool = Query(False),
+    limit: int = Query(50),
+    offset: int = Query(0),
+):
+    from agent_fleet.services import session_service
+
+    with session_scope() as s:
+        return session_service.list_sessions(
+            s,
+            q=q,
+            runtime_id=runtime_id,
+            host_name=host_name,
+            agent_id=agent_id,
+            project=project,
+            pinned_only=pinned_only,
+            limit=limit,
+            offset=offset,
+        )
+
+
+@router.post("/sessions/sync")
+async def sync_sessions():
+    from agent_fleet.services import session_service
+
+    res = await session_service.sync_all_sessions()
+    return res
+
+
+@router.get("/sessions/{session_id}")
+def get_session(session_id: str):
+    with session_scope() as s:
+        sess = s.get(models.Session, session_id)
+        if not sess:
+            raise HTTPException(404, "session not found")
+        h_name = sess.runtime.host.name if sess.runtime and sess.runtime.host else "unknown"
+        transport = sess.runtime.transport if sess.runtime else "ssh"
+        from agent_fleet.services import session_service
+
+        return {
+            "id": sess.id,
+            "runtime_id": sess.runtime_id,
+            "host_name": h_name,
+            "agent_id": sess.agent_id,
+            "session_key": sess.session_key,
+            "title": sess.title,
+            "project_path": sess.project_path,
+            "project_name": sess.project_name,
+            "file_path": sess.file_path,
+            "started_at": _iso(sess.started_at),
+            "updated_at": _iso(sess.updated_at),
+            "message_count": sess.message_count,
+            "token_count": sess.token_count,
+            "is_pinned": sess.is_pinned,
+            "summary": sess.summary,
+            "resume_command": session_service.generate_resume_command(
+                sess, h_name, transport
+            ),
+        }
+
+
+@router.get("/sessions/{session_id}/transcript")
+async def get_session_transcript(session_id: str):
+    from agent_fleet.services import session_service
+
+    with session_scope() as s:
+        try:
+            return await session_service.get_session_transcript(s, session_id)
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"Error fetching transcript: {e}")
+
+
+@router.post("/sessions/{session_id}/pin")
+def toggle_session_pin(session_id: str):
+    from agent_fleet.services import session_service
+
+    with session_scope() as s:
+        try:
+            pinned = session_service.toggle_pin_session(s, session_id)
+            return {"ok": True, "session_id": session_id, "is_pinned": pinned}
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+
+
+@router.get("/sessions/{session_id}/resume-command")
+def get_session_resume_command(session_id: str):
+    from agent_fleet.services import session_service
+
+    with session_scope() as s:
+        sess = s.get(models.Session, session_id)
+        if not sess:
+            raise HTTPException(404, "session not found")
+        h_name = sess.runtime.host.name if sess.runtime and sess.runtime.host else "unknown"
+        transport = sess.runtime.transport if sess.runtime else "ssh"
+        cmd = session_service.generate_resume_command(sess, h_name, transport)
+        return {"session_id": session_id, "resume_command": cmd}
+

@@ -80,21 +80,22 @@ def _get_lock(runtime_id: str) -> asyncio.Lock:
     return _host_locks[runtime_id]
 
 
-def build_upgrade_script(agent_id: str, platform: str) -> str:
+def build_upgrade_script(agent_id: str, platform: str, channel: str | None = None) -> str:
     rule = UPGRADE_RULES.get(agent_id)
     if not rule:
         raise ValueError(f"Agent '{agent_id}' does not support automated upgrades")
 
     pkg = rule["package"]
     rule_type = rule["type"]
+    tag = "stable" if channel == "stable" else "latest"
 
     if platform == "windows":
         if rule_type == "npm":
             body = (
                 f"if (Get-Command npm.cmd -ErrorAction SilentlyContinue) {{\n"
-                f"  & npm.cmd install -g {pkg}@latest\n"
+                f"  & npm.cmd install -g {pkg}@{tag}\n"
                 f"}} elseif (Get-Command npm -ErrorAction SilentlyContinue) {{\n"
-                f"  & npm install -g {pkg}@latest\n"
+                f"  & npm install -g {pkg}@{tag}\n"
                 f"}} else {{\n"
                 f'  Write-Error "npm executable not found on Windows target"\n'
                 f"  exit 127\n"
@@ -111,15 +112,15 @@ def build_upgrade_script(agent_id: str, platform: str) -> str:
                 f"  & {cli} {sub}\n"
                 f"  if ($LASTEXITCODE -ne 0) {{\n"
                 f"    if (Get-Command npm.cmd -ErrorAction SilentlyContinue) {{\n"
-                f"      & npm.cmd install -g {pkg}@latest\n"
+                f"      & npm.cmd install -g {pkg}@{tag}\n"
                 f"    }} else {{\n"
-                f"      & npm install -g {pkg}@latest\n"
+                f"      & npm install -g {pkg}@{tag}\n"
                 f"    }}\n"
                 f"  }}\n"
                 f"}} elseif (Get-Command npm.cmd -ErrorAction SilentlyContinue) {{\n"
-                f"  & npm.cmd install -g {pkg}@latest\n"
+                f"  & npm.cmd install -g {pkg}@{tag}\n"
                 f"}} else {{\n"
-                f"  & npm install -g {pkg}@latest\n"
+                f"  & npm install -g {pkg}@{tag}\n"
                 f"}}\n"
                 f"exit $LASTEXITCODE"
             )
@@ -151,20 +152,20 @@ def build_upgrade_script(agent_id: str, platform: str) -> str:
                 f"exit $LASTEXITCODE"
             )
         else:
-            body = f"& npm.cmd install -g {pkg}@latest\nexit $LASTEXITCODE"
+            body = f"& npm.cmd install -g {pkg}@{tag}\nexit $LASTEXITCODE"
 
         return f"{WIN_PATH_BOOTSTRAP}\n{body}\n"
 
     # POSIX / WSL / macOS / Linux
     if rule_type == "npm":
-        cmd = f"npm install -g {pkg}@latest"
+        cmd = f"npm install -g {pkg}@{tag}"
     elif rule_type == "npm_or_cli":
         official = OFFICIAL_UPDATERS.get(agent_id)
         if official:
             cli, sub = official
-            cmd = f"{cli} {sub} 2>&1 || npm install -g {pkg}@latest"
+            cmd = f"{cli} {sub} 2>&1 || npm install -g {pkg}@{tag}"
         else:
-            cmd = f"npm install -g {pkg}@latest"
+            cmd = f"npm install -g {pkg}@{tag}"
     elif rule_type == "agy":
         cmd = "agy update 2>&1"
     elif rule_type == "hermes":
@@ -176,7 +177,7 @@ def build_upgrade_script(agent_id: str, platform: str) -> str:
             " && bash $tmp; status=$?; rm -f $tmp; exit $status'"
         )
     else:
-        cmd = f"npm install -g {pkg}@latest"
+        cmd = f"npm install -g {pkg}@{tag}"
 
     # Strict PATH_BOOTSTRAP prefix guarantees npm, node, brew, nvm are available
     return f"{PATH_BOOTSTRAP}\n{cmd}\n"
@@ -195,6 +196,8 @@ async def upgrade_agent_installation(inst_id: str) -> dict[str, Any]:
         if not rt:
             raise ValueError(f"Runtime for installation '{inst_id}' not found")
 
+        cfg = getattr(inst, "config", None)
+        channel = cfg.settings.get("channel") or cfg.settings.get("autoUpdatesChannel") if cfg and isinstance(cfg.settings, dict) else None
         runtime_id = rt.id
         agent_id = inst.agent_id
         old_version = inst.version
@@ -207,7 +210,7 @@ async def upgrade_agent_installation(inst_id: str) -> dict[str, Any]:
         raise ValueError(f"Agent '{agent_id}' is not in the allowed upgrade whitelist")
 
     # 3. Generate static server-side script
-    script = build_upgrade_script(agent_id, platform)
+    script = build_upgrade_script(agent_id, platform, channel=channel)
 
     # 4. Acquire per-runtime concurrency lock
     lock = _get_lock(runtime_id)
@@ -297,6 +300,8 @@ def start_upgrade_task(inst_id: str) -> dict[str, Any]:
         if not rt:
             raise ValueError(f"Runtime for installation '{inst_id}' not found")
 
+        cfg = getattr(inst, "config", None)
+        channel = cfg.settings.get("channel") or cfg.settings.get("autoUpdatesChannel") if cfg and isinstance(cfg.settings, dict) else None
         runtime_id = rt.id
         agent_id = inst.agent_id
         old_version = inst.version
@@ -313,6 +318,7 @@ def start_upgrade_task(inst_id: str) -> dict[str, Any]:
         "installation_id": inst_id,
         "runtime_id": runtime_id,
         "agent": agent_id,
+        "channel": channel,
         "host": host_name,
         "status": "running",
         "started_at": time.time(),
@@ -330,7 +336,7 @@ def start_upgrade_task(inst_id: str) -> dict[str, Any]:
     _tasks[task_id] = task_entry
 
     bg_task = asyncio.create_task(
-        _run_background_upgrade(task_id, inst_id, rt_ref, agent_id, platform, runtime_id, old_version, settings)
+        _run_background_upgrade(task_id, inst_id, rt_ref, agent_id, platform, runtime_id, old_version, settings, channel=channel)
     )
     _background_tasks.add(bg_task)
     bg_task.add_done_callback(_background_tasks.discard)
@@ -347,12 +353,13 @@ async def _run_background_upgrade(
     runtime_id: str,
     old_version: str | None,
     settings,
+    channel: str | None = None,
 ):
     entry = _tasks.get(task_id)
     if not entry:
         return
 
-    script = build_upgrade_script(agent_id, platform)
+    script = build_upgrade_script(agent_id, platform, channel=channel)
     lock = _get_lock(runtime_id)
 
     async with lock:
@@ -412,7 +419,7 @@ def find_outdated_installations(
 ) -> list[str]:
     """Find installation IDs that are currently detected and behind the latest available version."""
     from sqlalchemy import select
-    from agent_fleet.services.updates import latest_available, version_state
+    from agent_fleet.services.updates import effective_latest, latest_available, version_state
 
     with session_scope() as s:
         stmt = (
@@ -434,9 +441,13 @@ def find_outdated_installations(
         for inst in insts:
             if inst.agent_id not in UPGRADE_RULES:
                 continue
+            cfg = getattr(inst, "config", None)
+            channel = None
+            if cfg and isinstance(cfg.settings, dict):
+                channel = cfg.settings.get("channel") or cfg.settings.get("autoUpdatesChannel")
             update_info = latest_available(inst.agent_id)
-            latest = update_info.get("latest_available")
-            if latest and version_state(inst.version, latest) == "behind":
+            effective = effective_latest(inst.version, update_info, channel=channel)
+            if effective and version_state(inst.version, effective) == "behind":
                 outdated_ids.append(inst.id)
 
         return outdated_ids
