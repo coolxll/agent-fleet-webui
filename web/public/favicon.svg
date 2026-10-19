@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#161b26" />
+      <stop offset="100%" stop-color="#0a0d14" />
+    </linearGradient>
+
+    <!-- Electric Lightning Gradient -->
+    <linearGradient id="boltGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#60a5fa" />
+      <stop offset="100%" stop-color="#34d399" />
+    </linearGradient>
+
+    <!-- Node Gradient -->
+    <linearGradient id="nodeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#818cf8" />
+    </linearGradient>
+
+    <!-- Glow Filter -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.5" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Base Squircle -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#bgGrad)" stroke="#263143" stroke-width="1.5" />
+
+  <!-- Fleet Orbit Network (Constellation Grid) -->
+  <g opacity="0.35" stroke="#38bdf8" stroke-width="1" stroke-dasharray="2 2">
+    <line x1="16" y1="20" x2="35" y2="15" />
+    <line x1="35" y1="15" x2="48" y2="28" />
+    <line x1="16" y1="20" x2="22" y2="48" />
+    <line x1="22" y1="48" x2="48" y2="45" />
+  </g>
+
+  <!-- Fleet Satellites / Nodes -->
+  <circle cx="16" cy="20" r="3" fill="url(#nodeGrad)" opacity="0.8" />
+  <circle cx="48" cy="28" r="2.5" fill="url(#nodeGrad)" opacity="0.7" />
+  <circle cx="22" cy="48" r="2.5" fill="url(#nodeGrad)" opacity="0.6" />
+  <circle cx="48" cy="45" r="3" fill="#34d399" opacity="0.75" />
+
+  <!-- Center Lightning Bolt (Core Agent Energy) -->
+  <path
+    d="M35 11 L20 33 L32 33 L27 53 L45 28 L33 28 Z"
+    fill="url(#boltGrad)"
+    filter="url(#glow)"
+  />
+
+  <!-- Subtle Core Highlight -->
+  <path
+    d="M33 16 L24 31 L32 31 L29 45 L41 29 L32 29 Z"
+    fill="#ffffff"
+    opacity="0.3"
+  />
+</svg>

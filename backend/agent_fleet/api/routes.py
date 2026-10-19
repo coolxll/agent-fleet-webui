@@ -735,20 +735,41 @@ def agent_view(agent_id: str, include_disabled_hosts: bool = Query(False)):
         i["source"] = currency.get("source")
 
     # config consistency: group detected installs by their declared triple
+    from collections import Counter
+    model_counts = Counter(
+        (i["config_summary"] or {}).get("model")
+        for i in detected
+        if i.get("config_summary") and (i["config_summary"] or {}).get("model")
+    )
+
     groups: dict = {}
     for i in detected:
         cs = i["config_summary"] or {}
         signature = " / ".join(
             str(cs.get(k) or "?") for k in ("model", "provider", "base_url")
         )
-        groups.setdefault(signature, []).append(
-            f"{i['host']}/{i['runtime_key']}"
-        )
+        groups.setdefault(signature, []).append(i)
+
+    def _group_sort_key(item):
+        sig, insts = item
+        count = len(insts)
+        # Check model popularity across the fleet
+        m = (insts[0].get("config_summary") or {}).get("model") if insts else None
+        m_pop = model_counts.get(m, 0)
+        # Completeness: how many fields are defined instead of '?'
+        completeness = sum(1 for part in sig.split(" / ") if part != "?")
+        max_ver = max((_semver_key(i["version"]) for i in insts if i["version"]), default=(0,))
+        max_time = max((i.get("collected_at") or "" for i in insts), default="")
+        return (count, m_pop, completeness, max_ver, max_time)
+
+    sorted_groups = sorted(groups.items(), key=_group_sort_key, reverse=True)
     config_groups = [
-        {"signature": sig, "machines": machines, "count": len(machines)}
-        for sig, machines in sorted(
-            groups.items(), key=lambda kv: -len(kv[1])
-        )
+        {
+            "signature": sig,
+            "machines": [f"{i['host']}/{i['runtime_key']}" for i in insts],
+            "count": len(insts)
+        }
+        for sig, insts in sorted_groups
     ]
 
     versions = sorted(

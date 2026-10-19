@@ -226,7 +226,13 @@ export const api = {
   overview: () => get<Overview>('/overview'),
   matrix: () =>
     get<{ agents: AgentMeta[]; columns: MatrixColumn[]; stale_after_s: number }>('/matrix'),
-  runtimes: () => get<{ runtimes: Runtime[]; stale_after_s: number }>('/runtimes'),
+  runtimes: (enabledOnly = false, includeDisabledHosts = false) => {
+    const q = new URLSearchParams()
+    if (enabledOnly) q.set('enabled_only', 'true')
+    if (includeDisabledHosts) q.set('include_disabled_hosts', 'true')
+    const qs = q.toString() ? '?' + q.toString() : ''
+    return get<{ runtimes: Runtime[]; stale_after_s: number }>('/runtimes' + qs)
+  },
   installations: (params: { runtime_id?: string; agent_id?: string; detected_only?: boolean }) => {
     const q = new URLSearchParams()
     if (params.runtime_id) q.set('runtime_id', params.runtime_id)
