@@ -338,7 +338,7 @@ export const translations = {
     'machines.noAgents': '未检测到 Agent',
     'machines.footer': '{instTotal} 处 Agent 安装',
     'machines.viewMode.cards': '卡片',
-    'machines.viewMode.table': '表格 (Tailscale)',
+    'machines.viewMode.table': '表格',
     'machines.thMachine': '机器',
     'machines.thAddresses': '接入地址',
     'machines.thVersion': '版本与 AGENT',
