@@ -62,6 +62,7 @@ def _rt_summary(s, rt, ttl):
             latest_ver = latest_info.get("latest_available")
             agent_details.append(
                 {
+                    "id": inst.id,
                     "agent": inst.agent_id,
                     "version": inst.version,
                     "status": inst.status,
@@ -578,6 +579,79 @@ def get_installation(inst_id: str):
             "reachable": rt.reachable if rt else None,
         }
         return item
+
+
+@router.post("/installations/{inst_id}/upgrade")
+async def upgrade_installation_route(inst_id: str, wait: bool = Query(False)):
+    from agent_fleet.services.action_service import (
+        start_upgrade_task,
+        upgrade_agent_installation,
+    )
+
+    try:
+        if wait:
+            return await upgrade_agent_installation(inst_id)
+        return start_upgrade_task(inst_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, f"Upgrade execution error: {exc}")
+
+
+@router.post("/runtimes/{runtime_id}/agents/{agent_id}/upgrade")
+async def upgrade_runtime_agent_route(
+    runtime_id: str, agent_id: str, wait: bool = Query(False)
+):
+    from agent_fleet.services.action_service import (
+        start_upgrade_task,
+        upgrade_agent_installation,
+    )
+
+    with session_scope() as s:
+        inst = s.execute(
+            select(models.AgentInstallation).where(
+                models.AgentInstallation.runtime_id == runtime_id,
+                models.AgentInstallation.agent_id == agent_id,
+            )
+        ).scalar_one_or_none()
+        if not inst:
+            raise HTTPException(
+                404, f"No installation of {agent_id} found on runtime {runtime_id}"
+            )
+        inst_id = inst.id
+
+    try:
+        if wait:
+            return await upgrade_agent_installation(inst_id)
+        return start_upgrade_task(inst_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, f"Upgrade execution error: {exc}")
+
+
+@router.get("/upgrades/{task_id}")
+def get_upgrade_task_route(task_id: str):
+    from agent_fleet.services.action_service import get_upgrade_task
+
+    task = get_upgrade_task(task_id)
+    if not task:
+        raise HTTPException(404, "Upgrade task not found")
+    return task
+
+
+@router.get("/installations/{inst_id}/upgrade/active")
+def get_active_upgrade_route(inst_id: str):
+    from agent_fleet.services.action_service import get_active_task_for_installation
+
+    return {"active_task": get_active_task_for_installation(inst_id)}
+
+
+@router.get("/upgrades")
+def list_upgrades_route(limit: int = Query(30)):
+    from agent_fleet.services.action_service import list_upgrade_tasks
+
+    return {"tasks": list_upgrade_tasks(limit)}
 
 
 @router.get("/snapshots")

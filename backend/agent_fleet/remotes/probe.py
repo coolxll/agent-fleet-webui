@@ -89,35 +89,19 @@ def _pathq(path: str) -> str:
 
 PATH_BOOTSTRAP = (
     NL
-    + 'for _c in "$HOME/.local/bin" "$HOME/.bun/bin" "$HOME/.cargo/bin" "$HOME/.deno/bin" '
-    + BS + NL
-    + '          "$HOME/.volta/bin" "$HOME/.npm-global/bin" "$HOME/.yarn/bin" '
-    + BS + NL
-    + '          "$HOME/.local/share/pnpm" "$HOME/.pnpm-global/bin" '
-    + BS + NL
-    + '          "$HOME/.asdf/shims" "$HOME/.asdf/bin" "$HOME/.nodenv/shims" "$HOME/.nodenv/bin" '
-    + BS + NL
-    + '          "$HOME/.qoder-cn/entry" "$HOME/.qoder/entry" '
-    + BS + NL
-    + '          "/usr/local/bin" "/usr/local/sbin" "/opt/homebrew/bin" "/snap/bin"; do'
-    + NL
-    + '  case ":$PATH:" in'
-    + NL
-    + '    *":$_c:"*) ;;'
-    + NL
-    + '    *) [ -d "$_c" ] && PATH="$_c:$PATH" ;;'
-    + NL
-    + "  esac"
-    + NL
-    + "done"
-    + NL
     + 'if [ -d "$HOME/.nvm/versions/node" ]; then'
     + NL
     + '  for _v in $(ls -1 "$HOME/.nvm/versions/node" 2>/dev/null | sort -r); do'
     + NL
     + '    if [ -d "$HOME/.nvm/versions/node/$_v/bin" ]; then'
     + NL
-    + '      PATH="$HOME/.nvm/versions/node/$_v/bin:$PATH"'
+    + '      case ":$PATH:" in'
+    + NL
+    + '        *":$HOME/.nvm/versions/node/$_v/bin:"*) ;;'
+    + NL
+    + '        *) PATH="$HOME/.nvm/versions/node/$_v/bin:$PATH" ;;'
+    + NL
+    + "      esac"
     + NL
     + "      break"
     + NL
@@ -133,7 +117,13 @@ PATH_BOOTSTRAP = (
     + NL
     + '    if [ -d "$HOME/.local/share/fnm/$_v/bin" ]; then'
     + NL
-    + '      PATH="$HOME/.local/share/fnm/$_v/bin:$PATH"'
+    + '      case ":$PATH:" in'
+    + NL
+    + '        *":$HOME/.local/share/fnm/$_v/bin:"*) ;;'
+    + NL
+    + '        *) PATH="$HOME/.local/share/fnm/$_v/bin:$PATH" ;;'
+    + NL
+    + "      esac"
     + NL
     + "      break"
     + NL
@@ -149,7 +139,13 @@ PATH_BOOTSTRAP = (
     + NL
     + '    if [ -d "$HOME/.local/share/pi-node/$_v/bin" ]; then'
     + NL
-    + '      PATH="$HOME/.local/share/pi-node/$_v/bin:$PATH"'
+    + '      case ":$PATH:" in'
+    + NL
+    + '        *":$HOME/.local/share/pi-node/$_v/bin:"*) ;;'
+    + NL
+    + '        *) PATH="$HOME/.local/share/pi-node/$_v/bin:$PATH" ;;'
+    + NL
+    + "      esac"
     + NL
     + "      break"
     + NL
@@ -158,6 +154,36 @@ PATH_BOOTSTRAP = (
     + "  done"
     + NL
     + "fi"
+    + NL
+    + 'for _c in "/snap/bin" "/usr/local/sbin" "/usr/local/bin" '
+    + BS + NL
+    + '          "$HOME/.asdf/shims" "$HOME/.asdf/bin" "$HOME/.nodenv/shims" "$HOME/.nodenv/bin" '
+    + BS + NL
+    + '          "$HOME/.yarn/bin" "$HOME/.npm-global/bin" "$HOME/.volta/bin" '
+    + BS + NL
+    + '          "$HOME/.local/share/pnpm" "$HOME/.pnpm-global/bin" '
+    + BS + NL
+    + '          "/home/linuxbrew/.linuxbrew/sbin" "/home/linuxbrew/.linuxbrew/bin" '
+    + BS + NL
+    + '          "$HOME/.linuxbrew/sbin" "$HOME/.linuxbrew/bin" '
+    + BS + NL
+    + '          "/opt/homebrew/sbin" "/opt/homebrew/bin" '
+    + BS + NL
+    + '          "$HOME/.deno/bin" "$HOME/.cargo/bin" "$HOME/.bun/bin" '
+    + BS + NL
+    + '          "$HOME/.qoder-cn/entry" "$HOME/.qoder/entry" "$HOME/.opencode/bin" '
+    + BS + NL
+    + '          "$HOME/.local/bin"; do'
+    + NL
+    + '  case ":$PATH:" in'
+    + NL
+    + '    *":$_c:"*) ;;'
+    + NL
+    + '    *) [ -d "$_c" ] && PATH="$_c:$PATH" ;;'
+    + NL
+    + "  esac"
+    + NL
+    + "done"
     + NL
     + "export PATH"
     + NL

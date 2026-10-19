@@ -199,6 +199,8 @@ class WindowsRunner(_SshBase):
                 "powershell.exe",
                 "-NoProfile",
                 "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
                 "-EncodedCommand",
                 self.encode(script),
             ],

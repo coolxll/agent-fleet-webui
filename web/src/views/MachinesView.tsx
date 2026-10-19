@@ -198,7 +198,7 @@ export default function MachinesView({
       rts = rts.filter((r: any) => r.key === activeRuntimeKey)
     }
     return rts.flatMap((r: any) =>
-      (r.installations || []).map((i: any) => ({ ...i, runtimeKey: r.key, runtimeKind: r.kind }))
+      (r.installations || []).map((i: any) => ({ ...i, runtimeKey: r.key, runtimeKind: r.kind, runtimeId: r.id }))
     )
   }, [hostDetail, activeRuntimeKey])
 
@@ -478,7 +478,9 @@ export default function MachinesView({
                                       host: hostDetail.name,
                                       runtimeKey: i.runtimeKey,
                                       packageName: i.package,
-                                      releaseUrl: i.release_url
+                                      releaseUrl: i.release_url,
+                                      installationId: i.id,
+                                      runtimeId: i.runtimeId
                                     })
                                   }}
                                 />
@@ -553,7 +555,7 @@ export default function MachinesView({
                     for (const ad of rt.agent_details || []) {
                       if (!seenAgents.has(ad.agent)) {
                         seenAgents.add(ad.agent)
-                        agentDetails.push({ ...ad, host: h.name, rtKey: rt.key, osName: rt.os_name })
+                        agentDetails.push({ ...ad, host: h.name, rtKey: rt.key, osName: rt.os_name, instId: ad.id, rtId: rt.id })
                       }
                     }
                   }
@@ -654,7 +656,9 @@ export default function MachinesView({
                                           runtimeKey: ad.rtKey,
                                           osName: ad.osName,
                                           packageName: ad.package,
-                                          releaseUrl: ad.release_url
+                                          releaseUrl: ad.release_url,
+                                          installationId: ad.instId,
+                                          runtimeId: ad.rtId
                                         })
                                       }}
                                     />
@@ -719,7 +723,16 @@ export default function MachinesView({
       )}
 
       {upgradeTarget && (
-        <UpgradeModal target={upgradeTarget} onClose={() => setUpgradeTarget(null)} />
+        <UpgradeModal
+          target={upgradeTarget}
+          onClose={() => setUpgradeTarget(null)}
+          onUpgraded={() => {
+            loadHosts()
+            if (selectedHostId) {
+              api.machine(selectedHostId).then((d) => setHostDetail(d))
+            }
+          }}
+        />
       )}
     </div>
   )

@@ -393,8 +393,43 @@ export const api = {
     fetch('/api/runtimes/' + id, { method: 'DELETE' }).then(async (r) => {
       if (!r.ok) throw new Error((await r.text()) || 'delete failed')
       return (await r.json()) as { ok: boolean; deleted: string }
-    })
+    }),
+  upgradeInstallation: (instId: string) =>
+    post<UpgradeTask>('/installations/' + instId + '/upgrade'),
+  upgradeRuntimeAgent: (runtimeId: string, agentId: string) =>
+    post<UpgradeTask>('/runtimes/' + runtimeId + '/agents/' + agentId + '/upgrade'),
+  getUpgradeTask: (taskId: string) =>
+    get<UpgradeTask>('/upgrades/' + taskId),
+  getActiveUpgradeForInstallation: (instId: string) =>
+    get<{ active_task: UpgradeTask | null }>('/installations/' + instId + '/upgrade/active'),
+  listUpgradeTasks: () =>
+    get<{ tasks: UpgradeTask[] }>('/upgrades')
 }
+
+export type UpgradeTask = {
+  task_id: string
+  installation_id: string
+  runtime_id: string
+  agent: string
+  host: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  started_at: number
+  finished_at?: number | null
+  duration_ms: number
+  ok?: boolean | null
+  exit_code?: number | null
+  stdout: string
+  stderr: string
+  error?: string | null
+  old_version?: string | null
+  new_version?: string | null
+  scan_refreshed?: boolean
+}
+
+// For backwards compatibility
+export type UpgradeResult = UpgradeTask
+
+
 
 export function getUpdateCommand(
   agent: string,

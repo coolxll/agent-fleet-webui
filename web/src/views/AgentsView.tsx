@@ -34,6 +34,7 @@ export default function AgentsView({
   const [upgradeTarget, setUpgradeTarget] = useState<UpgradeTarget | null>(null)
   const [drawerInstId, setDrawerInstId] = useState<string | null>(null)
   const [customBaselineIdx, setCustomBaselineIdx] = useState<number>(0)
+  const [refreshCount, setRefreshCount] = useState(0)
 
   // Compare state: selected installation IDs (up to 2)
   const [selectedInsts, setSelectedInsts] = useState<string[]>([])
@@ -129,7 +130,7 @@ export default function AgentsView({
     return () => {
       alive = false
     }
-  }, [activeAgent])
+  }, [activeAgent, refreshCount])
 
   const handleSelectAgent = (aid: string) => {
     setActiveAgent(aid)
@@ -482,7 +483,9 @@ export default function AgentsView({
                                         runtimeKey: i.runtime_key,
                                         osName: i.os_name,
                                         packageName: v?.package,
-                                        releaseUrl: data.release_url
+                                        releaseUrl: data.release_url,
+                                        installationId: i.id,
+                                        runtimeId: i.runtime_id
                                       })
                                     }}
                                   />
@@ -523,7 +526,9 @@ export default function AgentsView({
                                         runtimeKey: i.runtime_key,
                                         osName: i.os_name,
                                         packageName: v?.package,
-                                        releaseUrl: data.release_url
+                                        releaseUrl: data.release_url,
+                                        installationId: i.id,
+                                        runtimeId: i.runtime_id
                                       })
                                     }
                                     style={{
@@ -597,7 +602,13 @@ export default function AgentsView({
       />
 
       {upgradeTarget && (
-        <UpgradeModal target={upgradeTarget} onClose={() => setUpgradeTarget(null)} />
+        <UpgradeModal
+          target={upgradeTarget}
+          onClose={() => setUpgradeTarget(null)}
+          onUpgraded={() => {
+            setRefreshCount((c) => c + 1)
+          }}
+        />
       )}
     </div>
   )
