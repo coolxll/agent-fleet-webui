@@ -10,13 +10,39 @@ the web UI. The requirements it satisfies (and the verification behind each)
 are in `docs/requirements.md`.
 
 Supported agents: Codex CLI, Claude Code, OpenCode, Pi, Hermes,
-Antigravity (AGY) and CodeBuddy.
+Antigravity (AGY), CodeBuddy, and Qoder (QoderCN).
 Supported targets: macOS, Linux, Windows (PowerShell) and WSL distros,
 reached over your existing SSH configuration.
 
 Requirements: Python 3.13, Node 20+, and the `ssh` client on the controller.
 
 ## Quick start
+
+### One-command startup (Recommended)
+
+From the repository root:
+
+```bash
+# Production mode: automatically builds frontend if needed, syncs venv, and starts backend on http://localhost:8000
+./start.sh
+
+# Or start and automatically open your default browser:
+./start.sh --open
+
+# Full dev mode: runs Vite hot-reloading frontend (:5173) + FastAPI backend (:8000) concurrently
+./dev.sh
+```
+
+Common `./start.sh` options:
+* `--port <num>`: custom backend port (default: 8000).
+* `--host <ip>`: bind address (default: 127.0.0.1).
+* `--build`: force rebuild the frontend bundle before serving.
+* `--open`: launch browser automatically once ready.
+* `--dev`: run full development mode with hot reload.
+
+---
+
+### Manual step-by-step setup
 
 The backend and CLI import the `agent_fleet` package, so run them from
 `backend/` (or from the repo root with `PYTHONPATH=backend` in front).
