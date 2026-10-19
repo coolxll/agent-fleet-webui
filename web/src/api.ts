@@ -29,6 +29,8 @@ export type Runtime = {
     version_state?: string
     latest_available?: string | null
     package?: string | null
+    source?: string | null
+    release_url?: string | null
   }[]
 }
 
@@ -280,11 +282,13 @@ export const api = {
         version_state: string
         latest_available?: string | null
         package?: string | null
+        source?: string | null
       }[]
       version: {
         package: string | null
         latest_available: string | null
         source: string
+        release_url?: string | null
         latest_installed: string | null
         distinct_versions: string[]
         up_to_date: number
@@ -331,6 +335,8 @@ export const api = {
           version_state?: string
           latest_available?: string | null
           package?: string | null
+          source?: string | null
+          release_url?: string | null
           exec_path: string | null
           install_method: string | null
           config_dir: string | null
@@ -361,7 +367,17 @@ export const api = {
       include_disabled: boolean
     }>('/hosts?include_disabled=' + (includeDisabled ? 'true' : 'false')),
   updates: () =>
-    get<Record<string, { source: string; package: string | null; latest_available: string | null }>>(
+    get<
+      Record<
+        string,
+        {
+          source: string
+          package: string | null
+          latest_available: string | null
+          release_url?: string | null
+        }
+      >
+    >(
       '/updates'
     ),
   syncInventory: () => post<{ ok: boolean; hosts_seen?: number }>('/inventory/sync'),

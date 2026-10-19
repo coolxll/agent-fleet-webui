@@ -72,6 +72,8 @@ def _rt_summary(s, rt, ttl):
                     ),
                     "latest_available": latest_ver,
                     "package": latest_info.get("package"),
+                    "source": latest_info.get("source"),
+                    "release_url": latest_info.get("release_url"),
                 }
             )
     return {
@@ -242,6 +244,10 @@ def get_machine(host_id: str):
                                 "latest_available"
                             ),
                             "package": latest_available(i.agent_id).get("package"),
+                            "source": latest_available(i.agent_id).get("source"),
+                            "release_url": latest_available(i.agent_id).get(
+                                "release_url"
+                            ),
                         }
                         for i in installs
                     ],
@@ -726,6 +732,7 @@ def agent_view(agent_id: str, include_disabled_hosts: bool = Query(False)):
         )
         i["latest_available"] = latest
         i["package"] = currency.get("package")
+        i["source"] = currency.get("source")
 
     # config consistency: group detected installs by their declared triple
     groups: dict = {}
@@ -751,6 +758,7 @@ def agent_view(agent_id: str, include_disabled_hosts: bool = Query(False)):
     return {
         "agent": agent_id,
         "name": _get_adapter(agent_id).display_name,
+        "release_url": currency.get("release_url"),
         "installations": installations,
         "detected_count": len(detected),
         "config_groups": config_groups,
@@ -763,7 +771,9 @@ def agent_view(agent_id: str, include_disabled_hosts: bool = Query(False)):
                 1 for i in detected if i["version_state"] == "latest"
             ),
             "behind": sum(1 for i in detected if i["version_state"] == "behind"),
-            "unknown_source": currency.get("source") != "npm",
+            # False only when no feed exists at all; npm and github both count
+            # as real sources, so a github-backed agent is not "unknown".
+            "unknown_source": currency.get("source") not in ("npm", "github"),
         },
     }
 

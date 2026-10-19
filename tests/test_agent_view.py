@@ -37,9 +37,76 @@ def test_npm_packages_are_verified_names():
     assert NPM_PACKAGES["pi"] == "@earendil-works/pi-coding-agent"
     assert NPM_PACKAGES["codebuddy"] == "@tencent-ai/codebuddy-code"
     assert NPM_PACKAGES["qoder"] == "@qoder-ai/qodercli"
-    # agy and hermes are not npm-distributed: they must report unknown
+    # agy and hermes are not npm-distributed; their feed is GitHub releases
     assert "agy" not in NPM_PACKAGES
     assert "hermes" not in NPM_PACKAGES
+
+
+def test_github_repos_are_verified_projects():
+    """Each repo was checked against a local install's --version output."""
+    from agent_fleet.services.updates import GITHUB_REPOS
+
+    assert GITHUB_REPOS["agy"] == "google-antigravity/antigravity-cli"
+    assert GITHUB_REPOS["hermes"] == "NousResearch/hermes-agent"
+    # nothing is listed in both feeds
+    from agent_fleet.services.updates import NPM_PACKAGES
+
+    assert not set(NPM_PACKAGES) & set(GITHUB_REPOS)
+
+
+def test_github_latest_strips_v_prefix(monkeypatch):
+    from agent_fleet.services import updates
+
+    seen = {}
+
+    def fake_fetch(url):
+        seen["url"] = url
+        return {"tag_name": "v0.22.2"}
+
+    monkeypatch.setattr(updates, "_fetch_json", fake_fetch)
+    updates.invalidate()
+    result = updates.latest_available("hermes")
+    assert seen["url"] == (
+        "https://api.github.com/repos/NousResearch/hermes-agent/releases/latest"
+    )
+    assert result["source"] == "github"
+    assert result["package"] == "NousResearch/hermes-agent"
+    assert result["latest_available"] == "0.22.2"
+    assert result["release_url"] == (
+        "https://github.com/NousResearch/hermes-agent/releases"
+    )
+    assert updates.version_state("0.22.2", result["latest_available"]) == "latest"
+    updates.invalidate()
+
+
+def test_github_failure_keeps_intended_source(monkeypatch):
+    """A network error must not turn a github agent into 'no feed exists'."""
+    from agent_fleet.services import updates
+
+    def boom(url):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(updates, "_fetch_json", boom)
+    updates.invalidate()
+    result = updates.latest_available("agy")
+    assert result["source"] == "github"
+    assert result["package"] == "google-antigravity/antigravity-cli"
+    assert result["latest_available"] is None
+    assert "timed out" in result["error"]
+    updates.invalidate()
+
+
+def test_unknown_agent_has_no_feed(monkeypatch):
+    from agent_fleet.services import updates
+
+    updates.invalidate()
+    result = updates.latest_available("not-an-agent")
+    assert result == {
+        "source": "unknown",
+        "package": None,
+        "latest_available": None,
+        "release_url": None,
+    }
 
 
 def test_agent_view_consistency_and_currency(client, fleet_db, monkeypatch):

@@ -11,6 +11,7 @@ export type UpgradeTarget = {
   runtimeKey?: string | null
   osName?: string | null
   packageName?: string | null
+  releaseUrl?: string | null
 }
 
 type Props = {
@@ -133,7 +134,10 @@ export default function UpgradeModal({ target, onClose }: Props) {
             <div className="muted small" style={{ marginTop: 12 }}>
               {t('upgrade.packageLabel')}:{' '}
               <a
-                href={`https://www.npmjs.com/package/${target.packageName}`}
+                href={
+                  target.releaseUrl ||
+                  `https://www.npmjs.com/package/${target.packageName}`
+                }
                 target="_blank"
                 rel="noreferrer"
                 style={{ color: 'var(--accent)', textDecoration: 'none' }}
