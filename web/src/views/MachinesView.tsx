@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import AgentIcon, { agentColor } from '../components/AgentIcon'
+import { useI18n } from '../i18n'
 
 export default function MachinesView({ onOpenMachine }: { onOpenMachine: (id: string) => void }) {
+  const { t } = useI18n()
   const [hosts, setHosts] = useState<any[]>([])
   const [error, setError] = useState<string | null>(null)
 
@@ -14,15 +16,15 @@ export default function MachinesView({ onOpenMachine }: { onOpenMachine: (id: st
         .then((r) => alive && setHosts(r.hosts))
         .catch((e: any) => alive && setError(String(e.message || e)))
     load()
-    const t = setInterval(load, 15000)
+    const tInterval = setInterval(load, 15000)
     return () => {
       alive = false
-      clearInterval(t)
+      clearInterval(tInterval)
     }
   }, [])
 
   if (error) return <div className="err">{error}</div>
-  if (!hosts.length) return <div className="muted">No machines yet — press Re-sync inventory.</div>
+  if (!hosts.length) return <div className="muted">{t('machines.noMachines')}</div>
 
   return (
     <div className="machine-grid">
@@ -40,8 +42,8 @@ export default function MachinesView({ onOpenMachine }: { onOpenMachine: (id: st
             <div className="machine-card-head">
               <span className={'dot ' + (online ? 'on' : offline ? 'off' : 'unk')} />
               <span className="machine-name">{h.name}</span>
-              {stale ? <span className="tag warn">stale</span> : null}
-              {!h.enabled ? <span className="tag unknown">excluded</span> : null}
+              {stale ? <span className="tag warn">{t('common.stale')}</span> : null}
+              {!h.enabled ? <span className="tag unknown">{t('common.excluded')}</span> : null}
             </div>
             <div className="machine-os muted small">
               {rts.map((r: any) => r.os_name || r.kind).filter(Boolean).join(' · ') || h.hostname || '—'}
@@ -57,11 +59,15 @@ export default function MachinesView({ onOpenMachine }: { onOpenMachine: (id: st
                   <AgentIcon agent={a} size={20} />
                 </span>
               ))}
-              {agents.length === 0 ? <span className="muted small">no agents</span> : null}
+              {agents.length === 0 ? <span className="muted small">{t('machines.noAgents')}</span> : null}
             </div>
             <div className="machine-foot muted small">
-              {total} installation{total === 1 ? '' : 's'} · {rts.length} runtime
-              {rts.length === 1 ? '' : 's'}
+              {t('machines.footer', {
+                instTotal: total,
+                instPlural: total === 1 ? '' : 's',
+                rtCount: rts.length,
+                rtPlural: rts.length === 1 ? '' : 's'
+              })}
             </div>
           </div>
         )

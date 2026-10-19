@@ -7,6 +7,7 @@ import AgentDetail from './components/AgentDetail'
 import Matrix from './views/Matrix'
 import Diff from './views/Diff'
 import Overview from './views/Overview'
+import { useI18n } from './i18n'
 
 type Route =
   | { name: 'fleet' }
@@ -27,6 +28,7 @@ type ScheduleState = {
 }
 
 export default function App() {
+  const { t, language, toggleLanguage } = useI18n()
   const [route, setRoute] = useState<Route>({ name: 'fleet' })
   const [runId, setRunId] = useState<string | null>(null)
   const [progress, setProgress] = useState<{
@@ -70,58 +72,58 @@ export default function App() {
           setRunId(null)
           setProgress(null)
           setRefreshKey((k) => k + 1)
-          setToast('Scan finished: ' + run.succeeded + ' ok / ' + run.failed + ' failed')
+          setToast(t('toast.scanFinished', { ok: run.succeeded, failed: run.failed }))
         }
       } catch {
         /* keep trying */
       }
     }
     poll()
-    const t = setInterval(poll, 1500)
+    const tInterval = setInterval(poll, 1500)
     return () => {
       alive = false
-      clearInterval(t)
+      clearInterval(tInterval)
     }
-  }, [runId])
+  }, [runId, t])
 
   const scanRuntime = useCallback(async (id: string) => {
     setBusy(true)
     try {
       const res = await api.startScan([id])
       setRunId(res.run_id)
-      setToast('Scanning 1 runtime...')
+      setToast(t('toast.scanningOne'))
     } catch (e: any) {
       setToast(String(e.message || e))
     } finally {
       setBusy(false)
     }
-  }, [])
+  }, [t])
 
   const scanAll = useCallback(async () => {
     setBusy(true)
     try {
       const res = await api.startScan(null)
       setRunId(res.run_id)
-      setToast('Scanning ' + res.total + ' runtime(s)...')
+      setToast(t('toast.scanningCount', { count: res.total }))
     } catch (e: any) {
       setToast(String(e.message || e))
     } finally {
       setBusy(false)
     }
-  }, [])
+  }, [t])
 
   const sync = useCallback(async () => {
     setBusy(true)
     try {
       const res = await api.syncInventory()
-      setToast('Inventory synced: ' + (res.hosts_seen ?? 'ok') + ' host(s)')
+      setToast(t('toast.inventorySynced', { count: res.hosts_seen ?? 'ok' }))
       setRefreshKey((k) => k + 1)
     } catch (e: any) {
       setToast(String(e.message || e))
     } finally {
       setBusy(false)
     }
-  }, [])
+  }, [t])
 
   const saveSchedule = useCallback(async (patch: any) => {
     try {
@@ -149,30 +151,33 @@ export default function App() {
       a.click()
       URL.revokeObjectURL(url)
       setToast(
-        'Exported ' + (data.counts?.runtimes ?? 0) + ' runtime(s), ' + (data.counts?.installations ?? 0) + ' installation(s)'
+        t('toast.exported', {
+          runtimes: data.counts?.runtimes ?? 0,
+          installations: data.counts?.installations ?? 0
+        })
       )
     } catch (e: any) {
       setToast(String(e.message || e))
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     if (!toast) return
-    const t = setTimeout(() => setToast(null), 4000)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => setToast(null), 4000)
+    return () => clearTimeout(timer)
   }, [toast])
 
-  const crumbs: { label: string; route?: Route }[] = [{ label: 'Machines', route: { name: 'fleet' } }]
+  const crumbs: { label: string; route?: Route }[] = [{ label: t('nav.machines'), route: { name: 'fleet' } }]
   if (route.name === 'machine' || route.name === 'agent') {
-    crumbs.push({ label: 'Machine', route: { name: 'machine', hostId: (route as any).hostId } })
+    crumbs.push({ label: t('nav.machine'), route: { name: 'machine', hostId: (route as any).hostId } })
   }
   if (route.name === 'agent') {
-    crumbs.push({ label: 'Agent' })
+    crumbs.push({ label: t('nav.agent') })
   }
-  if (route.name === 'agents') crumbs.push({ label: 'Agents' })
-  if (route.name === 'compare') crumbs.push({ label: 'Compare' })
-  if (route.name === 'matrix') crumbs.push({ label: 'Matrix' })
-  if (route.name === 'overview') crumbs.push({ label: 'Overview' })
+  if (route.name === 'agents') crumbs.push({ label: t('nav.agents') })
+  if (route.name === 'compare') crumbs.push({ label: t('nav.compare') })
+  if (route.name === 'matrix') crumbs.push({ label: t('nav.matrix') })
+  if (route.name === 'overview') crumbs.push({ label: t('nav.overview') })
 
   return (
     <div>
@@ -201,21 +206,26 @@ export default function App() {
                 />
               </div>
               <span>
-                {progress.done}/{progress.total} · {progress.ok} ok · {progress.failed} failed
+                {t('scan.progress', {
+                  done: progress.done,
+                  total: progress.total,
+                  ok: progress.ok,
+                  failed: progress.failed
+                })}
               </span>
             </>
           ) : null}
           <button className="btn" onClick={sync} disabled={busy}>
-            Re-sync
+            {t('nav.resync')}
           </button>
           <button className="btn primary" onClick={scanAll} disabled={busy || !!runId}>
-            {runId ? 'Scanning...' : 'Scan all'}
+            {runId ? t('nav.scanning') : t('nav.scanAll')}
           </button>
           <button className="btn" onClick={() => setShowSchedule((v) => !v)}>
-            Schedule
+            {t('nav.schedule')}
           </button>
           <button className="btn" onClick={exportJson} disabled={busy}>
-            Export JSON
+            {t('nav.exportJson')}
           </button>
         </div>
         <div className="tabs">
@@ -223,25 +233,33 @@ export default function App() {
             className={route.name === 'agents' ? 'active' : ''}
             onClick={() => setRoute({ name: 'agents' })}
           >
-            Agents
+            {t('nav.agents')}
           </button>
           <button
             className={route.name === 'overview' ? 'active' : ''}
             onClick={() => setRoute({ name: 'overview' })}
           >
-            Overview
+            {t('nav.overview')}
           </button>
           <button
             className={route.name === 'matrix' ? 'active' : ''}
             onClick={() => setRoute({ name: 'matrix' })}
           >
-            Matrix
+            {t('nav.matrix')}
           </button>
           <button
             className={route.name === 'compare' ? 'active' : ''}
             onClick={() => setRoute({ name: 'compare' })}
           >
-            Compare
+            {t('nav.compare')}
+          </button>
+          <button
+            className="btn"
+            style={{ marginLeft: 8, padding: '4px 8px', fontSize: 12 }}
+            onClick={toggleLanguage}
+            title={language === 'zh' ? 'Switch to English' : '切换为中文'}
+          >
+            🌐 {t('nav.langSwitch')}
           </button>
         </div>
       </div>
@@ -249,7 +267,7 @@ export default function App() {
       {showSchedule && schedule ? (
         <div className="container" style={{ paddingBottom: 0 }}>
           <div className="panel">
-            <h2>Scheduled scanning</h2>
+            <h2>{t('schedule.title')}</h2>
             <div className="body filters">
               <label className="small">
                 <input
@@ -257,20 +275,20 @@ export default function App() {
                   checked={schedule.enabled}
                   onChange={(e) => saveSchedule({ enabled: e.target.checked })}
                 />{' '}
-                scan the whole fleet every
+                {t('schedule.every')}
               </label>
               <select
                 value={schedule.interval_seconds}
                 onChange={(e) => saveSchedule({ interval_seconds: Number(e.target.value) })}
               >
-                <option value={600}>10 minutes</option>
-                <option value={1800}>30 minutes</option>
-                <option value={3600}>1 hour</option>
-                <option value={21600}>6 hours</option>
-                <option value={86400}>24 hours</option>
+                <option value={600}>{t('schedule.10m')}</option>
+                <option value={1800}>{t('schedule.30m')}</option>
+                <option value={3600}>{t('schedule.1h')}</option>
+                <option value={21600}>{t('schedule.6h')}</option>
+                <option value={86400}>{t('schedule.24h')}</option>
               </select>
               <span className="muted small">
-                {schedule.running ? 'run in progress' : 'idle'}
+                {schedule.running ? t('schedule.running') : t('schedule.idle')}
               </span>
             </div>
           </div>
@@ -311,6 +329,7 @@ export default function App() {
 }
 
 function AgentPage({ installationId }: { installationId: string }) {
+  const { t } = useI18n()
   const [detail, setDetail] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -326,7 +345,7 @@ function AgentPage({ installationId }: { installationId: string }) {
   }, [installationId])
 
   if (error) return <div className="err">{error}</div>
-  if (!detail) return <div className="muted">Loading...</div>
+  if (!detail) return <div className="muted">{t('common.loading')}</div>
   const rt = detail.runtime || {}
   const runtimeName = (rt.host || '?') + '/' + (rt.key || '?')
   return <AgentDetail detail={detail} runtimeName={runtimeName} />

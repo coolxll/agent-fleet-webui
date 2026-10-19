@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import AgentIcon, { agentLabel } from '../components/AgentIcon'
+import { useI18n, type TranslationKey } from '../i18n'
 
 export default function MachineView({
   hostId,
@@ -9,8 +10,15 @@ export default function MachineView({
   hostId: string
   onOpenAgent: (id: string) => void
 }) {
+  const { t } = useI18n()
   const [data, setData] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const getStatusLabel = (status: string) => {
+    const key = `matrix.state.${status}` as TranslationKey
+    const label = t(key)
+    return label !== key ? label : status
+  }
 
   useEffect(() => {
     let alive = true
@@ -24,41 +32,43 @@ export default function MachineView({
   }, [hostId])
 
   if (error) return <div className="err">{error}</div>
-  if (!data) return <div className="muted">Loading...</div>
+  if (!data) return <div className="muted">{t('common.loading')}</div>
 
   return (
     <div>
       <div className="cards">
         <div className="card">
-          <div className="label">Machine</div>
+          <div className="label">{t('machine.title')}</div>
           <div className="value" style={{ fontSize: 20 }}>
             {data.name}
           </div>
           <div className="hint">{data.hostname || ''}</div>
         </div>
         <div className="card">
-          <div className="label">Runtimes</div>
+          <div className="label">{t('machine.runtimes')}</div>
           <div className="value">{data.runtimes.length}</div>
           <div className="hint">
             {data.runtimes.map((r: any) => r.kind).join(', ')}
           </div>
         </div>
         <div className="card">
-          <div className="label">Agents</div>
+          <div className="label">{t('machine.agents')}</div>
           <div className="value">{data.agents_detected}</div>
-          <div className="hint">detected on this machine</div>
+          <div className="hint">{t('machine.detectedOnThis')}</div>
         </div>
         <div className="card">
-          <div className="label">Reachability</div>
+          <div className="label">{t('machine.reachability')}</div>
           <div className="value" style={{ fontSize: 18 }}>
             {data.runtimes.some((r: any) => r.reachable === true)
-              ? 'online'
+              ? t('common.online')
               : data.runtimes.some((r: any) => r.reachable === false)
-                ? 'offline'
-                : 'unscanned'}
+                ? t('common.offline')
+                : t('common.unscanned')}
           </div>
           <div className="hint">
-            {data.runtimes.filter((r: any) => r.last_error).length} runtime(s) with errors
+            {t('machine.errorsHint', {
+              count: data.runtimes.filter((r: any) => r.last_error).length
+            })}
           </div>
         </div>
       </div>
@@ -74,13 +84,17 @@ export default function MachineView({
                 'tag ' + (rt.reachable === true ? 'ok' : rt.reachable === false ? 'bad' : 'unknown')
               }
             >
-              {rt.reachable === true ? 'up' : rt.reachable === false ? 'down' : 'unscanned'}
+              {rt.reachable === true
+                ? t('common.up')
+                : rt.reachable === false
+                  ? t('common.down')
+                  : t('common.unscanned')}
             </span>
-            {rt.stale ? <span className="tag warn">stale</span> : null}
+            {rt.stale ? <span className="tag warn">{t('common.stale')}</span> : null}
           </h2>
           <div className="body">
             {rt.installations.length === 0 ? (
-              <div className="muted small">No agents found on this runtime.</div>
+              <div className="muted small">{t('machine.noAgentsOnRuntime')}</div>
             ) : (
               <div className="agent-cards">
                 {rt.installations.map((i: any) => {
@@ -96,7 +110,7 @@ export default function MachineView({
                         <span className="agent-card-name">{agentLabel(i.agent)}</span>
                       </div>
                       <div className="agent-card-model mono">
-                        {cs.model || <span className="muted">no model set</span>}
+                        {cs.model || <span className="muted">{t('machine.noModelSet')}</span>}
                       </div>
                       <div className="agent-card-provider small muted">
                         {cs.provider || '—'}
@@ -116,7 +130,7 @@ export default function MachineView({
                                   : 'bad')
                           }
                         >
-                          {i.status}
+                          {getStatusLabel(i.status)}
                         </span>
                       </div>
                     </div>

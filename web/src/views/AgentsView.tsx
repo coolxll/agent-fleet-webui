@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import AgentIcon from '../components/AgentIcon'
+import { useI18n } from '../i18n'
 
 export default function AgentsView() {
+  const { t } = useI18n()
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([])
   const [counts, setCounts] = useState<Record<string, number>>({})
   const [selected, setSelected] = useState<string | null>(null)
@@ -26,7 +28,7 @@ export default function AgentsView() {
   return (
     <div>
       <div className="panel">
-        <h2>Pick an agent</h2>
+        <h2>{t('agents.pick')}</h2>
         <div className="body">
           <div className="machine-grid">
             {agents.map((a) => (
@@ -36,7 +38,7 @@ export default function AgentsView() {
                   <span className="machine-name">{a.id}</span>
                 </div>
                 <div className="machine-os small muted">
-                  {a.id in counts ? counts[a.id] + ' installation(s) across the fleet' : ''}
+                  {a.id in counts ? t('agents.acrossFleet', { count: counts[a.id] }) : ''}
                 </div>
               </div>
             ))}
@@ -48,6 +50,7 @@ export default function AgentsView() {
 }
 
 function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }) {
+  const { t } = useI18n()
   const [data, setData] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -63,72 +66,72 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
   }, [agentId])
 
   if (error) return <div className="err">{error}</div>
-  if (!data) return <div className="muted">Loading...</div>
+  if (!data) return <div className="muted">{t('common.loading')}</div>
 
   const v = data.version
   return (
     <div>
       <div className="cards">
         <div className="card">
-          <div className="label">Agent</div>
+          <div className="label">{t('agents.agent')}</div>
           <div className="value" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <AgentIcon agent={data.agent} size={24} />
             {data.name}
           </div>
           <div className="hint">
             <button className="btn" onClick={onBack} style={{ marginTop: 6 }}>
-              ← all agents
+              {t('agents.allAgents')}
             </button>
           </div>
         </div>
         <div className="card">
-          <div className="label">Installations</div>
+          <div className="label">{t('agents.installations')}</div>
           <div className="value">{data.detected_count}</div>
-          <div className="hint">across the fleet</div>
+          <div className="hint">{t('agents.acrossFleetHint')}</div>
         </div>
         <div className="card">
           <div className="label">
-            {v.unknown_source ? 'Latest version' : 'Latest on npm'}
+            {v.unknown_source ? t('agents.latestVersion') : t('agents.latestOnNpm')}
           </div>
           <div className="value mono" style={{ fontSize: 18 }}>
-            {v.latest_available || <span className="muted">unknown</span>}
+            {v.latest_available || <span className="muted">{t('common.unknown')}</span>}
           </div>
           <div className="hint">
             {v.unknown_source
-              ? 'no registry source for this agent'
-              : 'via ' + v.package}
+              ? t('agents.noRegistry')
+              : t('agents.viaPackage', { pkg: v.package })}
           </div>
         </div>
         <div className="card">
-          <div className="label">Up to date</div>
+          <div className="label">{t('agents.upToDate')}</div>
           <div className="value" style={{ color: 'var(--ok)' }}>
             {v.up_to_date}
           </div>
-          <div className="hint">{v.behind} behind</div>
+          <div className="hint">{t('agents.behind', { count: v.behind })}</div>
         </div>
         <div className="card">
-          <div className="label">Config</div>
+          <div className="label">{t('agents.config')}</div>
           <div className="value" style={{ fontSize: 18 }}>
-            {data.consistent_configs ? 'consistent' : data.config_groups.length + ' variants'}
+            {data.consistent_configs ? t('agents.consistent') : t('agents.variants', { count: data.config_groups.length })}
           </div>
           <div className="hint">
-            {data.consistent_configs ? 'same model/provider everywhere' : 'machines differ'}
+            {data.consistent_configs ? t('agents.consistentHint') : t('agents.differHint')}
           </div>
         </div>
       </div>
 
       <div className="panel">
-        <h2>Installations</h2>
+        <h2>{t('agents.tableTitle')}</h2>
         <div className="body">
           <table>
             <thead>
               <tr>
-                <th>Machine</th>
-                <th>Version</th>
-                <th>Currency</th>
-                <th>Model</th>
-                <th>Provider</th>
-                <th>Status</th>
+                <th>{t('agents.thMachine')}</th>
+                <th>{t('agents.thVersion')}</th>
+                <th>{t('agents.thCurrency')}</th>
+                <th>{t('agents.thModel')}</th>
+                <th>{t('agents.thProvider')}</th>
+                <th>{t('agents.thStatus')}</th>
               </tr>
             </thead>
             <tbody>
@@ -171,18 +174,18 @@ function AgentFleet({ agentId, onBack }: { agentId: string; onBack: () => void }
       </div>
 
       <div className="panel">
-        <h2>Configuration variants</h2>
+        <h2>{t('agents.variantsTitle')}</h2>
         <div className="body">
           {data.consistent_configs ? (
             <div className="muted small">
-              Every machine runs the same model / provider / endpoint.
+              {t('agents.everyMachineSame')}
             </div>
           ) : (
             <table>
               <thead>
                 <tr>
-                  <th>Machines</th>
-                  <th>model / provider / base URL</th>
+                  <th>{t('agents.thMachines')}</th>
+                  <th>{t('agents.thSignature')}</th>
                 </tr>
               </thead>
               <tbody>

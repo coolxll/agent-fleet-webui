@@ -1,5 +1,6 @@
 import AgentIcon, { agentLabel } from './AgentIcon'
 import type { InstallationDetail } from '../api'
+import { useI18n, type TranslationKey } from '../i18n'
 
 export const STATUS_TAG: Record<string, string> = {
   installed: 'ok',
@@ -17,8 +18,16 @@ export default function AgentDetail({
   detail: InstallationDetail
   runtimeName: string
 }) {
+  const { t } = useI18n()
   const c = detail.config
   const scopes = (c?.sanitized as any)?.scopes || (c?.settings as any)?.scopes || []
+
+  const getStatusLabel = (status: string) => {
+    const key = `matrix.state.${status}` as TranslationKey
+    const label = t(key)
+    return label !== key ? label : status
+  }
+
   return (
     <div>
       <div className="panel">
@@ -31,28 +40,30 @@ export default function AgentDetail({
         </h2>
         <div className="body">
           <dl className="kv">
-            <dt>Status</dt>
+            <dt>{t('agentDetail.status')}</dt>
             <dd>
-              <span className={'tag ' + (STATUS_TAG[detail.status] || '')}>{detail.status}</span>
+              <span className={'tag ' + (STATUS_TAG[detail.status] || '')}>
+                {getStatusLabel(detail.status)}
+              </span>
             </dd>
-            <dt>Version</dt>
-            <dd className="mono">{detail.version || <span className="muted">unknown</span>}</dd>
-            <dt>Exec path</dt>
+            <dt>{t('agentDetail.version')}</dt>
+            <dd className="mono">{detail.version || <span className="muted">{t('common.unknown')}</span>}</dd>
+            <dt>{t('agentDetail.execPath')}</dt>
             <dd className="mono">{detail.exec_path || '-'}</dd>
-            <dt>Install method</dt>
-            <dd>{detail.install_method || <span className="muted">unknown</span>}</dd>
-            <dt>Config dir</dt>
+            <dt>{t('agentDetail.installMethod')}</dt>
+            <dd>{detail.install_method || <span className="muted">{t('common.unknown')}</span>}</dd>
+            <dt>{t('agentDetail.configDir')}</dt>
             <dd className="mono">{detail.config_dir || '-'}</dd>
-            <dt>Detected at</dt>
-            <dd className="small">{detail.detected_at || 'never'}</dd>
-            <dt>Runtime</dt>
+            <dt>{t('agentDetail.detectedAt')}</dt>
+            <dd className="small">{detail.detected_at || t('common.never')}</dd>
+            <dt>{t('agentDetail.runtime')}</dt>
             <dd className="small">
-              {detail.runtime?.kind || '?'} · {detail.runtime?.os_name || 'unknown OS'} · user{' '}
+              {detail.runtime?.kind || '?'} · {detail.runtime?.os_name || 'unknown OS'} · {t('common.user')}{' '}
               {detail.runtime?.collect_user || '?'}
             </dd>
             {detail.error ? (
               <>
-                <dt>Detection error</dt>
+                <dt>{t('agentDetail.detectionError')}</dt>
                 <dd className="err">{detail.error}</dd>
               </>
             ) : null}
@@ -61,16 +72,16 @@ export default function AgentDetail({
       </div>
 
       <div className="panel">
-        <h2>Configuration</h2>
+        <h2>{t('agentDetail.configuration')}</h2>
         <div className="body">
           {!c ? (
             <div className="muted small">
-              No normalized configuration stored (status: {detail.config_status}).
+              {t('agentDetail.noConfig', { status: detail.config_status })}
             </div>
           ) : (
             <>
               <dl className="kv">
-                <dt>Parse status</dt>
+                <dt>{t('agentDetail.parseStatus')}</dt>
                 <dd>
                   <span
                     className={
@@ -85,28 +96,28 @@ export default function AgentDetail({
                     {c.parse_status}
                   </span>{' '}
                   <span className="tag">
-                    {c.resolution === 'declared' ? 'as written in file' : c.resolution}
+                    {c.resolution === 'declared' ? t('agentDetail.declared') : c.resolution}
                   </span>
                 </dd>
-                <dt>Model</dt>
-                <dd className="mono">{c.model || <span className="muted">unknown</span>}</dd>
-                <dt>Provider</dt>
-                <dd className="mono">{c.provider || <span className="muted">unknown</span>}</dd>
-                <dt>Base URL</dt>
+                <dt>{t('agentDetail.model')}</dt>
+                <dd className="mono">{c.model || <span className="muted">{t('common.unknown')}</span>}</dd>
+                <dt>{t('agentDetail.provider')}</dt>
+                <dd className="mono">{c.provider || <span className="muted">{t('common.unknown')}</span>}</dd>
+                <dt>{t('agentDetail.baseUrl')}</dt>
                 <dd className="mono">
-                  {c.base_url || <span className="muted">unknown</span>}
-                  {c.base_url_masked ? <span className="tag warn">masked</span> : null}
+                  {c.base_url || <span className="muted">{t('common.unknown')}</span>}
+                  {c.base_url_masked ? <span className="tag warn">{t('agentDetail.masked')}</span> : null}
                 </dd>
-                <dt>MCP servers</dt>
+                <dt>{t('agentDetail.mcpServers')}</dt>
                 <dd>
                   {c.mcp_servers && c.mcp_servers.length ? (
                     <table>
                       <thead>
                         <tr>
-                          <th>Name</th>
-                          <th>Transport</th>
-                          <th>Command / URL</th>
-                          <th>Env keys</th>
+                          <th>{t('agentDetail.thName')}</th>
+                          <th>{t('agentDetail.thTransport')}</th>
+                          <th>{t('agentDetail.thCommandUrl')}</th>
+                          <th>{t('agentDetail.thEnvKeys')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -123,14 +134,14 @@ export default function AgentDetail({
                       </tbody>
                     </table>
                   ) : (
-                    <span className="muted small">none</span>
+                    <span className="muted small">{t('agentDetail.none')}</span>
                   )}
                 </dd>
-                <dt>Skills</dt>
+                <dt>{t('agentDetail.skills')}</dt>
                 <dd className="small">
                   {c.skills && c.skills.length ? (
                     <div>
-                      {c.skills.length} skill(s):{' '}
+                      {t('agentDetail.skillsCount', { count: c.skills.length })}{' '}
                       {c.skills
                         .slice(0, 25)
                         .map((s: any) => s.name)
@@ -138,20 +149,20 @@ export default function AgentDetail({
                       {c.skills.length > 25 ? ', ...' : ''}
                     </div>
                   ) : (
-                    <span className="muted">none</span>
+                    <span className="muted">{t('agentDetail.none')}</span>
                   )}
                 </dd>
-                <dt>Config scopes</dt>
+                <dt>{t('agentDetail.scopes')}</dt>
                 <dd>
                   {scopes.length === 0 ? (
-                    <span className="muted small">not reported by this adapter</span>
+                    <span className="muted small">{t('agentDetail.notReported')}</span>
                   ) : (
                     <table>
                       <thead>
                         <tr>
-                          <th>Scope</th>
-                          <th>Path</th>
-                          <th>State</th>
+                          <th>{t('agentDetail.thScope')}</th>
+                          <th>{t('agentDetail.thPath')}</th>
+                          <th>{t('agentDetail.thState')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -183,14 +194,14 @@ export default function AgentDetail({
                     </table>
                   )}
                 </dd>
-                <dt>Other settings</dt>
+                <dt>{t('agentDetail.otherSettings')}</dt>
                 <dd>
                   <pre>{JSON.stringify(c.settings ?? {}, null, 2)}</pre>
                 </dd>
               </dl>
               {c.unsupported_fields?.length ? (
                 <div className="warnings">
-                  Not normalized (values never read): {c.unsupported_fields.join(', ')}
+                  {t('agentDetail.notNormalizedPrefix')} {c.unsupported_fields.join(', ')}
                 </div>
               ) : null}
             </>
@@ -199,19 +210,19 @@ export default function AgentDetail({
       </div>
 
       <div className="panel">
-        <h2>Config sources</h2>
+        <h2>{t('agentDetail.configSources')}</h2>
         <div className="body">
           {detail.sources.length === 0 ? (
-            <div className="muted small">No sources recorded.</div>
+            <div className="muted small">{t('agentDetail.noSources')}</div>
           ) : (
             <table>
               <thead>
                 <tr>
-                  <th>Scope</th>
-                  <th>Path</th>
-                  <th>Format</th>
-                  <th>Status</th>
-                  <th>Size</th>
+                  <th>{t('agentDetail.thScope')}</th>
+                  <th>{t('agentDetail.thPath')}</th>
+                  <th>{t('agentDetail.thFormat')}</th>
+                  <th>{t('agentDetail.thState')}</th>
+                  <th>{t('agentDetail.thSize')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -241,10 +252,10 @@ export default function AgentDetail({
 
       {c ? (
         <div className="panel">
-          <h2>Sanitized configuration (JSON)</h2>
+          <h2>{t('agentDetail.sanitizedJson')}</h2>
           <div className="body">
             {c.warnings?.length ? (
-              <div className="warnings">Warnings: {c.warnings.join(' | ')}</div>
+              <div className="warnings">{t('agentDetail.warningsPrefix')} {c.warnings.join(' | ')}</div>
             ) : null}
             <pre>{JSON.stringify(c.sanitized ?? {}, null, 2)}</pre>
           </div>

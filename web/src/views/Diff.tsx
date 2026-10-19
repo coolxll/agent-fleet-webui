@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { api, type CompareCandidate, type DiffChange } from '../api'
 import AgentIcon, { agentLabel } from '../components/AgentIcon'
+import { useI18n } from '../i18n'
 
 type Mode = 'machines' | 'snapshots'
 
 export default function Diff() {
+  const { t } = useI18n()
   const [agents, setAgents] = useState<{ id: string; name: string }[]>([])
   const [runtimes, setRuntimes] = useState<any[]>([])
   const [mode, setMode] = useState<Mode>('machines')
@@ -83,17 +85,17 @@ export default function Diff() {
   return (
     <div>
       <div className="panel">
-        <h2>Compare</h2>
+        <h2>{t('diff.title')}</h2>
         <div className="body filters">
           <div className="tabs" style={{ marginLeft: 0 }}>
             <button className={mode === 'machines' ? 'active' : ''} onClick={() => setMode('machines')}>
-              Same agent, two machines
+              {t('diff.tabMachines')}
             </button>
             <button
               className={mode === 'snapshots' ? 'active' : ''}
               onClick={() => setMode('snapshots')}
             >
-              Snapshot history / two runtimes
+              {t('diff.tabSnapshots')}
             </button>
           </div>
         </div>
@@ -104,7 +106,7 @@ export default function Diff() {
       {mode === 'machines' ? (
         <>
           <div className="panel">
-            <h2>Agent</h2>
+            <h2>{t('diff.agent')}</h2>
             <div className="body filters">
               <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
                 {agents.map((a) => (
@@ -115,16 +117,16 @@ export default function Diff() {
               </select>
               <span className="muted small agent-cell">
                 <AgentIcon agent={agentId} size={17} />
-                {candidates.length} installation(s) of {agentLabel(agentId)} across the fleet
+                {t('diff.installationsOf', { count: candidates.length, agent: agentLabel(agentId) })}
               </span>
             </div>
           </div>
 
           <div className="panel">
-            <h2>Pick two</h2>
+            <h2>{t('diff.pickTwo')}</h2>
             <div className="body filters">
               <select value={left} onChange={(e) => setLeft(e.target.value)}>
-                <option value="">machine A...</option>
+                <option value="">{t('diff.machineAPlaceholder')}</option>
                 {candidates.map((c) => (
                   <option key={c.installation_id} value={c.installation_id}>
                     {c.host}/{c.runtime_key} ({c.kind}) v{c.version || '?'}
@@ -132,7 +134,7 @@ export default function Diff() {
                 ))}
               </select>
               <select value={right} onChange={(e) => setRight(e.target.value)}>
-                <option value="">machine B...</option>
+                <option value="">{t('diff.machineBPlaceholder')}</option>
                 {candidates.map((c) => (
                   <option key={c.installation_id} value={c.installation_id}>
                     {c.host}/{c.runtime_key} ({c.kind}) v{c.version || '?'}
@@ -144,7 +146,7 @@ export default function Diff() {
                 disabled={!left || !right || left === right}
                 onClick={compareMachines}
               >
-                Compare
+                {t('diff.compareBtn')}
               </button>
             </div>
           </div>
@@ -154,7 +156,7 @@ export default function Diff() {
       ) : (
         <>
           <div className="panel">
-            <h2>Runtime</h2>
+            <h2>{t('diff.runtime')}</h2>
             <div className="body filters">
               <select value={runtimeId} onChange={(e) => setRuntimeId(e.target.value)}>
                 {runtimes.map((r) => (
@@ -163,15 +165,15 @@ export default function Diff() {
                   </option>
                 ))}
               </select>
-              <span className="muted small">{snapshots.length} snapshot(s)</span>
+              <span className="muted small">{t('diff.snapshotsCount', { count: snapshots.length })}</span>
             </div>
           </div>
 
           <div className="panel">
-            <h2>Pick two snapshots</h2>
+            <h2>{t('diff.pickTwoSnaps')}</h2>
             <div className="body filters">
               <select value={snapA} onChange={(e) => setSnapA(e.target.value)}>
-                <option value="">snapshot A...</option>
+                <option value="">{t('diff.snapAPlaceholder')}</option>
                 {snapshots.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.created_at} ({s.agents_found} agents)
@@ -179,7 +181,7 @@ export default function Diff() {
                 ))}
               </select>
               <select value={snapB} onChange={(e) => setSnapB(e.target.value)}>
-                <option value="">snapshot B...</option>
+                <option value="">{t('diff.snapBPlaceholder')}</option>
                 {snapshots.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.created_at} ({s.agents_found} agents)
@@ -191,7 +193,7 @@ export default function Diff() {
                 disabled={!snapA || !snapB || snapA === snapB}
                 onClick={compareSnaps}
               >
-                Compare
+                {t('diff.compareBtn')}
               </button>
             </div>
           </div>
@@ -199,7 +201,7 @@ export default function Diff() {
           {snapDiff ? (
             snapDiff.identical ? (
               <div className="panel">
-                <div className="body muted small">No differences between these snapshots.</div>
+                <div className="body muted small">{t('diff.noDiffSnapshots')}</div>
               </div>
             ) : (
               Object.entries(snapDiff.per_agent).map(([agent, changes]) => (
@@ -209,7 +211,7 @@ export default function Diff() {
                       <AgentIcon agent={agent} size={17} />
                       {agentLabel(agent)}
                     </span>
-                    <span className="tag">{(changes as DiffChange[]).length} change(s)</span>
+                    <span className="tag">{t('diff.changesCount', { count: (changes as DiffChange[]).length })}</span>
                   </h2>
                   <div className="body">
                     <Changes changes={changes as DiffChange[]} />
@@ -225,12 +227,17 @@ export default function Diff() {
 }
 
 function ChangesTable({ diff }: { diff: any }) {
+  const { t } = useI18n()
   if (diff.identical) {
     return (
       <div className="panel">
         <div className="body muted small">
-          {diff.a.runtime.host}/{diff.a.runtime.key} and {diff.b.runtime.host}/{diff.b.runtime.key}{' '}
-          are configured identically.
+          {t('diff.identicallyConfigured', {
+            hostA: diff.a.runtime.host,
+            keyA: diff.a.runtime.key,
+            hostB: diff.b.runtime.host,
+            keyB: diff.b.runtime.key
+          })}
         </div>
       </div>
     )
@@ -242,15 +249,15 @@ function ChangesTable({ diff }: { diff: any }) {
   return (
     <div className="panel">
       <h2>
-        Differences
-        <span className="tag">{diff.changes.length} change(s)</span>
-        {!diff.same_agent ? <span className="tag warn">different agents</span> : null}
+        {t('diff.differences')}
+        <span className="tag">{t('diff.changesCount', { count: diff.changes.length })}</span>
+        {!diff.same_agent ? <span className="tag warn">{t('diff.differentAgents')}</span> : null}
       </h2>
       <div className="body">
         <table>
           <thead>
             <tr>
-              <th>Field</th>
+              <th>{t('diff.field')}</th>
               <th>A: {label(diff.a)}</th>
               <th>B: {label(diff.b)}</th>
             </tr>
@@ -259,8 +266,8 @@ function ChangesTable({ diff }: { diff: any }) {
             {diff.changes.map((c: DiffChange, i: number) => (
               <tr key={i}>
                 <td className="mono small">{c.path}</td>
-                <td className="mono small">{fmt(c.a, c.kind === 'added')}</td>
-                <td className="mono small">{fmt(c.b, c.kind === 'removed')}</td>
+                <td className="mono small">{fmt(c.a, c.kind === 'added', t)}</td>
+                <td className="mono small">{fmt(c.b, c.kind === 'removed', t)}</td>
               </tr>
             ))}
           </tbody>
@@ -271,21 +278,22 @@ function ChangesTable({ diff }: { diff: any }) {
 }
 
 function Changes({ changes }: { changes: DiffChange[] }) {
+  const { t } = useI18n()
   return (
     <table>
       <thead>
         <tr>
-          <th>Field</th>
-          <th>Old</th>
-          <th>New</th>
+          <th>{t('diff.field')}</th>
+          <th>{t('diff.old')}</th>
+          <th>{t('diff.new')}</th>
         </tr>
       </thead>
       <tbody>
         {changes.map((c, i) => (
           <tr key={i}>
             <td className="mono small">{c.path}</td>
-            <td className="mono small">{fmt(c.a, c.kind === 'added')}</td>
-            <td className="mono small">{fmt(c.b, c.kind === 'removed')}</td>
+            <td className="mono small">{fmt(c.a, c.kind === 'added', t)}</td>
+            <td className="mono small">{fmt(c.b, c.kind === 'removed', t)}</td>
           </tr>
         ))}
       </tbody>
@@ -293,8 +301,8 @@ function Changes({ changes }: { changes: DiffChange[] }) {
   )
 }
 
-function fmt(value: any, absent: boolean) {
-  if (absent) return <span className="muted">(not present)</span>
+function fmt(value: any, absent: boolean, t: (key: any) => string) {
+  if (absent) return <span className="muted">{t('diff.notPresent')}</span>
   if (value === null || value === undefined) return <span className="muted">null</span>
   return String(value)
 }

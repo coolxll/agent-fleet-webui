@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type Overview } from '../api'
 import AgentIcon, { agentLabel } from '../components/AgentIcon'
-
+import { useI18n } from '../i18n'
 
 type RuntimeRow = {
   id: string
@@ -18,14 +18,14 @@ type RuntimeRow = {
   agents_installed: number
 }
 
-function ago(iso: string | null): string {
-  if (!iso) return 'never'
+function ago(iso: string | null, t: any): string {
+  if (!iso) return t('common.never')
   const then = new Date(iso).getTime()
   const secs = Math.max(0, Math.floor((Date.now() - then) / 1000))
-  if (secs < 60) return secs + 's ago'
-  if (secs < 3600) return Math.floor(secs / 60) + 'm ago'
-  if (secs < 86400) return Math.floor(secs / 3600) + 'h ago'
-  return Math.floor(secs / 86400) + 'd ago'
+  if (secs < 60) return t('time.ago.s', { n: secs })
+  if (secs < 3600) return t('time.ago.m', { n: Math.floor(secs / 60) })
+  if (secs < 86400) return t('time.ago.h', { n: Math.floor(secs / 3600) })
+  return t('time.ago.d', { n: Math.floor(secs / 86400) })
 }
 
 export default function Overview({
@@ -35,6 +35,7 @@ export default function Overview({
   onOpenRuntime: (id: string) => void
   onScanRuntime: (id: string) => void
 }) {
+  const { t } = useI18n()
   const [data, setData] = useState<Overview | null>(null)
   const [runtimes, setRuntimes] = useState<RuntimeRow[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -53,10 +54,10 @@ export default function Overview({
       }
     }
     load()
-    const t = setInterval(load, 10000)
+    const timer = setInterval(load, 10000)
     return () => {
       alive = false
-      clearInterval(t)
+      clearInterval(timer)
     }
   }, [])
 
@@ -83,7 +84,7 @@ export default function Overview({
 
   const remove = useCallback(
     async (r: RuntimeRow) => {
-      if (!window.confirm('Remove ' + r.host + '/' + r.key + ' and everything collected from it?')) {
+      if (!window.confirm(t('overview.confirmRemove', { host: r.host, key: r.key }))) {
         return
       }
       try {
@@ -94,7 +95,7 @@ export default function Overview({
         setError(String(e.message || e))
       }
     },
-    []
+    [t]
   )
 
   const toggle = useCallback(async (r: RuntimeRow) => {
@@ -109,54 +110,54 @@ export default function Overview({
   }, [])
 
   if (error) return <div className="err">{error}</div>
-  if (!data) return <div className="muted">Loading...</div>
+  if (!data) return <div className="muted">{t('common.loading')}</div>
 
-  const t = data.totals
+  const totals = data.totals
   return (
     <div>
       <div className="cards">
         <div className="card">
-          <div className="label">Runtimes</div>
-          <div className="value">{t.runtimes}</div>
-          <div className="hint">{t.hosts} hosts</div>
+          <div className="label">{t('overview.runtimes')}</div>
+          <div className="value">{totals.runtimes}</div>
+          <div className="hint">{t('overview.hostsHint', { count: totals.hosts })}</div>
         </div>
         <div className="card">
-          <div className="label">Reachable</div>
+          <div className="label">{t('overview.reachable')}</div>
           <div className="value" style={{ color: 'var(--ok)' }}>
-            {t.online}
+            {totals.online}
           </div>
-          <div className="hint">of {t.runtimes} scanned</div>
+          <div className="hint">{t('overview.ofScanned', { total: totals.runtimes })}</div>
         </div>
         <div className="card">
-          <div className="label">Unreachable</div>
-          <div className="value" style={{ color: t.offline ? 'var(--bad)' : undefined }}>
-            {t.offline}
+          <div className="label">{t('overview.unreachable')}</div>
+          <div className="value" style={{ color: totals.offline ? 'var(--bad)' : undefined }}>
+            {totals.offline}
           </div>
-          <div className="hint">{t.unknown} not scanned yet</div>
+          <div className="hint">{t('overview.notScannedYet', { count: totals.unknown })}</div>
         </div>
         <div className="card">
-          <div className="label">Agent installs</div>
-          <div className="value">{t.installations}</div>
-          <div className="hint">detected across fleet</div>
+          <div className="label">{t('overview.agentInstalls')}</div>
+          <div className="value">{totals.installations}</div>
+          <div className="hint">{t('overview.detectedAcrossFleet')}</div>
         </div>
         <div className="card">
-          <div className="label">Last success</div>
+          <div className="label">{t('overview.lastSuccess')}</div>
           <div className="value" style={{ fontSize: 16 }}>
-            {ago(data.last_successful_scan)}
+            {ago(data.last_successful_scan, t)}
           </div>
-          <div className="hint">stale after {Math.round(data.stale_after_s / 3600)}h</div>
+          <div className="hint">{t('overview.staleAfter', { hours: Math.round(data.stale_after_s / 3600) })}</div>
         </div>
       </div>
 
       <div className="grid2">
         <div className="panel">
-          <h2>Agent distribution</h2>
+          <h2>{t('overview.distribution')}</h2>
           <div className="body">
             <table>
               <thead>
                 <tr>
-                  <th>Agent</th>
-                  <th>Installations</th>
+                  <th>{t('overview.thAgent')}</th>
+                  <th>{t('overview.thInstallations')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -177,23 +178,23 @@ export default function Overview({
         </div>
 
         <div className="panel">
-          <h2>Recent scan runs</h2>
+          <h2>{t('overview.recentRuns')}</h2>
           <div className="body">
             {data.recent_runs.length === 0 ? (
-              <div className="muted small">No scans yet. Use "Scan all".</div>
+              <div className="muted small">{t('overview.noScans')}</div>
             ) : (
               <table>
                 <thead>
                   <tr>
-                    <th>Started</th>
-                    <th>Status</th>
-                    <th>Result</th>
+                    <th>{t('overview.thStarted')}</th>
+                    <th>{t('overview.thStatus')}</th>
+                    <th>{t('overview.thResult')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.recent_runs.map((r) => (
                     <tr key={r.id}>
-                      <td>{ago(r.started)}</td>
+                      <td>{ago(r.started, t)}</td>
                       <td>
                         <span
                           className={
@@ -207,11 +208,21 @@ export default function Overview({
                                   : '')
                           }
                         >
-                          {r.status}
+                          {r.status === 'completed'
+                            ? t('common.completed')
+                            : r.status === 'failed'
+                              ? t('common.failed')
+                              : r.status === 'partial'
+                                ? t('common.partial')
+                                : r.status}
                         </span>
                       </td>
                       <td className="small">
-                        {r.succeeded} ok / {r.failed} failed / {r.total} total
+                        {t('overview.runResult', {
+                          succeeded: r.succeeded,
+                          failed: r.failed,
+                          total: r.total
+                        })}
                       </td>
                     </tr>
                   ))}
@@ -224,33 +235,33 @@ export default function Overview({
 
       <div className="panel">
         <h2>
-          Runtimes
+          {t('overview.runtimesTable')}
           <label className="small muted" style={{ textTransform: 'none', letterSpacing: 0 }}>
             <input
               type="checkbox"
               checked={showDisabled}
               onChange={(e) => setShowDisabled(e.target.checked)}
             />{' '}
-            show excluded hosts
+            {t('overview.showExcluded')}
           </label>
         </h2>
         <div className="body">
           <table>
             <thead>
               <tr>
-                <th>Host</th>
-                <th style={{ width: 90 }}>Host</th>
-                <th>Runtime</th>
-                <th>Kind</th>
-                <th>OS</th>
-                <th>User</th>
-                <th>Transport</th>
-                <th>State</th>
-                <th>Agents</th>
-                <th>Last success</th>
-                <th>Scan</th>
-                <th>Enabled</th>
-                <th style={{ width: 70 }}>Remove</th>
+                <th>{t('overview.thHost')}</th>
+                <th>{t('overview.thRuntime')}</th>
+                <th style={{ width: 90 }}>{t('overview.thHost')}</th>
+                <th>{t('overview.thKind')}</th>
+                <th>{t('overview.thOs')}</th>
+                <th>{t('overview.thUser')}</th>
+                <th>{t('overview.thTransport')}</th>
+                <th>{t('overview.thState')}</th>
+                <th>{t('overview.thAgents')}</th>
+                <th>{t('overview.thLastSuccess')}</th>
+                <th>{t('overview.thScan')}</th>
+                <th>{t('overview.thEnabled')}</th>
+                <th style={{ width: 70 }}>{t('overview.thRemove')}</th>
               </tr>
             </thead>
             <tbody>
@@ -265,13 +276,13 @@ export default function Overview({
                       return (
                         <button
                           className={'tag ' + (h.enabled ? 'ok' : 'unknown')}
-                          title={h.enabled ? 'Exclude this host from the fleet' : 'Include this host'}
+                          title={h.enabled ? t('overview.excludeHost') : t('overview.includeHost')}
                           onClick={(e) => {
                             e.stopPropagation()
                             toggleHost(h)
                           }}
                         >
-                          {h.enabled ? 'on' : 'off'}
+                          {h.enabled ? t('common.on') : t('common.off')}
                         </button>
                       )
                     })()}
@@ -279,7 +290,7 @@ export default function Overview({
                   <td>
                     <span className="tag">{r.kind}</span>
                   </td>
-                  <td className="small">{r.os_name || <span className="muted">unknown</span>}</td>
+                  <td className="small">{r.os_name || <span className="muted">{t('common.unknown')}</span>}</td>
                   <td className="small">{r.collect_user || '-'}</td>
                   <td className="small muted">{r.transport}</td>
                   <td>
@@ -289,12 +300,16 @@ export default function Overview({
                         (r.reachable === true ? 'ok' : r.reachable === false ? 'bad' : 'unknown')
                       }
                     >
-                      {r.reachable === true ? 'up' : r.reachable === false ? 'down' : 'unscanned'}
+                      {r.reachable === true
+                        ? t('common.up')
+                        : r.reachable === false
+                          ? t('common.down')
+                          : t('common.unscanned')}
                     </span>
-                    {r.stale ? <span className="tag warn">stale</span> : null}
+                    {r.stale ? <span className="tag warn">{t('common.stale')}</span> : null}
                   </td>
                   <td>{r.agents_installed}</td>
-                  <td className="small muted">{ago(r.last_success_at)}</td>
+                  <td className="small muted">{ago(r.last_success_at, t)}</td>
                   <td>
                     <button
                       className="btn"
@@ -304,7 +319,7 @@ export default function Overview({
                         onScanRuntime(r.id)
                       }}
                     >
-                      Scan
+                      {t('common.scan')}
                     </button>
                   </td>
                   <td>
@@ -314,21 +329,21 @@ export default function Overview({
                         e.stopPropagation()
                         toggle(r)
                       }}
-                      title={r.enabled ? 'Disable scanning' : 'Enable scanning'}
+                      title={r.enabled ? t('overview.disableScan') : t('overview.enableScan')}
                     >
-                      {r.enabled ? 'on' : 'off'}
+                      {r.enabled ? t('common.on') : t('common.off')}
                     </button>
                   </td>
                   <td>
                     <button
                       className="tag"
-                      title="Remove this runtime and its collected data"
+                      title={t('overview.removeTitle')}
                       onClick={(e) => {
                         e.stopPropagation()
                         remove(r)
                       }}
                     >
-                      del
+                      {t('common.remove')}
                     </button>
                   </td>
                 </tr>
