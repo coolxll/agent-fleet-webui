@@ -40,6 +40,9 @@ $paths = @(
   "$HOME\\AppData\\Local\\pnpm",
   "$HOME\\scoop\\shims",
   "$HOME\\.cargo\\bin",
+  "$HOME\\.local\\bin",
+  "$HOME\\.opencode\\bin",
+  "$HOME\\AppData\\Local\\agy\\bin",
   "C:\\Program Files\\nodejs"
 )
 foreach ($p in $paths) {
@@ -85,8 +88,8 @@ def build_upgrade_script(agent_id: str, platform: str) -> str:
             cli = "claude" if agent_id == "claude" else ("opencode" if agent_id == "opencode" else "qodercli")
             sub = "upgrade" if agent_id == "opencode" else "update"
             body = (
-                f"if (Get-Command {cli}.cmd -ErrorAction SilentlyContinue) {{\n"
-                f"  & {cli}.cmd {sub}\n"
+                f"if (Get-Command {cli} -ErrorAction SilentlyContinue) {{\n"
+                f"  & {cli} {sub}\n"
                 f"  if ($LASTEXITCODE -ne 0) {{\n"
                 f"    if (Get-Command npm.cmd -ErrorAction SilentlyContinue) {{\n"
                 f"      & npm.cmd install -g {pkg}@latest\n"

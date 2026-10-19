@@ -33,7 +33,7 @@ def test_build_upgrade_script_posix_opencode():
 
 def test_build_upgrade_script_windows_opencode():
     script = build_upgrade_script("opencode", "windows")
-    assert "opencode.cmd upgrade" in script
+    assert "& opencode upgrade" in script
     assert "opencode-ai@latest" in script
 
 
@@ -42,13 +42,15 @@ def test_build_upgrade_script_windows():
     assert "npm.cmd install -g @openai/codex@latest" in script
     assert "$ProgressPreference = \"SilentlyContinue\"" in script
     assert "AppData\\Roaming\\npm" in script
+    assert ".opencode\\bin" in script
+    assert ".local\\bin" in script
     # Windows doesn't use the POSIX bash PATH_BOOTSTRAP
     assert PATH_BOOTSTRAP not in script
 
 
 def test_build_upgrade_script_windows_claude():
     script = build_upgrade_script("claude", "windows")
-    assert "claude.cmd update" in script
+    assert "& claude update" in script
     assert "@anthropic-ai/claude-code@latest" in script
 
 
