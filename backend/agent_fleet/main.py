@@ -68,6 +68,8 @@ app.include_router(router, prefix="/api")
 
 if WEB_DIST.is_dir():
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
+    if (WEB_DIST / "icons").is_dir():
+        app.mount("/icons", StaticFiles(directory=WEB_DIST / "icons"), name="icons")
 
     @app.get("/")
     def index():

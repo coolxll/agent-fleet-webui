@@ -6,6 +6,9 @@
  * AND colour so the matrix and lists stay scannable.
  */
 
+import { useState } from 'react'
+import { getFaviconCandidates } from '../utils/favicon'
+
 type Props = { agent: string; size?: number; title?: string }
 
 const COLORS: Record<string, string> = {
@@ -15,7 +18,8 @@ const COLORS: Record<string, string> = {
   pi: '#f0b429',
   hermes: '#a371f7',
   agy: '#4285f4',
-  codebuddy: '#00b96f'
+  codebuddy: '#00b96f',
+  qoder: '#7366ff'
 }
 
 const LABELS: Record<string, string> = {
@@ -25,7 +29,30 @@ const LABELS: Record<string, string> = {
   pi: 'Pi Coding Agent',
   hermes: 'Hermes Agent',
   agy: 'Antigravity (AGY)',
-  codebuddy: 'CodeBuddy'
+  codebuddy: 'CodeBuddy',
+  qoder: 'Qoder'
+}
+
+const AGENT_OFFICIAL_URLS: Record<string, string> = {
+  codex: 'https://openai.com',
+  claude: 'https://claude.ai',
+  opencode: 'https://opencode.ai',
+  pi: 'https://pi.ai',
+  hermes: 'https://nousresearch.com',
+  agy: 'https://deepmind.google',
+  codebuddy: 'https://codebuddy.cn',
+  qoder: 'https://qoder.com'
+}
+
+const AGENT_LOCAL_ICONS: Record<string, string> = {
+  codex: '/icons/codex.png',
+  claude: '/icons/claude.png',
+  opencode: '/icons/opencode.png',
+  pi: '/icons/pi.png',
+  hermes: '/icons/hermes.png',
+  agy: '/icons/agy.png',
+  codebuddy: '/icons/codebuddy.svg',
+  qoder: '/icons/qoder.svg'
 }
 
 export function agentLabel(agent: string): string {
@@ -112,6 +139,18 @@ function Hermes() {
   )
 }
 
+function Qoder() {
+  // shield with code brackets
+  return (
+    <>
+      <path d="M12 3l7.5 3.5v6.5c0 4.8-3.3 8.3-7.5 9.8-4.2-1.5-7.5-5-7.5-9.8V6.5L12 3z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <path d="M9.5 10.5l-2 1.5 2 1.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M14.5 10.5l2 1.5-2 1.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M13 9.5l-2 5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </>
+  )
+}
+
 const SHAPES: Record<string, () => JSX.Element> = {
   codex: Codex,
   claude: Claude,
@@ -119,19 +158,62 @@ const SHAPES: Record<string, () => JSX.Element> = {
   pi: Pi,
   hermes: Hermes,
   agy: Agy,
-  codebuddy: CodeBuddy
+  codebuddy: CodeBuddy,
+  qoder: Qoder
 }
 
 export default function AgentIcon({ agent, size = 16, title }: Props) {
   const Shape = SHAPES[agent]
   const color = agentColor(agent)
+
+  const officialUrl = AGENT_OFFICIAL_URLS[agent]
+  const localIcon = AGENT_LOCAL_ICONS[agent]
+  const candidates = officialUrl || localIcon ? getFaviconCandidates(officialUrl || '', localIcon) : []
+
+  const [candidateIndex, setCandidateIndex] = useState(0)
+  const [imgFailed, setImgFailed] = useState(false)
+
+  const handleImgError = () => {
+    if (candidateIndex + 1 < candidates.length) {
+      setCandidateIndex((i) => i + 1)
+    } else {
+      setImgFailed(true)
+    }
+  }
+
+  const currentIconUrl = !imgFailed && candidateIndex < candidates.length ? candidates[candidateIndex] : null
+
   return (
     <span
       className="agent-icon"
       title={title || agentLabel(agent)}
-      style={{ width: size, height: size, color, display: 'inline-flex', verticalAlign: '-3px' }}
+      style={{
+        width: size,
+        height: size,
+        color,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        verticalAlign: '-3px'
+      }}
     >
-      {Shape ? (
+      {currentIconUrl ? (
+        <img
+          key={currentIconUrl}
+          src={currentIconUrl}
+          alt={agentLabel(agent)}
+          width={size}
+          height={size}
+          onError={handleImgError}
+          style={{
+            width: size,
+            height: size,
+            objectFit: 'contain',
+            borderRadius: 3,
+            display: 'block'
+          }}
+        />
+      ) : Shape ? (
         <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true" focusable="false">
           <Shape />
         </svg>
