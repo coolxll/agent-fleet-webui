@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -82,6 +84,117 @@ def find_local_workbuddy_auth() -> str | None:
             except Exception:
                 continue
     return None
+
+
+def get_local_codebuddy_daily_usage(days_limit: int = 30) -> list[dict]:
+    """Scan local ~/.codebuddy/projects and ~/.workbuddy/workbuddy.db for daily credit usage."""
+    cst = timezone(timedelta(hours=8))
+    daily_credits: dict[str, float] = defaultdict(float)
+
+    home = Path.home()
+    appdata = os.environ.get("LOCALAPPDATA")
+
+    candidate_codebuddy_dirs = [
+        home / ".codebuddy/projects",
+    ]
+    if appdata:
+        candidate_codebuddy_dirs.append(Path(appdata) / "CodeBuddyExtension/projects")
+
+    for cb_dir in candidate_codebuddy_dirs:
+        if not cb_dir.is_dir():
+            continue
+        try:
+            for f in cb_dir.glob("**/*.jsonl"):
+                try:
+                    with open(f, "r", encoding="utf-8", errors="replace") as fl:
+                        for line in fl:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                record = json.loads(line)
+                                ts = record.get("timestamp") or record.get("time") or record.get("createdAt")
+                                if not ts:
+                                    continue
+                                if isinstance(ts, (int, float)):
+                                    if ts > 1e11:
+                                        ts = ts / 1000.0
+                                    dt = datetime.fromtimestamp(ts, tz=cst)
+                                elif isinstance(ts, str):
+                                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone(cst)
+                                else:
+                                    continue
+                                day_str = dt.strftime("%Y-%m-%d")
+                                raw_usage = record.get("providerData", {}).get("rawUsage") or record.get("rawUsage")
+                                if raw_usage and isinstance(raw_usage, dict):
+                                    cr = float(raw_usage.get("credit") or raw_usage.get("credits") or 0.0)
+                                    if cr > 0:
+                                        daily_credits[day_str] += cr
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    candidate_workbuddy_dbs = [
+        home / ".workbuddy/workbuddy.db",
+    ]
+    if appdata:
+        candidate_workbuddy_dbs.append(Path(appdata) / "workbuddy/workbuddy.db")
+
+    for db_path in candidate_workbuddy_dbs:
+        if not db_path.is_file():
+            continue
+        try:
+            conn = None
+            try:
+                conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=3.0)
+            except Exception:
+                conn = sqlite3.connect(db_path, timeout=3.0)
+
+            with conn:
+                cur = conn.cursor()
+                for row in cur.execute("SELECT updated_at, credit_json FROM session_usage"):
+                    updated_at, credit_json = row
+                    if not updated_at or not credit_json:
+                        continue
+                    ts = updated_at / 1000.0 if updated_at > 1e11 else float(updated_at)
+                    dt = datetime.fromtimestamp(ts, tz=cst)
+                    day_str = dt.strftime("%Y-%m-%d")
+                    try:
+                        c_map = json.loads(credit_json)
+                        if isinstance(c_map, dict):
+                            for cr in c_map.values():
+                                try:
+                                    val = float(cr)
+                                    if val > 0:
+                                        daily_credits[day_str] += val
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    if not daily_credits:
+        return []
+
+    sorted_days = sorted(daily_credits.keys(), reverse=True)
+    if days_limit and days_limit > 0:
+        sorted_days = sorted_days[:days_limit]
+
+    results = []
+    for day in sorted_days:
+        results.append({
+            "name": day,
+            "used": round(daily_credits[day], 2),
+            "total": None,
+            "remaining": None,
+            "unit": "积分",
+            "reset_at": None,
+        })
+    return results
 
 
 def parse_credential(raw: str | None) -> dict:
@@ -277,8 +390,8 @@ async def fetch(raw_credential: str | dict) -> dict:
     total_remain = 0
     total_used = 0
     total_size = 0
-    packages_detail = []
     future_reset_times = []
+    pkg_groups: dict[str, dict] = {}
 
     now_utc = datetime.now(timezone.utc)
 
@@ -300,13 +413,37 @@ async def fetch(raw_credential: str | dict) -> dict:
             except Exception:
                 pass
 
+        if pkg_name not in pkg_groups:
+            pkg_groups[pkg_name] = {
+                "name": pkg_name,
+                "total": 0,
+                "used": 0,
+                "remaining": 0,
+                "count": 0,
+                "reset_at": end_iso,
+            }
+        g = pkg_groups[pkg_name]
+        g["total"] += s
+        g["used"] += u
+        g["remaining"] += r
+        g["count"] += 1
+        if end_iso:
+            if not g["reset_at"] or end_iso < g["reset_at"]:
+                g["reset_at"] = end_iso
+
+    packages_detail = []
+    for pkg_name, g in pkg_groups.items():
+        display_name = f"{pkg_name} ({g['count']}个包汇总)" if g["count"] > 1 else pkg_name
         packages_detail.append({
-            "name": pkg_name,
-            "total": s,
-            "used": u,
-            "remaining": r,
-            "reset_at": end_iso,
+            "name": display_name,
+            "total": g["total"],
+            "used": g["used"],
+            "remaining": g["remaining"],
+            "count": g["count"],
+            "reset_at": g["reset_at"],
+            "unit": "积分",
         })
+    packages_detail.sort(key=lambda p: (p.get("remaining") or 0), reverse=True)
 
     if total_size > 0:
         if (total_size - total_remain) > total_used:
@@ -317,28 +454,29 @@ async def fetch(raw_credential: str | dict) -> dict:
         if (total_size - total_remain) > total_used:
             total_used = total_size - total_remain
 
-    # Identify packages with daily cycle or daily usage
-    daily_breakdown = []
-    for pkg in packages_detail:
-        name = pkg.get("name", "")
-        # If the package is a daily grant, or expires within 24 hours
-        is_daily = "每日" in name or "day" in name.lower() or "daily" in name.lower()
-        if not is_daily and pkg.get("reset_at"):
-            try:
-                dt = datetime.fromisoformat(pkg["reset_at"].replace("Z", "+00:00"))
-                if 0 < (dt - now_utc).total_seconds() <= 86400 * 1.5:
-                    is_daily = True
-            except Exception:
-                pass
+    # Identify daily consumption: first from local sessions, then fallback to daily packages
+    daily_breakdown = get_local_codebuddy_daily_usage(days_limit=30)
+    if not daily_breakdown:
+        for pkg in packages_detail:
+            name = pkg.get("name", "")
+            is_daily = "每日" in name or "day" in name.lower() or "daily" in name.lower()
+            if not is_daily and pkg.get("reset_at"):
+                try:
+                    dt = datetime.fromisoformat(pkg["reset_at"].replace("Z", "+00:00"))
+                    if 0 < (dt - now_utc).total_seconds() <= 86400 * 1.5:
+                        is_daily = True
+                except Exception:
+                    pass
 
-        if is_daily or pkg["used"] > 0:
-            daily_breakdown.append({
-                "name": name,
-                "used": pkg["used"],
-                "total": pkg["total"],
-                "remaining": pkg["remaining"],
-                "reset_at": pkg["reset_at"],
-            })
+            if is_daily:
+                daily_breakdown.append({
+                    "name": name,
+                    "used": pkg["used"],
+                    "total": pkg["total"],
+                    "remaining": pkg["remaining"],
+                    "reset_at": pkg["reset_at"],
+                    "unit": "积分",
+                })
 
     # Calculate remaining fraction
     remaining_fraction = round(total_remain / total_size, 4) if total_size > 0 else 0.0

@@ -241,8 +241,12 @@ export function QuotaCard({
                       {item.name}
                     </span>
                     <span className="quota-detail-val">
-                      已用 {item.used.toLocaleString()}
-                      {item.total ? ` / ${item.total.toLocaleString()}` : ''}
+                      {language === 'zh' ? '已用 ' : 'Used '}
+                      {typeof item.used === 'number'
+                        ? item.used.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                        : item.used}
+                      {item.unit ? ` ${item.unit}` : ''}
+                      {item.total ? ` / ${item.total.toLocaleString()} ${item.unit || ''}` : ''}
                     </span>
                   </div>
                 ))}
@@ -263,6 +267,7 @@ export function QuotaCard({
                     </span>
                     <span className="quota-detail-val">
                       {pkg.remaining.toLocaleString()} / {pkg.total.toLocaleString()}
+                      {pkg.unit ? ` ${pkg.unit}` : ''}
                     </span>
                   </div>
                 ))}

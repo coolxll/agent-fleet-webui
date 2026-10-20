@@ -250,3 +250,103 @@ def test_workbuddy_identity_is_stable_and_realm_scoped(monkeypatch):
     assert global_one["identity"]["account_id"] != cn_uid["identity"]["account_id"]
     assert global_one["identity"]["email"] == cn_uid["identity"]["email"] == "same-user@workbuddy"
     assert cn_uid["credential"]["uid"] == "same-user"
+
+
+def test_package_aggregation(monkeypatch):
+    def handler(request: httpx.Request):
+        accounts = [
+            {
+                "PackageName": "运营裂变包",
+                "CapacitySize": 100,
+                "CapacityRemain": 80,
+                "CapacityUsed": 20,
+            }
+            for _ in range(5)
+        ]
+        accounts.append({
+            "PackageName": "体验包",
+            "CapacitySize": 500,
+            "CapacityRemain": 500,
+            "CapacityUsed": 0,
+        })
+        return httpx.Response(200, json={"code": 0, "Response": {"Data": {"Accounts": accounts}}})
+
+    orig_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: orig_client(transport=httpx.MockTransport(handler), **kw),
+    )
+
+    res = asyncio.run(wb.fetch("test-token"))
+    packages = res["quota"]["accounts"][0]["packages"]
+    assert len(packages) == 2
+    fission_pkg = next(p for p in packages if "运营裂变包" in p["name"])
+    assert fission_pkg["name"] == "运营裂变包 (5个包汇总)"
+    assert fission_pkg["total"] == 500
+    assert fission_pkg["used"] == 100
+    assert fission_pkg["remaining"] == 400
+    assert fission_pkg["count"] == 5
+
+    trial_pkg = next(p for p in packages if "体验包" in p["name"])
+    assert trial_pkg["name"] == "体验包"
+    assert trial_pkg["total"] == 500
+    assert trial_pkg["used"] == 0
+    assert trial_pkg["remaining"] == 500
+    assert trial_pkg["count"] == 1
+
+
+def test_get_local_codebuddy_daily_usage(tmp_path, monkeypatch):
+    # Setup mock .codebuddy projects
+    cb_dir = tmp_path / ".codebuddy/projects/proj1"
+    cb_dir.mkdir(parents=True)
+    jsonl_file = cb_dir / "session.jsonl"
+    # Write sample records for 2026-10-20 (timestamp in ms, e.g. 1792454400000)
+    lines = [
+        json.dumps({
+            "timestamp": "2026-10-20T10:00:00+08:00",
+            "providerData": {"rawUsage": {"credit": 1.5, "total_tokens": 1000}},
+        }),
+        json.dumps({
+            "timestamp": "2026-10-20T11:00:00+08:00",
+            "providerData": {"rawUsage": {"credit": 2.25, "total_tokens": 1500}},
+        }),
+        json.dumps({
+            "timestamp": "2026-10-19T15:00:00+08:00",
+            "providerData": {"rawUsage": {"credit": 3.0, "total_tokens": 2000}},
+        }),
+    ]
+    jsonl_file.write_text("\n".join(lines), encoding="utf-8")
+
+    # Setup mock .workbuddy sqlite
+    wb_dir = tmp_path / ".workbuddy"
+    wb_dir.mkdir(parents=True)
+    db_path = wb_dir / "workbuddy.db"
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE session_usage (session_id TEXT PRIMARY KEY, used INTEGER, size INTEGER, updated_at INTEGER, credit_json TEXT)")
+    # 2026-10-20 12:00:00 CST is approx 1792468800000 ms
+    from datetime import datetime, timezone, timedelta
+    cst = timezone(timedelta(hours=8))
+    dt_today = datetime(2026, 10, 20, 12, 0, 0, tzinfo=cst)
+    ts_today = int(dt_today.timestamp() * 1000)
+    cur.execute(
+        "INSERT INTO session_usage VALUES (?, ?, ?, ?, ?)",
+        ("sess1", 500, 300000, ts_today, json.dumps({"req1": 0.5, "req2": 0.75})),
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(wb.Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+    daily = wb.get_local_codebuddy_daily_usage(days_limit=10)
+    assert len(daily) == 2
+    assert daily[0]["name"] == "2026-10-20"
+    # 1.5 + 2.25 + 0.5 + 0.75 = 5.0
+    assert daily[0]["used"] == 5.0
+    assert daily[0]["unit"] == "积分"
+
+    assert daily[1]["name"] == "2026-10-19"
+    assert daily[1]["used"] == 3.0

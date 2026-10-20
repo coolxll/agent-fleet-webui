@@ -113,6 +113,8 @@ export type QuotaPackage = {
   total: number
   used: number
   remaining: number
+  count?: number | null
+  unit?: string | null
   reset_at?: string | null
 }
 
@@ -121,6 +123,7 @@ export type DailyConsumption = {
   used: number
   total?: number | null
   remaining?: number | null
+  unit?: string | null
   reset_at?: string | null
 }
 
