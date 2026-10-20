@@ -86,8 +86,12 @@ def find_local_workbuddy_auth() -> str | None:
     return None
 
 
-def get_local_codebuddy_daily_usage(days_limit: int = 30) -> list[dict]:
-    """Scan local ~/.codebuddy/projects and ~/.workbuddy/workbuddy.db for daily credit usage."""
+def get_local_codebuddy_daily_usage(account_uid: str | None = None, days_limit: int = 30) -> list[dict]:
+    """Scan local ~/.codebuddy/projects and ~/.workbuddy/workbuddy.db for daily credit usage.
+    
+    If account_uid is provided, only sessions belonging to that user ID in workbuddy.db
+    will be included to prevent cross-account pollution (e.g. from enterprise logins).
+    """
     cst = timezone(timedelta(hours=8))
     daily_credits: dict[str, float] = defaultdict(float)
 
@@ -155,7 +159,17 @@ def get_local_codebuddy_daily_usage(days_limit: int = 30) -> list[dict]:
 
             with conn:
                 cur = conn.cursor()
-                for row in cur.execute("SELECT updated_at, credit_json FROM session_usage"):
+                query = "SELECT u.updated_at, u.credit_json FROM session_usage u"
+                params: tuple = ()
+                if account_uid:
+                    # Filter by session owner to avoid mixing previous or other user accounts
+                    query = (
+                        "SELECT u.updated_at, u.credit_json FROM session_usage u "
+                        "JOIN sessions s ON s.id = u.session_id WHERE s.user_id = ?"
+                    )
+                    params = (str(account_uid),)
+
+                for row in cur.execute(query, params):
                     updated_at, credit_json = row
                     if not updated_at or not credit_json:
                         continue
@@ -454,8 +468,8 @@ async def fetch(raw_credential: str | dict) -> dict:
         if (total_size - total_remain) > total_used:
             total_used = total_size - total_remain
 
-    # Identify daily consumption: first from local sessions, then fallback to daily packages
-    daily_breakdown = get_local_codebuddy_daily_usage(days_limit=30)
+    # Identify daily consumption: first from local sessions (matching account UID), then fallback to daily packages
+    daily_breakdown = get_local_codebuddy_daily_usage(account_uid=cred.get("uid"), days_limit=30)
     if not daily_breakdown:
         for pkg in packages_detail:
             name = pkg.get("name", "")

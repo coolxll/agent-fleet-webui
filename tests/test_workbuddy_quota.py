@@ -350,3 +350,24 @@ def test_get_local_codebuddy_daily_usage(tmp_path, monkeypatch):
 
     assert daily[1]["name"] == "2026-10-19"
     assert daily[1]["used"] == 3.0
+
+    # Verify UID isolation: if sessions table exists and account_uid is given, exclude other users
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT)")
+    cur.execute("INSERT INTO sessions VALUES ('sess1', 'user-alpha')")
+    cur.execute("INSERT INTO sessions VALUES ('sess2', 'user-beta')")
+    cur.execute(
+        "INSERT INTO session_usage VALUES (?, ?, ?, ?, ?)",
+        ("sess2", 9999, 300000, ts_today, json.dumps({"foreign_req": 999.0})),
+    )
+    conn.commit()
+    conn.close()
+
+    # Query as user-alpha: should only see sess1 (1.25) + jsonl (3.75) = 5.0, NOT sess2 (999.0)
+    isolated_daily = wb.get_local_codebuddy_daily_usage(account_uid="user-alpha", days_limit=10)
+    assert isolated_daily[0]["used"] == 5.0
+
+    # Query as unknown user: should only see jsonl (3.75), 0 from workbuddy.db
+    unknown_daily = wb.get_local_codebuddy_daily_usage(account_uid="user-unknown", days_limit=10)
+    assert unknown_daily[0]["used"] == 3.75
