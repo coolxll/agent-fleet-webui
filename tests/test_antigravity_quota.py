@@ -198,3 +198,59 @@ def test_gemini_groups_from_models_handles_weekly_and_gemini_4():
     assert 'weekly' in g4_windows
     assert any(b['window'] == 'weekly' and b['remaining_fraction'] == 0.35 for b in group_map['gemini_4']['buckets'])
 
+
+def test_fetch_blends_worst_case_weekly_quota(monkeypatch):
+    now = datetime.now(timezone.utc)
+    weekly_reset = (now + timedelta(days=3, hours=7)).isoformat()
+    five_h_reset = (now + timedelta(hours=4)).isoformat()
+
+    def custom_handler(request):
+        if request.url.host == 'oauth2.googleapis.com':
+            return httpx.Response(200, json={'access_token': 'new-access', 'refresh_token': 'rotated-refresh', 'expires_in': 3600})
+        if request.url.path.endswith('userinfo'):
+            return httpx.Response(200, json={'email': 'coolxll.qq@gmail.com', 'verified_email': True, 'name': 'CoolXll'})
+        if request.url.path.endswith(':loadCodeAssist'):
+            return httpx.Response(200, json={'cloudaicompanionProject': 'project', 'paidTier': {'id': 'g1-pro-tier'}})
+        if request.url.path.endswith(':retrieveUserQuotaSummary'):
+            return httpx.Response(200, json={'groups': [
+                {
+                    'displayName': 'Gemini Models',
+                    'buckets': [
+                        {'bucketId': 'gemini-weekly', 'displayName': 'Weekly Limit Remaining', 'window': 'weekly', 'remainingFraction': 0.92567885, 'resetTime': '2026-10-22T08:38:59Z'},
+                        {'bucketId': 'gemini-5h', 'displayName': 'Five Hour Limit Remaining', 'window': '5h', 'remainingFraction': 1.0, 'resetTime': five_h_reset}
+                    ]
+                },
+                {
+                    'displayName': 'Claude and GPT models',
+                    'buckets': [
+                        {'bucketId': '3p-weekly', 'displayName': 'Weekly Limit Remaining', 'window': 'weekly', 'remainingFraction': 1.0, 'resetTime': weekly_reset},
+                        {'bucketId': '3p-5h', 'displayName': 'Five Hour Limit Remaining', 'window': '5h', 'remainingFraction': 1.0, 'resetTime': five_h_reset}
+                    ]
+                }
+            ]})
+        if request.url.path.endswith(':fetchAvailableModels'):
+            return httpx.Response(200, json={
+                'models': {
+                    'gemini-2.5-flash': {
+                        'quotaInfo': {
+                            'remainingFraction': 0.013393676,
+                            'resetTime': weekly_reset
+                        }
+                    }
+                }
+            })
+        return httpx.Response(404)
+
+    install_transport(monkeypatch, custom_handler)
+    result = asyncio.run(agy.fetch(credential()))
+    account = result['quota']['accounts'][0]
+    gemini_group = next(g for g in account['groups'] if g['id'] == 'gemini')
+    buckets = {b['window']: b for b in gemini_group['buckets']}
+
+    # Weekly should be updated to the true 1.3% from live models, not stale 92.6%
+    assert abs(buckets['weekly']['remaining_fraction'] - 0.013393676) < 1e-6
+    assert buckets['weekly']['reset_at'] == weekly_reset
+    # 5h should be preserved as 100%
+    assert buckets['5h']['remaining_fraction'] == 1.0
+
+

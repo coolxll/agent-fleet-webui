@@ -323,7 +323,7 @@ def gemini_groups_from_models(models: dict, reference_weekly_reset: str | None =
             weekly_reset = reference_weekly_reset or _iso(now + timedelta(days=7))
             buckets.append({
                 "id": f"{gid}-weekly",
-                "name": "Weekly",
+                "name": "Weekly Limit Remaining",
                 "window": "weekly",
                 "remaining_fraction": 1.0,
                 "reset_at": weekly_reset
@@ -333,9 +333,9 @@ def gemini_groups_from_models(models: dict, reference_weekly_reset: str | None =
             five_h_reset = _iso(now + timedelta(hours=5))
             buckets.append({
                 "id": f"{gid}-5h",
-                "name": "5-Hour",
+                "name": "Five Hour Limit Remaining",
                 "window": "5h",
-                "remaining_fraction": 0.0,
+                "remaining_fraction": 1.0,
                 "reset_at": five_h_reset
             })
 
@@ -424,17 +424,27 @@ async def _fetch(credential: dict) -> dict:
         if not isinstance(project, str) or not project:
             raise QuotaProviderError("Google returned no Code Assist project")
 
-        # 1. 优先从 PROD_API 获取 retrieveUserQuotaSummary（包含全局周限额与多模型池）
-        summary = None
+        # 1. 跨 PROD_API 与 API (Daily) 查询 retrieveUserQuotaSummary 并合并配额组（参考 openusage cloudCodeAllHosts）
+        summary_groups = []
+        seen_group_ids = set()
         for base in (PROD_API, API):
             try:
                 res = await call("POST", base + "retrieveUserQuotaSummary", "retrieveUserQuotaSummary", json={"project": project})
                 if res and res.get("groups"):
-                    summary = res
-                    break
+                    for g in quota_groups(res):
+                        if g["id"] not in seen_group_ids:
+                            summary_groups.append(g)
+                            seen_group_ids.add(g["id"])
+                        else:
+                            existing = next((eg for eg in summary_groups if eg["id"] == g["id"]), None)
+                            if existing:
+                                existing_wins = {b["window"] for b in existing["buckets"]}
+                                for b in g["buckets"]:
+                                    if b["window"] not in existing_wins:
+                                        existing["buckets"].append(b)
             except Exception:
                 pass
-        groups = quota_groups(summary) if summary else []
+        groups = summary_groups
 
         # 2. 从 API (Daily) 获取 fetchAvailableModels（包含实时 5 小时滚动消耗与各模型配额）
         ref_weekly_reset = None
@@ -452,16 +462,34 @@ async def _fetch(credential: dict) -> dict:
         except Exception:
             model_groups = []
 
-        # 3. 融合逻辑（参考 yetone/magpie 中的 pools + modelInfo 融合机制）：
-        # Gemini 模型的周限额取自 retrieveUserQuotaSummary，5 小时限额取自 daily fetchAvailableModels 的真实滚动余量
+        # 3. 融合逻辑（参考 openusage 的 worst-case wins 与 magpie 的 pools + modelInfo 融合机制）：
         gemini_group_obj = next((g for g in groups if g["id"] == "gemini"), None)
         model_gemini_obj = next((mg for mg in model_groups if mg["id"] == "gemini"), None)
 
         if not gemini_group_obj:
             if model_gemini_obj:
+                has_5h = any(b["window"] == "5h" for b in model_gemini_obj["buckets"])
+                has_weekly = any(b["window"] == "weekly" for b in model_gemini_obj["buckets"])
+                if not has_5h:
+                    model_gemini_obj["buckets"].append({
+                        "id": "gemini-5h",
+                        "name": "Five Hour Limit Remaining",
+                        "window": "5h",
+                        "remaining_fraction": 1.0,
+                        "reset_at": _iso(datetime.now(timezone.utc) + timedelta(hours=5))
+                    })
+                if not has_weekly:
+                    model_gemini_obj["buckets"].append({
+                        "id": "gemini-weekly",
+                        "name": "Weekly Limit Remaining",
+                        "window": "weekly",
+                        "remaining_fraction": 1.0,
+                        "reset_at": _iso(datetime.now(timezone.utc) + timedelta(days=7))
+                    })
                 groups.insert(0, model_gemini_obj)
         else:
             if model_gemini_obj:
+                # 3.1 5 小时滚动配额：若实时模型探测到 5h 配额，以模型实时余量为准
                 mod_5h = next((b for b in model_gemini_obj["buckets"] if b["window"] == "5h"), None)
                 if mod_5h:
                     g_5h = next((b for b in gemini_group_obj["buckets"] if b["window"] == "5h"), None)
@@ -470,6 +498,19 @@ async def _fetch(credential: dict) -> dict:
                         g_5h["reset_at"] = mod_5h["reset_at"]
                     else:
                         gemini_group_obj["buckets"].append(mod_5h)
+
+                # 3.2 周配额：依据 openusage 的 worst-case wins 原则，若模型检测到更严格的周限额，更新周余量与重置时间
+                mod_weekly = next((b for b in model_gemini_obj["buckets"] if b["window"] == "weekly"), None)
+                if mod_weekly:
+                    g_weekly = next((b for b in gemini_group_obj["buckets"] if b["window"] == "weekly"), None)
+                    if g_weekly:
+                        if mod_weekly["remaining_fraction"] < g_weekly["remaining_fraction"]:
+                            g_weekly["remaining_fraction"] = mod_weekly["remaining_fraction"]
+                            g_weekly["reset_at"] = mod_weekly["reset_at"]
+                    else:
+                        gemini_group_obj["buckets"].append(mod_weekly)
+
+            # 确保 5h 和 weekly 双桶均存在
             if not any(b["window"] == "5h" for b in gemini_group_obj["buckets"]):
                 gemini_group_obj["buckets"].append({
                     "id": "gemini-5h",
@@ -477,6 +518,14 @@ async def _fetch(credential: dict) -> dict:
                     "window": "5h",
                     "remaining_fraction": 1.0,
                     "reset_at": _iso(datetime.now(timezone.utc) + timedelta(hours=5))
+                })
+            if not any(b["window"] == "weekly" for b in gemini_group_obj["buckets"]):
+                gemini_group_obj["buckets"].append({
+                    "id": "gemini-weekly",
+                    "name": "Weekly Limit Remaining",
+                    "window": "weekly",
+                    "remaining_fraction": 1.0,
+                    "reset_at": _iso(datetime.now(timezone.utc) + timedelta(days=7))
                 })
 
         # 检查并注入 Gemini 4 / Argon 独立配额组
