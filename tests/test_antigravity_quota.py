@@ -222,7 +222,7 @@ def test_fetch_blends_worst_case_weekly_quota(monkeypatch):
         if request.url.host == 'oauth2.googleapis.com':
             return httpx.Response(200, json={'access_token': 'new-access', 'refresh_token': 'rotated-refresh', 'expires_in': 3600})
         if request.url.path.endswith('userinfo'):
-            return httpx.Response(200, json={'email': 'coolxll.qq@gmail.com', 'verified_email': True, 'name': 'CoolXll'})
+            return httpx.Response(200, json={'email': 'tester-cool@example.com', 'verified_email': True, 'name': 'CoolTester'})
         if request.url.path.endswith(':loadCodeAssist'):
             return httpx.Response(200, json={'cloudaicompanionProject': 'project', 'paidTier': {'id': 'g1-pro-tier'}})
         if request.url.path.endswith(':retrieveUserQuotaSummary'):
@@ -350,7 +350,7 @@ def test_fetch_cross_host_worst_case_wins_weekly_quota(monkeypatch):
         if request.url.host == 'oauth2.googleapis.com':
             return httpx.Response(200, json={'access_token': 'new-access', 'refresh_token': 'rotated-refresh', 'expires_in': 3600})
         if request.url.path.endswith('userinfo'):
-            return httpx.Response(200, json={'email': 'wendyyuan360@gmail.com', 'verified_email': True})
+            return httpx.Response(200, json={'email': 'tester-wendy@example.com', 'verified_email': True})
         if request.url.path.endswith(':loadCodeAssist'):
             return httpx.Response(200, json={'cloudaicompanionProject': 'project', 'paidTier': {'id': 'g1-pro-tier'}})
         if request.url.path.endswith(':retrieveUserQuotaSummary'):
