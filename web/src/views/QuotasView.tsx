@@ -74,16 +74,21 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
   }, [accounts])
 
   const submit = async () => {
-    if (!credential.trim()) {
-      setAddError(t('quotas.credentialRequired'))
-      return
+    let cred = credential.trim()
+    if (!cred) {
+      if (provider === 'qodercn') {
+        cred = 'auto'
+      } else {
+        setAddError(t('quotas.credentialRequired'))
+        return
+      }
     }
     setSubmitting(true)
     setAddError(null)
     try {
       await api.addQuotaAccount({
         provider,
-        credential,
+        credential: cred,
         label: label.trim() || undefined
       })
       setCredential('')

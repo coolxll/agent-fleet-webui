@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { ImportedQuotaAccount, QuotaSnapshot } from '../api'
 import AgentIcon from './AgentIcon'
 import { useI18n } from '../i18n'
@@ -66,6 +66,7 @@ export function QuotaCard({
   const { t, language } = useI18n()
   const duration = useDuration()
   const [now, setNow] = useState(() => Date.now())
+  const [showDetails, setShowDetails] = useState(false)
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30000)
@@ -73,7 +74,15 @@ export function QuotaCard({
   }, [])
 
   const windowLabel = (window: string) =>
-    window === 'weekly' ? t('quota.weekly') : window === '5h' ? t('quota.fiveHour') : window
+    window === 'weekly'
+      ? t('quota.weekly')
+      : window === '5h'
+        ? t('quota.fiveHour')
+        : window === 'cycle'
+          ? language === 'zh'
+            ? '周期额度'
+            : 'Cycle'
+          : window
 
   const displayName = account.label || account.name || account.email || account.id
   const showEmail = Boolean(account.email && displayName !== account.email)
@@ -84,6 +93,19 @@ export function QuotaCard({
   const groups = firstAccount?.groups || []
   const observedAt = parseTime(quota?.observed_at || account.last_refreshed_at)
   const age = observedAt === null ? null : now - observedAt
+
+  const packages = useMemo(() => {
+    return firstAccount?.packages || groups.flatMap((g) => g.packages || [])
+  }, [firstAccount, groups])
+
+  const dailyItems = useMemo(() => {
+    return (
+      firstAccount?.daily_consumption ||
+      groups.flatMap((g) => g.daily_consumption || [])
+    )
+  }, [firstAccount, groups])
+
+  const hasDetails = packages.length > 0 || dailyItems.length > 0
 
   return (
     <div className="quota-card">
@@ -162,7 +184,14 @@ export function QuotaCard({
                 return (
                   <div className="quota-bucket" key={bucket.id || bucket.window + bucket.name}>
                     <div className="quota-bucket-header">
-                      <span className="quota-bucket-window">{windowLabel(bucket.window)}</span>
+                      <div className="quota-bucket-label-wrap">
+                        <span className="quota-bucket-window">{windowLabel(bucket.window)}</span>
+                        {bucket.total !== null && bucket.total !== undefined && (
+                          <span className="quota-bucket-counts muted">
+                            {bucket.remaining?.toLocaleString()} / {bucket.total.toLocaleString()} {bucket.unit || ''}
+                          </span>
+                        )}
+                      </div>
                       {resetText && (
                         <span className="quota-bucket-reset" title={bucket.reset_at || undefined}>
                           {resetText}
@@ -198,12 +227,72 @@ export function QuotaCard({
             </div>
           ))
         )}
+
+        {hasDetails && showDetails && (
+          <div className="quota-details-section">
+            {dailyItems.length > 0 && (
+              <div className="quota-detail-block">
+                <div className="quota-detail-header">
+                  {language === 'zh' ? '按日消耗明细' : 'Daily Consumption'}
+                </div>
+                {dailyItems.map((item, idx) => (
+                  <div className="quota-detail-row" key={idx}>
+                    <span className="quota-detail-name" title={item.name}>
+                      {item.name}
+                    </span>
+                    <span className="quota-detail-val">
+                      已用 {item.used.toLocaleString()}
+                      {item.total ? ` / ${item.total.toLocaleString()}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {packages.length > 0 && (
+              <div
+                className="quota-detail-block"
+                style={{ marginTop: dailyItems.length > 0 ? 6 : 0 }}
+              >
+                <div className="quota-detail-header">
+                  {language === 'zh' ? '套餐资源包' : 'Package Breakdown'}
+                </div>
+                {packages.map((pkg, idx) => (
+                  <div className="quota-detail-row" key={idx}>
+                    <span className="quota-detail-name" title={pkg.name}>
+                      {pkg.name}
+                    </span>
+                    <span className="quota-detail-val">
+                      {pkg.remaining.toLocaleString()} / {pkg.total.toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="quota-card-footer">
-        <span className="quota-provider-tag muted small">
-          {account.provider_name || account.provider}
-        </span>
+        <div className="quota-footer-left">
+          <span className="quota-provider-tag muted small">
+            {account.provider_name || account.provider}
+          </span>
+          {hasDetails && (
+            <button
+              type="button"
+              className="quota-details-toggle"
+              onClick={() => setShowDetails(!showDetails)}
+            >
+              {showDetails
+                ? language === 'zh'
+                  ? '收起明细'
+                  : 'Hide details'
+                : language === 'zh'
+                  ? '明细清单'
+                  : 'Details'}
+            </button>
+          )}
+        </div>
         {age !== null ? (
           <span className="quota-sync-time muted small">
             {t('quota.syncedAgo', { time: duration(age) })}

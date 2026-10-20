@@ -19,7 +19,9 @@ const COLORS: Record<string, string> = {
   hermes: '#a371f7',
   agy: '#4285f4',
   codebuddy: '#00b96f',
-  qoder: '#2adb5c'
+  workbuddy: '#00b96f',
+  qoder: '#2adb5c',
+  qodercn: '#2adb5c'
 }
 
 const LABELS: Record<string, string> = {
@@ -30,7 +32,9 @@ const LABELS: Record<string, string> = {
   hermes: 'Hermes Agent',
   agy: 'Antigravity (AGY)',
   codebuddy: 'CodeBuddy',
-  qoder: 'Qoder'
+  workbuddy: 'WorkBuddy',
+  qoder: 'Qoder',
+  qodercn: 'QoderCN'
 }
 
 const AGENT_OFFICIAL_URLS: Record<string, string> = {
@@ -41,7 +45,9 @@ const AGENT_OFFICIAL_URLS: Record<string, string> = {
   hermes: 'https://nousresearch.com',
   agy: 'https://deepmind.google',
   codebuddy: 'https://codebuddy.cn',
-  qoder: 'https://qoder.com.cn'
+  workbuddy: 'https://codebuddy.cn',
+  qoder: 'https://qoder.com.cn',
+  qodercn: 'https://qoder.com.cn'
 }
 
 const AGENT_LOCAL_ICONS: Record<string, string> = {
@@ -52,7 +58,9 @@ const AGENT_LOCAL_ICONS: Record<string, string> = {
   hermes: '/icons/hermes.png',
   agy: '/icons/agy.png',
   codebuddy: '/icons/codebuddy.svg',
-  qoder: '/icons/qoder.svg'
+  workbuddy: '/icons/codebuddy.svg',
+  qoder: '/icons/qoder.svg',
+  qodercn: '/icons/qoder.svg'
 }
 
 export function agentLabel(agent: string): string {
@@ -159,7 +167,9 @@ const SHAPES: Record<string, () => JSX.Element> = {
   hermes: Hermes,
   agy: Agy,
   codebuddy: CodeBuddy,
-  qoder: Qoder
+  workbuddy: CodeBuddy,
+  qoder: Qoder,
+  qodercn: Qoder
 }
 
 export default function AgentIcon({ agent, size = 16, title }: Props) {

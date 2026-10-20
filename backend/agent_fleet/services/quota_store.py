@@ -122,13 +122,26 @@ async def add_account(provider: str, label: str | None, raw_credential: str) -> 
         raise ValueError(f"unsupported provider: {provider}")
     result = await quota_providers.fetch_account(provider, raw_credential)
     data = _read()
-    if provider == "antigravity":
-        existing = next((a for a in data["accounts"] if a.get("provider") == provider
-                         and a.get("email") == result["identity"]["email"]), None)
-        if existing:
-            _apply_result(existing, result)
-            _write(data)
-            return public_account(existing)
+    ident_email = result.get("identity", {}).get("email")
+    ident_uid = result.get("credential", {}).get("uid")
+    existing = next(
+        (
+            a
+            for a in data["accounts"]
+            if a.get("provider") == provider
+            and (
+                (ident_email and a.get("email") == ident_email)
+                or (ident_uid and a.get("credential", {}).get("uid") == ident_uid)
+            )
+        ),
+        None,
+    )
+    if existing:
+        if label and label.strip():
+            existing["label"] = label.strip()[:120]
+        _apply_result(existing, result)
+        _write(data)
+        return public_account(existing)
     account = {
         "id": models.new_id(),
         "provider": provider,

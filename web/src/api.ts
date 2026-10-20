@@ -108,18 +108,40 @@ export type ConfigSource = {
   captured_at: string | null
 }
 
+export type QuotaPackage = {
+  name: string
+  total: number
+  used: number
+  remaining: number
+  reset_at?: string | null
+}
+
+export type DailyConsumption = {
+  name: string
+  used: number
+  total?: number | null
+  remaining?: number | null
+  reset_at?: string | null
+}
+
 export type QuotaBucket = {
   id?: string | null
   name: string
   window: 'weekly' | '5h' | string
   remaining_fraction: number
   reset_at: string
+  used?: number | null
+  total?: number | null
+  remaining?: number | null
+  unit?: string | null
 }
 
 export type QuotaGroup = {
   id: string
   name: string
   buckets: QuotaBucket[]
+  packages?: QuotaPackage[] | null
+  daily_consumption?: DailyConsumption[] | null
 }
 
 export type QuotaAccount = {
@@ -130,6 +152,8 @@ export type QuotaAccount = {
   observed_at?: string | null
   groups: QuotaGroup[]
   min_remaining_fraction?: number | null
+  packages?: QuotaPackage[] | null
+  daily_consumption?: DailyConsumption[] | null
 }
 
 export type QuotaSnapshot = {
