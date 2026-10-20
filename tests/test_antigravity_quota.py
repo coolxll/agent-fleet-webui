@@ -12,6 +12,15 @@ from agent_fleet.services.quota_providers import QuotaProviderError
 ASYNC_CLIENT = httpx.AsyncClient
 
 
+@pytest.fixture(autouse=True)
+def antigravity_client_secret(monkeypatch):
+    # Client secrets belong in local config, not the source tree.
+    monkeypatch.setenv(
+        agy.CLIENT_SECRETS_ENV,
+        json.dumps({agy.DEFAULT_CLIENT: 'test-client-secret'}),
+    )
+
+
 def install_transport(monkeypatch, handler):
     original = ASYNC_CLIENT
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(handler), **kw))

@@ -3,18 +3,68 @@
 import base64
 import json
 import math
+import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
 
 from agent_fleet.services.quota_providers import QuotaProviderError, _decode_jwt_payload, _iso
+from agent_fleet.settings import get_settings
 
-# Public desktop OAuth clients used by Antigravity, not user credentials.
+# Public desktop OAuth client IDs used by Antigravity. The matching client
+# secrets are not source code: load them from the local config file or env.
 DEFAULT_CLIENT = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
-CLIENTS = {
-    DEFAULT_CLIENT: "",
-    "884354919052-36trc1jjb3tguiac32ov6cod268c5blh.apps.googleusercontent.com": "",
+CLIENT_IDS = {
+    DEFAULT_CLIENT,
+    "884354919052-36trc1jjb3tguiac32ov6cod268c5blh.apps.googleusercontent.com",
 }
+CLIENT_SECRETS_ENV = "AGENT_FLEET_ANTIGRAVITY_CLIENTS"
+CLIENT_SECRETS_FILE = "antigravity_clients.json"
+
+
+def clients_file() -> Path:
+    return get_settings().db_path.parent / CLIENT_SECRETS_FILE
+
+
+def _read_client_secrets() -> dict[str, str]:
+    raw = os.environ.get(CLIENT_SECRETS_ENV, "").strip()
+    source = CLIENT_SECRETS_ENV
+    if raw:
+        try:
+            data = json.loads(raw)
+        except Exception as exc:
+            raise QuotaProviderError(f"{CLIENT_SECRETS_ENV} is not valid JSON: {exc}") from exc
+    else:
+        path = clients_file()
+        if not path.is_file():
+            return {}
+        source = str(path)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise QuotaProviderError(f"cannot read {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise QuotaProviderError(
+            f"{source} must contain a JSON object mapping client_id to client_secret"
+        )
+    return {str(k): v for k, v in data.items() if isinstance(v, str) and v}
+
+
+def client_secrets() -> dict[str, str]:
+    return {cid: secret for cid, secret in _read_client_secrets().items() if cid in CLIENT_IDS}
+
+
+def _require_client_secret(client_id: str) -> str:
+    secret = client_secrets().get(client_id)
+    if secret:
+        return secret
+    raise QuotaProviderError(
+        f"no Antigravity client secret configured for {client_id}; "
+        f"set {CLIENT_SECRETS_ENV} or create {clients_file()}"
+    )
+
+
 API = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
 TIERS = {"free-tier": "Free", "g1-pro-tier": "Google AI Pro", "g1-ultra-tier": "Google AI Ultra", "g1-ultra-lite-tier": "Google AI Ultra Lite"}
 
@@ -35,10 +85,11 @@ def parse_credential(raw: str) -> dict:
         claims = _decode_jwt_payload(credential.get("id_token") or "")
         audience = claims.get("aud")
         if isinstance(audience, list):
-            audience = next((a for a in audience if a in CLIENTS), None)
-        credential["client_id"] = credential.get("client_id") or (audience if audience in CLIENTS else DEFAULT_CLIENT)
-        if credential["client_id"] not in CLIENTS:
+            audience = next((a for a in audience if a in CLIENT_IDS), None)
+        credential["client_id"] = credential.get("client_id") or (audience if audience in CLIENT_IDS else DEFAULT_CLIENT)
+        if credential["client_id"] not in CLIENT_IDS:
             raise QuotaProviderError("unsupported Antigravity OAuth client")
+        _require_client_secret(credential["client_id"])
         return credential
     except QuotaProviderError:
         raise
@@ -339,7 +390,7 @@ async def _fetch(credential: dict) -> dict:
             ident = credential["client_id"]
             result = await request_json(client, "POST", "https://oauth2.googleapis.com/token", "OAuth refresh", data={
                 "grant_type": "refresh_token", "refresh_token": credential["refresh_token"],
-                "client_id": ident, "client_secret": CLIENTS[ident]})
+                "client_id": ident, "client_secret": _require_client_secret(ident)})
             if not result.get("access_token"):
                 raise QuotaProviderError("OAuth refresh returned no access token")
             for key in ("access_token", "refresh_token", "id_token"):

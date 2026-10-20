@@ -173,6 +173,11 @@ This is a read-only observer.
   `0600`, outside SQLite; the API never returns the credential, and the fleet
   export never contains it. Credentials are only used for the vendor usage
   request.
+* Antigravity OAuth client secrets are not stored in source. Put them in
+  `data/antigravity_clients.json` (mode `0600`, gitignored) as a JSON object
+  mapping `client_id` to `client_secret`, or pass the same object through
+  `AGENT_FLEET_ANTIGRAVITY_CLIENTS`. Only the public client IDs live in
+  `antigravity_quota.py`.
 * `~/.gemini/agy-swap/accounts.json` is read for quota display only. The
   adapter copies an explicit whitelist (email, name, aliases, tier, quota
   buckets), so `token_data`, `token_hash`, `secret_ref` and every other
