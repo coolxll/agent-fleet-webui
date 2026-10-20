@@ -255,78 +255,77 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
         </div>
       ) : null}
 
-      <div className="quotas-toolbar">
-        <div className="quotas-summary-inline">
-          <div className="quotas-stat-item">
-            <span className="quotas-stat-label">{t('quotas.accounts')}:</span>
-            <span className="quotas-stat-value">{totals.accounts}</span>
-            <span className="muted small" style={{ fontSize: 10.5 }}>
-              ({t('quotas.healthy', { count: totals.ok })})
-            </span>
-          </div>
-          <span className="muted">·</span>
-          <div className="quotas-stat-item">
-            <span className="quotas-stat-label">{t('quotas.providers')}:</span>
-            <span className="quotas-stat-value">{totals.providers}</span>
-          </div>
-          <span className="muted">·</span>
-          <div className="quotas-stat-item">
-            <span className="quotas-stat-label">{t('quotas.healthyRate')}:</span>
-            <span
-              className="quotas-stat-value"
-              style={{
-                color:
-                  totals.accounts === 0
-                    ? undefined
-                    : totals.ok === totals.accounts
-                      ? 'var(--ok)'
-                      : totals.ok > 0
-                        ? 'var(--warn)'
-                        : 'var(--bad)'
-              }}
-            >
-              {totals.accounts === 0 ? '—' : `${((totals.ok / totals.accounts) * 100).toFixed(0)}%`}
-            </span>
-          </div>
-          <span className="muted">·</span>
-          <div className="quotas-stat-item">
-            <span className="quotas-stat-value" style={{ color: 'var(--ok)', fontSize: 11 }}>
-              ● {t('quotas.onlineValue')}
-            </span>
-          </div>
+      <div className="cards">
+        <div className="card">
+          <div className="label">{t('quotas.providers')}</div>
+          <div className="value">{totals.providers}</div>
+          <div className="hint">{t('quotas.providersHint')}</div>
         </div>
-
-        <div className="quotas-toolbar-controls">
-          <div className="quotas-agent-tabs">
-            <button
-              className={`quotas-agent-tab ${agentFilter === 'all' ? 'active' : ''}`}
-              onClick={() => setAgentFilter('all')}
-            >
-              {language === 'zh' ? '全部' : 'All'} ({accounts?.length || 0})
-            </button>
-            {[...allAgents.entries()].map(([agent, count]) => (
-              <button
-                key={agent}
-                className={`quotas-agent-tab ${agentFilter === agent ? 'active' : ''}`}
-                onClick={() => setAgentFilter(agent)}
-              >
-                <AgentIcon agent={agent} size={13} />
-                <span>{agentLabel(agent)}</span>
-                <span className="muted" style={{ fontSize: 10 }}>({count})</span>
-              </button>
-            ))}
-          </div>
-
-          <button
-            className={`quotas-mode-btn ${layoutMode === 'flat' ? 'active' : ''}`}
-            onClick={() => setLayoutMode(layoutMode === 'flat' ? 'grouped' : 'flat')}
-            title={language === 'zh' ? '切换平铺/分组布局' : 'Toggle flat/grouped view'}
+        <div className="card">
+          <div className="label">{t('quotas.accounts')}</div>
+          <div className="value">{totals.accounts}</div>
+          <div className="hint">{t('quotas.healthy', { count: totals.ok })}</div>
+        </div>
+        <div className="card">
+          <div className="label">{t('quotas.healthyRate')}</div>
+          <div
+            className="value"
+            style={{
+              color:
+                totals.accounts === 0
+                  ? undefined
+                  : totals.ok === totals.accounts
+                    ? 'var(--ok)'
+                    : totals.ok > 0
+                      ? 'var(--warn)'
+                      : 'var(--bad)'
+            }}
           >
-            {layoutMode === 'flat'
-              ? language === 'zh' ? '⊞ 平铺全览' : '⊞ Flat'
-              : language === 'zh' ? '☰ 按 Agent 分组' : '☰ Grouped'}
-          </button>
+            {totals.accounts === 0 ? '—' : `${((totals.ok / totals.accounts) * 100).toFixed(0)}%`}
+          </div>
+          <div className="hint">
+            {t('quotas.healthyRateHint', { ok: totals.ok, total: totals.accounts })}
+          </div>
         </div>
+        <div className="card">
+          <div className="label">{t('quotas.online')}</div>
+          <div className="value" style={{ color: 'var(--ok)', fontSize: 20 }}>
+            {t('quotas.onlineValue')}
+          </div>
+          <div className="hint">{t('quotas.onlineHint')}</div>
+        </div>
+      </div>
+
+      <div className="quotas-controls-row">
+        <div className="quotas-agent-tabs">
+          <button
+            className={`quotas-agent-tab ${agentFilter === 'all' ? 'active' : ''}`}
+            onClick={() => setAgentFilter('all')}
+          >
+            {language === 'zh' ? '全部' : 'All'} ({accounts?.length || 0})
+          </button>
+          {[...allAgents.entries()].map(([agent, count]) => (
+            <button
+              key={agent}
+              className={`quotas-agent-tab ${agentFilter === agent ? 'active' : ''}`}
+              onClick={() => setAgentFilter(agent)}
+            >
+              <AgentIcon agent={agent} size={15} />
+              <span>{agentLabel(agent)}</span>
+              <span className="muted" style={{ fontSize: 11 }}>({count})</span>
+            </button>
+          ))}
+        </div>
+
+        <button
+          className={`quotas-mode-btn ${layoutMode === 'flat' ? 'active' : ''}`}
+          onClick={() => setLayoutMode(layoutMode === 'flat' ? 'grouped' : 'flat')}
+          title={language === 'zh' ? '切换平铺/分组布局' : 'Toggle flat/grouped view'}
+        >
+          {layoutMode === 'flat'
+            ? language === 'zh' ? '⊞ 连续平铺' : '⊞ Continuous'
+            : language === 'zh' ? '☰ 按 Agent 分隔' : '☰ By Agent'}
+        </button>
       </div>
 
       {error ? <div className="err" style={{ marginBottom: 10 }}>{error}</div> : null}
