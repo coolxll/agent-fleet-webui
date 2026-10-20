@@ -25,6 +25,8 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
   const [submitting, setSubmitting] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState<string | null>(null)
+  const [agentFilter, setAgentFilter] = useState<string>('all')
+  const [layoutMode, setLayoutMode] = useState<'flat' | 'grouped'>('flat')
   const fileInput = useRef<HTMLInputElement | null>(null)
 
   const load = () => {
@@ -53,14 +55,33 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
     [providers]
   )
   const currentProvider = providerById[provider]
-  const groups = useMemo(() => {
+
+  const allAgents = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const a of accounts || []) {
+      const agent = a.agent || providerById[a.provider]?.agent || a.provider
+      counts.set(agent, (counts.get(agent) || 0) + 1)
+    }
+    return counts
+  }, [accounts, providerById])
+
+  const filteredAccounts = useMemo(() => {
+    if (!accounts) return []
+    if (agentFilter === 'all') return accounts
+    return accounts.filter((a) => {
+      const agent = a.agent || providerById[a.provider]?.agent || a.provider
+      return agent === agentFilter
+    })
+  }, [accounts, agentFilter, providerById])
+
+  const filteredGroups = useMemo(() => {
     const byAgent = new Map<string, ImportedQuotaAccount[]>()
-    for (const account of accounts || []) {
+    for (const account of filteredAccounts) {
       const agent = account.agent || providerById[account.provider]?.agent || account.provider
       byAgent.set(agent, [...(byAgent.get(agent) || []), account])
     }
     return [...byAgent.entries()].sort(([a], [b]) => a.localeCompare(b))
-  }, [accounts, providerById])
+  }, [filteredAccounts, providerById])
 
   const totals = useMemo(() => {
     const list = accounts || []
@@ -234,48 +255,81 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
         </div>
       ) : null}
 
-      <div className="cards">
-        <div className="card">
-          <div className="label">{t('quotas.providers')}</div>
-          <div className="value">{totals.providers}</div>
-          <div className="hint">{t('quotas.providersHint')}</div>
+      <div className="quotas-toolbar">
+        <div className="quotas-summary-inline">
+          <div className="quotas-stat-item">
+            <span className="quotas-stat-label">{t('quotas.accounts')}:</span>
+            <span className="quotas-stat-value">{totals.accounts}</span>
+            <span className="muted small" style={{ fontSize: 10.5 }}>
+              ({t('quotas.healthy', { count: totals.ok })})
+            </span>
+          </div>
+          <span className="muted">·</span>
+          <div className="quotas-stat-item">
+            <span className="quotas-stat-label">{t('quotas.providers')}:</span>
+            <span className="quotas-stat-value">{totals.providers}</span>
+          </div>
+          <span className="muted">·</span>
+          <div className="quotas-stat-item">
+            <span className="quotas-stat-label">{t('quotas.healthyRate')}:</span>
+            <span
+              className="quotas-stat-value"
+              style={{
+                color:
+                  totals.accounts === 0
+                    ? undefined
+                    : totals.ok === totals.accounts
+                      ? 'var(--ok)'
+                      : totals.ok > 0
+                        ? 'var(--warn)'
+                        : 'var(--bad)'
+              }}
+            >
+              {totals.accounts === 0 ? '—' : `${((totals.ok / totals.accounts) * 100).toFixed(0)}%`}
+            </span>
+          </div>
+          <span className="muted">·</span>
+          <div className="quotas-stat-item">
+            <span className="quotas-stat-value" style={{ color: 'var(--ok)', fontSize: 11 }}>
+              ● {t('quotas.onlineValue')}
+            </span>
+          </div>
         </div>
-        <div className="card">
-          <div className="label">{t('quotas.accounts')}</div>
-          <div className="value">{totals.accounts}</div>
-          <div className="hint">{t('quotas.healthy', { count: totals.ok })}</div>
-        </div>
-        <div className="card">
-          <div className="label">{t('quotas.healthyRate')}</div>
-          <div
-            className="value"
-            style={{
-              color:
-                totals.accounts === 0
-                  ? undefined
-                  : totals.ok === totals.accounts
-                    ? 'var(--ok)'
-                    : totals.ok > 0
-                      ? 'var(--warn)'
-                      : 'var(--bad)'
-            }}
+
+        <div className="quotas-toolbar-controls">
+          <div className="quotas-agent-tabs">
+            <button
+              className={`quotas-agent-tab ${agentFilter === 'all' ? 'active' : ''}`}
+              onClick={() => setAgentFilter('all')}
+            >
+              {language === 'zh' ? '全部' : 'All'} ({accounts?.length || 0})
+            </button>
+            {[...allAgents.entries()].map(([agent, count]) => (
+              <button
+                key={agent}
+                className={`quotas-agent-tab ${agentFilter === agent ? 'active' : ''}`}
+                onClick={() => setAgentFilter(agent)}
+              >
+                <AgentIcon agent={agent} size={13} />
+                <span>{agentLabel(agent)}</span>
+                <span className="muted" style={{ fontSize: 10 }}>({count})</span>
+              </button>
+            ))}
+          </div>
+
+          <button
+            className={`quotas-mode-btn ${layoutMode === 'flat' ? 'active' : ''}`}
+            onClick={() => setLayoutMode(layoutMode === 'flat' ? 'grouped' : 'flat')}
+            title={language === 'zh' ? '切换平铺/分组布局' : 'Toggle flat/grouped view'}
           >
-            {totals.accounts === 0 ? '—' : `${((totals.ok / totals.accounts) * 100).toFixed(0)}%`}
-          </div>
-          <div className="hint">
-            {t('quotas.healthyRateHint', { ok: totals.ok, total: totals.accounts })}
-          </div>
-        </div>
-        <div className="card">
-          <div className="label">{t('quotas.online')}</div>
-          <div className="value" style={{ color: 'var(--ok)', fontSize: 20 }}>
-            {t('quotas.onlineValue')}
-          </div>
-          <div className="hint">{t('quotas.onlineHint')}</div>
+            {layoutMode === 'flat'
+              ? language === 'zh' ? '⊞ 平铺全览' : '⊞ Flat'
+              : language === 'zh' ? '☰ 按 Agent 分组' : '☰ Grouped'}
+          </button>
         </div>
       </div>
 
-      {error ? <div className="err" style={{ marginBottom: 16 }}>{error}</div> : null}
+      {error ? <div className="err" style={{ marginBottom: 10 }}>{error}</div> : null}
 
       {accounts === null ? (
         <div className="muted">{t('common.loading')}</div>
@@ -288,13 +342,36 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
             </div>
           </div>
         </div>
+      ) : filteredAccounts.length === 0 ? (
+        <div className="muted small" style={{ padding: '20px 0', textAlign: 'center' }}>
+          {language === 'zh' ? '当前筛选下没有账号' : 'No accounts match current filter'}
+        </div>
+      ) : layoutMode === 'flat' ? (
+        <div className="quota-cards-grid">
+          {filteredAccounts.map((account) => {
+            const providerInfo = providerById[account.provider]
+            const agent = account.agent || providerInfo?.agent || account.provider
+            return (
+              <QuotaCard
+                key={account.id}
+                account={account}
+                agent={agent}
+                refreshing={refreshing === account.id}
+                onRefresh={() => refresh(account)}
+                onRemove={() => remove(account)}
+              />
+            )
+          })}
+        </div>
       ) : (
-        groups.map(([groupAgent, groupAccounts]) => (
+        filteredGroups.map(([groupAgent, groupAccounts]) => (
           <section className="quota-agent-group" key={groupAgent} aria-label={agentLabel(groupAgent)}>
             <div className="quota-agent-heading">
-              <AgentIcon agent={groupAgent} size={20} />
+              <AgentIcon agent={groupAgent} size={16} />
               <h2>{agentLabel(groupAgent)}</h2>
-              <span className="tag">{t('quotas.accountsCount', { count: groupAccounts.length })}</span>
+              <span className="tag" style={{ fontSize: 10, padding: '1px 5px' }}>
+                {t('quotas.accountsCount', { count: groupAccounts.length })}
+              </span>
             </div>
             <div className="quota-cards-grid">
               {groupAccounts.map((account) => {
