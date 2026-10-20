@@ -185,6 +185,7 @@ def test_gemini_groups_from_models_handles_weekly_and_gemini_4():
     assert '5h' in gemini_windows
     assert 'weekly' in gemini_windows
     assert group_map['gemini_4']['name'] == 'Gemini 4 Argon'
-    assert group_map['gemini_4']['buckets'][0]['window'] == 'weekly'
-    assert group_map['gemini_4']['buckets'][0]['remaining_fraction'] == 0.35
+    g4_windows = {b['window'] for b in group_map['gemini_4']['buckets']}
+    assert 'weekly' in g4_windows
+    assert any(b['window'] == 'weekly' and b['remaining_fraction'] == 0.35 for b in group_map['gemini_4']['buckets'])
 

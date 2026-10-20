@@ -201,7 +201,7 @@ def quota_groups(summary: dict) -> list[dict]:
     return groups
 
 
-def gemini_groups_from_models(models: dict) -> list[dict]:
+def gemini_groups_from_models(models: dict, reference_weekly_reset: str | None = None) -> list[dict]:
     raw_models = models.get("models", {})
     if not isinstance(raw_models, dict):
         return []
@@ -243,12 +243,16 @@ def gemini_groups_from_models(models: dict) -> list[dict]:
         if not candidates:
             return None
         buckets = []
+        win_candidates = {
+            "5h": [c for c in candidates if c[0] == "5h"],
+            "weekly": [c for c in candidates if c[0] == "weekly"],
+        }
         for win in ("5h", "weekly"):
-            win_candidates = [c for c in candidates if c[0] == win]
-            if win_candidates:
+            clist = win_candidates[win]
+            if clist:
                 # 优先按余量升序，其次按重置时间升序
-                win_candidates.sort(key=lambda c: (c[1], c[2]))
-                best = win_candidates[0]
+                clist.sort(key=lambda c: (c[1], c[2]))
+                best = clist[0]
                 buckets.append({
                     "id": f"{gid}-{win}",
                     "name": "5-Hour" if win == "5h" else "Weekly",
@@ -256,8 +260,33 @@ def gemini_groups_from_models(models: dict) -> list[dict]:
                     "remaining_fraction": best[1],
                     "reset_at": best[3]
                 })
-        if not buckets:
-            return None
+
+        # 确保 Gemini models 拥有完整的 5h 和 weekly 双桶
+        has_5h = any(b["window"] == "5h" for b in buckets)
+        has_weekly = any(b["window"] == "weekly" for b in buckets)
+
+        if not has_weekly:
+            weekly_reset = reference_weekly_reset or _iso(now + timedelta(days=7))
+            min_rem = min((c[1] for c in candidates), default=1.0)
+            buckets.append({
+                "id": f"{gid}-weekly",
+                "name": "Weekly",
+                "window": "weekly",
+                "remaining_fraction": min_rem,
+                "reset_at": weekly_reset
+            })
+
+        if not has_5h:
+            five_h_reset = _iso(now + timedelta(hours=5))
+            buckets.insert(0, {
+                "id": f"{gid}-5h",
+                "name": "5-Hour",
+                "window": "5h",
+                "remaining_fraction": 0.0,
+                "reset_at": five_h_reset
+            })
+
+        buckets.sort(key=lambda b: 0 if b["window"] == "5h" else 1)
         return {"id": gid, "name": gname, "buckets": buckets}
 
     result = []
@@ -344,6 +373,16 @@ async def _fetch(credential: dict) -> dict:
         summary = await call("POST", API + "retrieveUserQuotaSummary", "retrieveUserQuotaSummary", json={"project": project})
         groups = quota_groups(summary)
 
+        # 尝试从已有的 group 中获取周重置基准时间
+        ref_weekly_reset = None
+        for g in groups:
+            for b in g.get("buckets", []):
+                if b.get("window") == "weekly":
+                    ref_weekly_reset = b.get("reset_at")
+                    break
+            if ref_weekly_reset:
+                break
+
         gemini_group_obj = next((g for g in groups if g["id"] == "gemini"), None)
         has_gemini = gemini_group_obj is not None
         has_gemini_weekly = gemini_group_obj is not None and any(b.get("window") == "weekly" for b in gemini_group_obj.get("buckets", []))
@@ -351,7 +390,7 @@ async def _fetch(credential: dict) -> dict:
         if not has_gemini or not has_gemini_weekly:
             try:
                 models = await call("POST", API + "fetchAvailableModels", "fetchAvailableModels", json={"project": project})
-                model_groups = gemini_groups_from_models(models)
+                model_groups = gemini_groups_from_models(models, reference_weekly_reset=ref_weekly_reset)
                 if not has_gemini:
                     for mg in reversed(model_groups):
                         if not any(g["id"] == mg["id"] for g in groups):
@@ -363,6 +402,7 @@ async def _fetch(credential: dict) -> dict:
                         for b in fallback_gemini.get("buckets", []):
                             if b["window"] not in existing_windows:
                                 gemini_group_obj["buckets"].append(b)
+                        gemini_group_obj["buckets"].sort(key=lambda b: 0 if b["window"] == "5h" else 1)
                     fallback_g4 = next((mg for mg in model_groups if mg["id"] == "gemini_4"), None)
                     if fallback_g4 and not any(g["id"] == "gemini_4" for g in groups):
                         idx = next((i for i, g in enumerate(groups) if g["id"] == "gemini"), -1)
