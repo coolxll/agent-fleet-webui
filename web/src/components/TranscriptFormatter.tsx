@@ -1,61 +1,24 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import AgentIcon from './AgentIcon'
 import { useI18n } from '../i18n'
+import ToolCallView, {
+  ToolCallItemView,
+  ToolResultView,
+  ToolOutputBox,
+  extractToolCommand,
+  extractFilePath,
+  extractWebTarget
+} from './ToolCallView'
 
-// Extract command string from various tool call input schemas
-export function extractToolCommand(input: any): string | null {
-  if (!input) return null
-  if (typeof input === 'string') {
-    const mBash = input.match(/Bash\(\{\s*command:\s*(["'])([\s\S]*?)\1\s*\}\)/)
-    if (mBash) {
-      try {
-        return JSON.parse(`"${mBash[2]}"`)
-      } catch {
-        return mBash[2]
-      }
-    }
-    return input
-  }
-  if (typeof input === 'object') {
-    if (input.CommandLine) {
-      const c = input.CommandLine
-      return typeof c === 'string' && c.startsWith('"') && c.endsWith('"') ? c.slice(1, -1) : c
-    }
-    if (input.command) return input.command
-    if (input.code) {
-      const mBash = String(input.code).match(/Bash\(\{\s*command:\s*(["'])([\s\S]*?)\1\s*\}\)/)
-      if (mBash) {
-        try {
-          return JSON.parse(`"${mBash[2]}"`)
-        } catch {
-          return mBash[2]
-        }
-      }
-      return input.code
-    }
-  }
-  return null
-}
-
-// Extract file path from various tool call input schemas
-export function extractFilePath(input: any): string | null {
-  if (!input || typeof input !== 'object') return null
-  return (
-    input.AbsolutePath ||
-    input.TargetFile ||
-    input.file_path ||
-    input.path ||
-    input.changes?.[0]?.path ||
-    null
-  )
-}
-
-// Extract web URL or search query
-export function extractWebTarget(input: any): { url?: string; query?: string } | null {
-  if (!input || typeof input !== 'object') return null
-  if (input.url) return { url: input.url }
-  if (input.query) return { query: input.query }
-  return null
+// Re-export helpers so existing usages are preserved
+export {
+  extractToolCommand,
+  extractFilePath,
+  extractWebTarget,
+  ToolCallView,
+  ToolCallItemView,
+  ToolResultView,
+  ToolOutputBox
 }
 
 // Markdown Code Card with Copy Button
@@ -199,132 +162,17 @@ export function FormattedMessageContent({ content }: { content: string }) {
   )
 }
 
-// Tool Call Item View
-export function ToolCallItemView({ call }: { call: any }) {
-  const [copied, setCopied] = useState(false)
-  const name = call.name || 'tool'
-  const isCmd = [
-    'bash',
-    'run_command',
-    'exec_command',
-    'shell',
-    'terminal',
-    'commandexecution',
-    'repl'
-  ].some((c) => name.toLowerCase().includes(c))
-  const isFile = ['file', 'read', 'view', 'write', 'edit', 'patch'].some((f) =>
-    name.toLowerCase().includes(f)
-  )
-  const isWeb = ['browser', 'web', 'fetch', 'url', 'search'].some((w) =>
-    name.toLowerCase().includes(w)
-  )
-
-  const cmd = extractToolCommand(call.input)
-  const filePath = extractFilePath(call.input)
-  const webTarget = extractWebTarget(call.input)
-
-  const handleCopy = (str: string) => {
-    navigator.clipboard.writeText(str)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  return (
-    <div className="transcript-tool-item">
-      <div className="transcript-tool-header">
-        <span className="transcript-tool-badge">
-          {isCmd ? '💻' : isFile ? '📄' : isWeb ? '🌐' : '🛠️'} {name}
-        </span>
-        {cmd && (
-          <button
-            className="transcript-tool-copy"
-            onClick={() => handleCopy(cmd)}
-            title="Copy command"
-          >
-            {copied ? '✓ Copied' : '📋 Copy'}
-          </button>
-        )}
-      </div>
-
-      {isCmd && cmd ? (
-        <div className="transcript-tool-cmd-box">
-          <span className="transcript-tool-prompt">$</span>
-          <pre className="transcript-tool-cmd-text">{cmd}</pre>
-        </div>
-      ) : isFile && filePath ? (
-        <div className="transcript-tool-file-box">
-          <span className="transcript-tool-file-icon">📄</span>
-          <code className="transcript-tool-file-path">{filePath}</code>
-        </div>
-      ) : isWeb && webTarget ? (
-        <div className="transcript-tool-web-box">
-          {webTarget.url && <div className="transcript-web-line">🔗 {webTarget.url}</div>}
-          {webTarget.query && (
-            <div className="transcript-web-line">
-              🔍 <code>{webTarget.query}</code>
-            </div>
-          )}
-        </div>
-      ) : (
-        <pre className="transcript-tool-raw-args">
-          {typeof call.input === 'string'
-            ? call.input
-            : JSON.stringify(call.input, null, 2)}
-        </pre>
-      )}
-    </div>
-  )
-}
-
-// Tool Result / Output Box
-export function ToolResultView({ content }: { content: string }) {
-  const [copied, setCopied] = useState(false)
-  const [expanded, setExpanded] = useState(false)
-  const lines = content.split('\n')
-  const isLong = lines.length > 8
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(content)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  const displayContent = isLong && !expanded ? lines.slice(0, 8).join('\n') + '\n...' : content
-
-  return (
-    <div className="transcript-tool-result">
-      <div className="transcript-tool-result-header">
-        <span className="transcript-tool-result-label">
-          ⚡ Output ({lines.length} lines)
-        </span>
-        <div style={{ display: 'flex', gap: 6 }}>
-          {isLong && (
-            <button
-              className="transcript-tool-toggle"
-              onClick={() => setExpanded(!expanded)}
-            >
-              {expanded ? '▲ Collapse' : '▼ Expand'}
-            </button>
-          )}
-          <button className="transcript-tool-copy" onClick={handleCopy}>
-            {copied ? '✓ Copied' : '📋 Copy'}
-          </button>
-        </div>
-      </div>
-      <pre className="transcript-tool-result-body">{displayContent}</pre>
-    </div>
-  )
-}
-
 // Single Turn View
 export function TranscriptTurnRow({
   turn,
   agentId,
-  formatTime
+  formatTime,
+  pairedOutput
 }: {
   turn: any
   agentId: string
   formatTime: (ts: any) => string
+  pairedOutput?: string
 }) {
   const { t } = useI18n()
   const role = turn.role || 'assistant'
@@ -332,8 +180,15 @@ export function TranscriptTurnRow({
   const isTool = role === 'tool'
 
   if (isTool) {
+    const hasCalls = turn.tool_calls && turn.tool_calls.length > 0
+    const hasContent = !!turn.content || !!pairedOutput
+
     return (
-      <div className="transcript-message-row tool">
+      <div
+        className={`transcript-message-row tool ${hasCalls ? 'has-call' : ''} ${
+          hasContent ? 'has-output' : ''
+        }`}
+      >
         <div className="transcript-avatar tool-avatar">⚙️</div>
         <div className="transcript-bubble tool-bubble">
           <div className="transcript-bubble-meta">
@@ -347,11 +202,17 @@ export function TranscriptTurnRow({
             )}
           </div>
 
-          {turn.tool_calls && turn.tool_calls.map((call: any, cIdx: number) => (
-            <ToolCallItemView key={cIdx} call={call} />
-          ))}
-
-          {turn.content && <ToolResultView content={turn.content} />}
+          {/* Render Tool Calls paired with execution output */}
+          {hasCalls ? (
+            turn.tool_calls.map((call: any, cIdx: number) => {
+              // Pair output with the last tool call in this turn
+              const callOutput =
+                cIdx === turn.tool_calls.length - 1 ? (turn.content || pairedOutput) : null
+              return <ToolCallView key={cIdx} call={call} output={callOutput} />
+            })
+          ) : hasContent ? (
+            <ToolCallView call={null} output={turn.content || pairedOutput} />
+          ) : null}
         </div>
       </div>
     )
@@ -383,23 +244,79 @@ export function TranscriptTurnRow({
           </details>
         )}
 
-        {/* Tool Calls List */}
+        {/* Tool Calls List (Modern Rich Cards) */}
         {turn.tool_calls && turn.tool_calls.length > 0 && (
-          <details className="transcript-tools-details">
-            <summary>
+          <div className="transcript-assistant-tools">
+            <div className="transcript-tools-section-title">
               🛠️ {t('sessions.toolCall')} ({turn.tool_calls.length})
-            </summary>
-            <div className="transcript-tools-content">
-              {turn.tool_calls.map((call: any, cIdx: number) => (
-                <ToolCallItemView key={cIdx} call={call} />
-              ))}
             </div>
-          </details>
+            {turn.tool_calls.map((call: any, cIdx: number) => (
+              <ToolCallView
+                key={cIdx}
+                call={call}
+                output={cIdx === turn.tool_calls.length - 1 ? pairedOutput : null}
+              />
+            ))}
+          </div>
         )}
 
         {/* Formatted Message Content */}
         {turn.content && <FormattedMessageContent content={turn.content} />}
       </div>
     </div>
+  )
+}
+
+// Preprocessed Turn List that pairs adjacent Tool Calls & Outputs seamlessly
+export function TranscriptTurnList({
+  turns,
+  agentId,
+  formatTime
+}: {
+  turns: any[]
+  agentId: string
+  formatTime: (ts: any) => string
+}) {
+  const processed = useMemo(() => {
+    if (!turns || turns.length === 0) return []
+    const result: { turn: any; pairedOutput?: string }[] = []
+    const skipIndices = new Set<number>()
+
+    for (let i = 0; i < turns.length; i++) {
+      if (skipIndices.has(i)) continue
+      const curr = turns[i]
+      const next = turns[i + 1]
+
+      const currHasCalls = curr.tool_calls && curr.tool_calls.length > 0
+      const currNoContent = !curr.content || curr.content.trim() === ''
+      const nextIsToolOutput =
+        next &&
+        next.role === 'tool' &&
+        next.content &&
+        (!next.tool_calls || next.tool_calls.length === 0)
+
+      if (currHasCalls && currNoContent && nextIsToolOutput) {
+        result.push({ turn: curr, pairedOutput: next.content })
+        skipIndices.add(i + 1)
+        continue
+      }
+
+      result.push({ turn: curr })
+    }
+    return result
+  }, [turns])
+
+  return (
+    <>
+      {processed.map((item, idx) => (
+        <TranscriptTurnRow
+          key={idx}
+          turn={item.turn}
+          agentId={agentId}
+          formatTime={formatTime}
+          pairedOutput={item.pairedOutput}
+        />
+      ))}
+    </>
   )
 }

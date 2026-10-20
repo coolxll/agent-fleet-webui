@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "aliases": {
+    "work": "alice@example.com",
+    "backup": "bob@example.com"
+  },
+  "policy": {"name": "sticky", "min_remaining_pct": 10}
+}

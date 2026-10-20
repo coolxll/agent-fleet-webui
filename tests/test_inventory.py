@@ -131,4 +131,61 @@ def test_inventory_directory_discovery(tmp_path):
     assert [h.name for h in hosts] == ["one"]
 
 
+def test_declared_controller_becomes_local_and_prunes_phantom(fleet_db):
+    """When a host is declared with role=controller, it becomes local transport and prunes dummy local-controller."""
+    from agent_fleet import models
+    from agent_fleet.inventory.loader import DiscoveredHost
+    from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
+    import agent_fleet.services.inventory_sync as mod
+
+    settings = fleet_db
+    # First simulate an existing phantom local-controller
+    with session_scope() as s:
+        dummy = models.Host(
+            id=models.new_id(),
+            name="local-controller",
+            inventory_source="local",
+            group="controller",
+        )
+        s.add(dummy)
+        s.flush()
+        rt = models.Runtime(
+            id=models.new_id(),
+            host_id=dummy.id,
+            key="native",
+            kind="unknown",
+            transport="local",
+        )
+        s.add(rt)
+        s.commit()
+
+    # Discovered inventory has macbook-air tagged role: controller
+    orig = mod.load_all
+    try:
+        mod.load_all = lambda s: [
+            DiscoveredHost(
+                name="macbook-air",
+                tags={"role": "controller"},
+                source="project-yaml",
+            )
+        ]
+        controller_name = add_local_runtime(settings)
+        assert controller_name == "macbook-air"
+        result = sync_inventory(settings)
+        assert result["hosts_seen"] == 1
+    finally:
+        mod.load_all = orig
+
+    with session_scope() as s:
+        all_hosts = s.execute(select(models.Host)).scalars().all()
+        host_names = {h.name for h in all_hosts}
+        assert "macbook-air" in host_names
+        assert "local-controller" not in host_names, "phantom local-controller must be pruned"
+
+        mac = s.execute(select(models.Host).where(models.Host.name == "macbook-air")).scalar_one()
+        mac_rt = s.execute(select(models.Runtime).where(models.Runtime.host_id == mac.id)).scalar_one()
+        assert mac_rt.transport == "local"
+
+
 from pathlib import Path  # noqa: E402
+

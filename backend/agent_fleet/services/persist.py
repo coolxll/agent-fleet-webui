@@ -130,6 +130,7 @@ def persist_result(runtime_id, result: RuntimeScanResult, run_id, settings) -> d
                     "install_method": det.install_method,
                     "config_status": ar.config.parse_status,
                     "config": ar.config.sanitized or {},
+                    "quota": ar.config.quota,
                 }
             )
 
@@ -184,6 +185,7 @@ def _store_config(s, inst, cfg, now):
         mcp_servers=cfg.mcp_servers,
         skills=cfg.skills,
         settings=cfg.settings,
+        quota=cfg.quota,
         unsupported_fields=cfg.unsupported_fields,
         sanitized=cfg.sanitized,
         warnings=cfg.warnings,

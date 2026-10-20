@@ -13,6 +13,8 @@ CLI_MCP = "~/.gemini/antigravity-cli/mcp_config.json"
 OLD_MCP = "~/.gemini/antigravity/mcp_config.json"
 SHARED_MCP = "~/.gemini/config/mcp_config.json"
 STATE = "~/.gemini/antigravity/antigravity_state.pbtxt"
+AGY_SWAP_ACCOUNTS = "~/.gemini/agy-swap/accounts.json"
+AGY_SWAP_CONFIG = "~/.gemini/agy-swap/config.json"
 
 
 def _agy_facts(
@@ -24,6 +26,8 @@ def _agy_facts(
     with_binary=True,
     version="1.4.2",
     cli_dir=True,
+    agy_swap_accounts=None,
+    agy_swap_config=None,
 ):
     """Facts for the current (1.4.2+) layout by default.
 
@@ -36,6 +40,10 @@ def _agy_facts(
         STATE: ("ok", state if state is not None else fixture_text("agy", "state.pbtxt")),
         OLD_MCP: ("ok", mcp if mcp is not None else fixture_text("agy", "mcp_config.json")),
     }
+    if agy_swap_accounts is not None:
+        files[AGY_SWAP_ACCOUNTS] = ("ok", agy_swap_accounts)
+    if agy_swap_config is not None:
+        files[AGY_SWAP_CONFIG] = ("ok", agy_swap_config)
     if cli_dir:
         if cli_settings is not False:
             files[CLI_SETTINGS] = (
@@ -205,6 +213,86 @@ def test_agy_never_probed_is_unknown():
     facts = make_facts(files={"~/.gemini/antigravity/mcp_config.json": ("ok", "{}")})
     res = get_adapter("agy").run(facts)
     assert res.detection.status == "unknown"
+
+
+def test_agy_swap_quota_is_parsed_and_credentials_are_dropped():
+    facts = _agy_facts(
+        agy_swap_accounts=fixture_text("agy", "agy_swap_accounts.json"),
+        agy_swap_config=fixture_text("agy", "agy_swap_config.json"),
+    )
+    res = get_adapter("agy").run(facts)
+    quota = res.config.quota
+
+    assert quota["source"] == "agy-swap"
+    assert quota["path"] == AGY_SWAP_ACCOUNTS
+    assert quota["observed_at"] == "2026-10-20T06:33:02.980606Z"
+    assert [a["email"] for a in quota["accounts"]] == [
+        "alice@example.com",
+        "bob@example.com",
+    ]
+
+    alice = quota["accounts"][0]
+    assert alice["name"] == "Alice Example"
+    assert alice["aliases"] == ["work"]
+    assert alice["tier"]["name"] == "Google AI Pro"
+    assert alice["min_remaining_fraction"] == 0.5
+    assert [g["id"] for g in alice["groups"]] == ["gemini", "third_party"]
+    assert alice["groups"][1]["buckets"][1]["window"] == "5h"
+    assert alice["groups"][1]["buckets"][1]["reset_at"] == "2026-10-20T11:33:02Z"
+
+    bob = quota["accounts"][1]
+    assert bob["aliases"] == ["backup"]
+    assert bob["min_remaining_fraction"] == 0.01
+
+    blob = json.dumps(res.config.sanitized) + json.dumps(quota)
+    assert "fixture-access-token-must-not-leak" not in blob
+    assert "fixture-token-hash-must-not-leak" not in blob
+    assert "secret_ref" not in blob
+    assert "token_hash" not in blob
+    assert "token_data" not in blob
+
+
+def test_agy_swap_quota_absent_is_none():
+    res = get_adapter("agy").run(_agy_facts())
+    assert res.config.quota is None
+
+
+def test_agy_swap_quota_malformed_does_not_break_config():
+    facts = _agy_facts(
+        agy_swap_accounts="{ this is not json",
+        agy_swap_config="{ broken",
+    )
+    res = get_adapter("agy").run(facts)
+    assert res.config.quota is None
+    # The regular Antigravity config is still parsed.
+    assert res.config.parse_status == "parsed"
+    assert any(AGY_SWAP_ACCOUNTS in w for w in res.config.warnings)
+
+
+def test_agy_swap_quota_ignores_invalid_buckets():
+    data = json.dumps(
+        {
+            "a@example.com": {
+                "email": "a@example.com",
+                "quota_snapshot": {
+                    "groups": [
+                        {
+                            "id": "gemini",
+                            "buckets": [
+                                {"window": "daily", "remaining_fraction": 1, "reset_at": "x"},
+                                {"window": "5h", "remaining_fraction": "nope", "reset_at": "x"},
+                                {"window": "5h", "remaining_fraction": 0.4, "reset_at": ""},
+                            ],
+                        }
+                    ]
+                },
+            }
+        }
+    )
+    res = get_adapter("agy").run(_agy_facts(agy_swap_accounts=data))
+    account = res.config.quota["accounts"][0]
+    assert account["groups"] == []
+    assert "min_remaining_fraction" not in account
 
 
 # ---------------------------------------------------------------------------

@@ -68,8 +68,8 @@ automated test or the evidence in `progress.md`.
 
 | ID | Requirement | Acceptance criteria | Verified by |
 | --- | --- | --- | --- |
-| INV-1 | Load Ansible YAML and INI inventories, OpenSSH client config and a project YAML. | All four formats parse; a host appearing in several sources is stored once, later sources only fill gaps per field. | `tests/test_inventory.py` |
-| INV-2 | The project YAML adds what SSH config cannot express. | Runtime kind hint, WSL distro list, tags and disabled state are applied. | `tests/test_inventory.py` |
+| INV-1 | Load Ansible YAML/INI inventories and the project YAML. `~/.ssh/config` is not auto-imported. | All three formats parse; a host appearing in several sources is stored once, later sources only fill gaps per field. An SSH alias alone never creates a host. | `tests/test_inventory.py` |
+| INV-2 | The project YAML declares runtime kind hints, WSL distro lists, tags and disabled state. | These fields are applied before the first probe; a probe observation still wins for runtime kind. | `tests/test_inventory.py` |
 | INV-3 | Inventory sync is idempotent and non-destructive. | Re-running sync updates existing hosts/runtimes instead of duplicating them; removed hosts are not deleted. | `tests/test_inventory.py`, manual runs |
 | INV-4 | The controller itself is a runtime without SSH. | With `AGENT_FLEET_INCLUDE_LOCAL_RUNTIME=true`, the local machine is probed through a local shell. | manual (`progress.md`) |
 

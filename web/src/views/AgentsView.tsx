@@ -211,6 +211,7 @@ export default function AgentsView({
 
   const v = data?.version
 
+
   return (
     <div className="workbench-layout">
       {/* Left Sidebar: Agents List */}

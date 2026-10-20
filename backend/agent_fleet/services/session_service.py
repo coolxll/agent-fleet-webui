@@ -30,6 +30,10 @@ logger = logging.getLogger("agent_fleet.sessions")
 
 COLLECTOR_SCRIPT_PY = r'''
 import os, json, glob, sqlite3, sys, re
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+except Exception: pass
 
 def extract_git_repo_name(url):
     if not url: return ''
@@ -54,6 +58,123 @@ def get_git_repo_name_from_dir(d):
                         return name
         except Exception: pass
     return ''
+
+def is_generic_name(name):
+    if not name: return True
+    n = str(name).strip().lower()
+    return n in ('workspace', 'codex-workspace', 'codebuddy-workspace', 'default', 'projects', 'scratch')
+
+def is_generic_path(p):
+    if not p: return True
+    norm = os.path.normpath(str(p)).rstrip('/\\')
+    base = os.path.basename(norm).lower()
+    if base in ('workspace', 'projects', 'scratch', 'documents', 'desktop', 'downloads', 'home', ''):
+        return True
+    parts = [x for x in norm.split(os.sep) if x]
+    if len(parts) <= 2:
+        return True
+    return False
+
+def extract_project_from_slug(slug):
+    if not slug: return ''
+    clean = str(slug).strip('-')
+    patterns = [
+        r'^(?:Users|home)-[^-]+-workspace-(?:projects|scratch|references)-',
+        r'^(?:Users|home)-[^-]+-(?:projects|scratch|references)-',
+        r'^(?:Users|home)-[^-]+-workspace-',
+        r'^(?:Users|home)-[^-]+-',
+        r'^(?:workspace|repos|repositories)-(?:projects|scratch|references)-',
+        r'^(?:workspace|repos|repositories)-',
+        r'^(?:projects|scratch|references)-',
+    ]
+    candidate = clean
+    for pat in patterns:
+        m = re.sub(pat, '', candidate)
+        if m and m != candidate:
+            candidate = m
+            break
+    candidate = re.sub(r'^(?:projects|scratch|references)-', '', candidate)
+    return candidate or clean
+
+def detect_codex_project_from_rollout(file_p, base_cwd):
+    if not file_p: return '', ''
+    target = file_p
+    if not os.path.isfile(target):
+        if os.path.isfile(target + '.zst'):
+            target = target + '.zst'
+    if not os.path.isfile(target):
+        return '', ''
+
+    lines = []
+    if target.endswith('.zst'):
+        try:
+            import subprocess
+            proc = subprocess.Popen(['zstd', '-dc', target], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            for _ in range(80):
+                l = proc.stdout.readline().decode('utf-8', 'ignore')
+                if not l: break
+                lines.append(l)
+            proc.terminate()
+        except Exception: pass
+    else:
+        try:
+            with open(target, 'r', encoding='utf-8', errors='ignore') as rf:
+                for _ in range(80):
+                    l = rf.readline()
+                    if not l: break
+                    lines.append(l)
+        except Exception: pass
+
+    for l in lines:
+        try:
+            rm = json.loads(l)
+            pld = rm.get('payload', {}) if isinstance(rm.get('payload'), dict) else rm
+            rgit = pld.get('gitOriginUrl') or pld.get('git_origin_url') or rm.get('gitOriginUrl') or rm.get('git_origin_url')
+            if rgit:
+                g = extract_git_repo_name(rgit)
+                if g and not is_generic_name(g):
+                    return g, (base_cwd or '')
+            rcwd = pld.get('cwd') or pld.get('workingDirectory') or rm.get('cwd')
+            if rcwd and not is_generic_path(rcwd):
+                g = extract_git_repo_name(get_git_repo_name_from_dir(rcwd)) or os.path.basename(os.path.normpath(rcwd))
+                if g and not is_generic_name(g):
+                    return g, rcwd
+            if isinstance(pld, dict) and pld.get('cwd') and not is_generic_path(pld.get('cwd')):
+                tc_cwd = pld.get('cwd')
+                g = extract_git_repo_name(get_git_repo_name_from_dir(tc_cwd)) or os.path.basename(os.path.normpath(tc_cwd))
+                if g and not is_generic_name(g):
+                    return g, tc_cwd
+            text_to_search = ''
+            if pld.get('type') in ('function_call', 'custom_tool_call'):
+                text_to_search += str(pld.get('arguments') or '') + ' ' + str(pld.get('input') or '')
+            m_paths = re.findall(r'(?:Add File|Update File|\*\*\* File|workdir[\"\']?\s*:\s*[\"\'])\s*:?\s*([^\s,\"\']+)', text_to_search)
+            for cand_path in m_paths:
+                if not is_generic_path(cand_path):
+                    cand_dir = cand_path if os.path.isdir(cand_path) else os.path.dirname(cand_path)
+                    while cand_dir and not is_generic_path(cand_dir):
+                        g = extract_git_repo_name(get_git_repo_name_from_dir(cand_dir))
+                        if g: return g, cand_dir
+                        base_b = os.path.basename(os.path.normpath(cand_dir))
+                        if not is_generic_name(base_b):
+                            return base_b, cand_dir
+                        cand_dir = os.path.dirname(cand_dir)
+
+            m_cmds = re.findall(r'(?:mkdir\s+(?:-p\s+)?|cd\s+[\'\"`]?)([\w\-\.]+)', text_to_search)
+            for sub in m_cmds:
+                if not is_generic_name(sub) and not sub.startswith('-'):
+                    sub_full = os.path.join(base_cwd, sub) if base_cwd else sub
+                    g = extract_git_repo_name(get_git_repo_name_from_dir(sub_full))
+                    return g or sub, (sub_full if os.path.exists(sub_full) else (base_cwd or ''))
+
+            m_ws = re.findall(r'/(?:workspace|projects|scratch)/([\w\-\.]+)', text_to_search)
+            for sub in m_ws:
+                if not is_generic_name(sub) and not sub.startswith('-'):
+                    sub_full = os.path.join(base_cwd, sub) if base_cwd else sub
+                    g = extract_git_repo_name(get_git_repo_name_from_dir(sub_full))
+                    return g or sub, (sub_full if os.path.exists(sub_full) else (base_cwd or ''))
+        except Exception: pass
+
+    return '', ''
 
 def resolve_slug(slug):
     parts = [p for p in slug.split('-') if p]
@@ -179,32 +300,60 @@ def collect_all():
             has_projects = bool(cur.fetchone())
 
             if has_projects:
+                project_map = {}
+                try:
+                    cur.execute("SELECT p.id, p.name, pr.path FROM projects p LEFT JOIN project_roots pr ON p.id = pr.project_id")
+                    for pid, pname, prpath in cur.fetchall():
+                        if pid not in project_map:
+                            project_map[pid] = {'name': pname or '', 'paths': []}
+                        if prpath and prpath not in project_map[pid]['paths']:
+                            project_map[pid]['paths'].append(prpath)
+                except Exception: pass
+
                 cur.execute("""
-                    SELECT t.id, t.cwd, t.title, t.rollout_path, t.git_origin_url, t.updated_at, t.updated_at_ms, t.first_user_message, t.is_pinned, p.name, pr.path
+                    SELECT t.id, t.cwd, t.title, t.rollout_path, t.git_origin_url, t.updated_at, t.updated_at_ms, t.first_user_message, t.is_pinned, t.project_id
                     FROM threads t
-                    LEFT JOIN projects p ON t.project_id = p.id
-                    LEFT JOIN project_roots pr ON t.project_id = pr.project_id
                 """)
                 for row in cur.fetchall():
-                    sid, cwd, title, rollout_path, git_url, updated_at, updated_at_ms, first_msg, is_pinned, p_name, pr_path = row
+                    sid, cwd, title, rollout_path, git_url, updated_at, updated_at_ms, first_msg, is_pinned, project_id = row
                     if not sid: continue
 
                     proj_name = extract_git_repo_name(git_url)
-                    if not proj_name and p_name:
-                        proj_name = p_name
-                    if not proj_name and pr_path:
-                        proj_name = get_git_repo_name_from_dir(pr_path) or os.path.basename(os.path.normpath(pr_path))
+                    effective_path = cwd or ''
+                    if not proj_name and project_id in project_map:
+                        p_info = project_map[project_id]
+                        if p_info['name'] and not is_generic_name(p_info['name']):
+                            proj_name = p_info['name']
+                        if not proj_name and p_info['paths']:
+                            for pr_path in p_info['paths']:
+                                n = extract_git_repo_name(get_git_repo_name_from_dir(pr_path)) or os.path.basename(os.path.normpath(pr_path))
+                                if n and not is_generic_name(n):
+                                    proj_name = n
+                                    effective_path = pr_path
+                                    break
                     if not proj_name and cwd:
-                        proj_name = get_git_repo_name_from_dir(cwd) or os.path.basename(os.path.normpath(cwd))
-                    if not proj_name:
-                        proj_name = 'workspace'
+                        proj_name = extract_git_repo_name(get_git_repo_name_from_dir(cwd))
+                        if not proj_name and not is_generic_path(cwd):
+                            proj_name = os.path.basename(os.path.normpath(cwd))
 
-                    effective_path = pr_path or cwd or ''
-                    ts = updated_at_ms if updated_at_ms else updated_at
                     file_p = rollout_path or ''
                     if file_p and not os.path.isfile(file_p) and os.path.isfile(file_p + '.zst'):
                         file_p = file_p + '.zst'
 
+                    if is_generic_name(proj_name) or is_generic_path(effective_path):
+                        d_name, d_path = detect_codex_project_from_rollout(file_p, effective_path)
+                        if d_name and not is_generic_name(d_name):
+                            proj_name = d_name
+                        if d_path and not is_generic_path(d_path):
+                            effective_path = d_path
+
+                    if not proj_name or is_generic_name(proj_name):
+                        if effective_path and not is_generic_path(effective_path):
+                            proj_name = os.path.basename(os.path.normpath(effective_path))
+                        else:
+                            proj_name = 'workspace'
+
+                    ts = updated_at_ms if updated_at_ms else updated_at
                     codex_sessions[sid] = {
                         'session_key': sid,
                         'agent_id': 'codex',
@@ -226,21 +375,35 @@ def collect_all():
                     if not sid: continue
 
                     proj_name = extract_git_repo_name(git_url)
+                    effective_path = cwd or ''
                     if not proj_name and cwd:
-                        proj_name = get_git_repo_name_from_dir(cwd) or os.path.basename(os.path.normpath(cwd))
-                    if not proj_name:
-                        proj_name = 'workspace'
+                        proj_name = extract_git_repo_name(get_git_repo_name_from_dir(cwd))
+                        if not proj_name and not is_generic_path(cwd):
+                            proj_name = os.path.basename(os.path.normpath(cwd))
 
-                    ts = updated_at_ms if updated_at_ms else updated_at
                     file_p = rollout_path or ''
                     if file_p and not os.path.isfile(file_p) and os.path.isfile(file_p + '.zst'):
                         file_p = file_p + '.zst'
 
+                    if is_generic_name(proj_name) or is_generic_path(effective_path):
+                        d_name, d_path = detect_codex_project_from_rollout(file_p, effective_path)
+                        if d_name and not is_generic_name(d_name):
+                            proj_name = d_name
+                        if d_path and not is_generic_path(d_path):
+                            effective_path = d_path
+
+                    if not proj_name or is_generic_name(proj_name):
+                        if effective_path and not is_generic_path(effective_path):
+                            proj_name = os.path.basename(os.path.normpath(effective_path))
+                        else:
+                            proj_name = 'workspace'
+
+                    ts = updated_at_ms if updated_at_ms else updated_at
                     codex_sessions[sid] = {
                         'session_key': sid,
                         'agent_id': 'codex',
                         'title': (title or first_msg or f"Codex Thread {sid[:8]}")[:150],
-                        'project_path': cwd or '',
+                        'project_path': effective_path,
                         'project_name': proj_name,
                         'file_path': file_p,
                         'updated_at': ts,
@@ -294,42 +457,29 @@ def collect_all():
                     except Exception: pass
         except Exception: pass
 
-    # 2.4 Locate rollout file and derive project if missing
+    # 2.4 Locate rollout file and derive project if missing or generic
     for sid, sinfo in codex_sessions.items():
-        if not sinfo['file_path']:
+        if not sinfo['file_path'] or not os.path.isfile(sinfo['file_path']):
             candidates = glob.glob(os.path.join(home, '.codex', 'sessions', '**', f'*{sid}*'), recursive=True)
             if not candidates:
                 candidates = glob.glob(os.path.join(home, '.codex', 'archived_sessions', f'*{sid}*'))
             if candidates:
-                cand = candidates[0]
-                sinfo['file_path'] = cand
-                if sinfo['project_name'] in ('codex-workspace', 'workspace', 'default') or not sinfo['project_path']:
-                    first_line = ''
-                    if cand.endswith('.zst'):
-                        try:
-                            import subprocess
-                            proc = subprocess.Popen(['zstd', '-dc', cand], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                            first_line = proc.stdout.readline().decode('utf-8', 'ignore')
-                            proc.terminate()
-                        except Exception: pass
-                    elif os.path.isfile(cand):
-                        try:
-                            with open(cand, 'r', encoding='utf-8', errors='ignore') as rf:
-                                first_line = rf.readline()
-                        except Exception: pass
-                    if first_line:
-                        try:
-                            rm = json.loads(first_line)
-                            pld = rm.get('payload', {}) if isinstance(rm.get('payload'), dict) else rm
-                            rcwd = pld.get('cwd') or pld.get('workingDirectory') or rm.get('cwd') or ''
-                            if rcwd:
-                                sinfo['project_path'] = rcwd
-                                pname = extract_git_repo_name(pld.get('gitOriginUrl') or pld.get('git_origin_url'))
-                                if not pname:
-                                    pname = get_git_repo_name_from_dir(rcwd) or os.path.basename(os.path.normpath(rcwd))
-                                if pname:
-                                    sinfo['project_name'] = pname
-                        except Exception: pass
+                sinfo['file_path'] = candidates[0]
+
+        if is_generic_name(sinfo['project_name']) or is_generic_path(sinfo['project_path']):
+            file_p = sinfo.get('file_path')
+            if file_p and os.path.isfile(file_p):
+                d_name, d_path = detect_codex_project_from_rollout(file_p, sinfo.get('project_path') or '')
+                if d_name and not is_generic_name(d_name):
+                    sinfo['project_name'] = d_name
+                if d_path and not is_generic_path(d_path):
+                    sinfo['project_path'] = d_path
+
+        if sinfo['project_name'] in ('codex-workspace', 'default', '') or is_generic_name(sinfo['project_name']):
+            if sinfo['project_path'] and not is_generic_path(sinfo['project_path']):
+                sinfo['project_name'] = os.path.basename(os.path.normpath(sinfo['project_path']))
+            else:
+                sinfo['project_name'] = 'workspace'
 
     sessions.extend(codex_sessions.values())
 
@@ -374,15 +524,33 @@ def collect_all():
         try:
             conn = sqlite3.connect(opencode_db, timeout=2.0)
             cur = conn.cursor()
-            cur.execute('SELECT s.id, s.title, s.directory, s.time_updated, s.tokens_input + s.tokens_output, count(m.id) FROM session s LEFT JOIN message m ON s.id=m.session_id GROUP BY s.id ORDER BY s.time_updated DESC LIMIT 150')
+            cur.execute("""
+                SELECT s.id, s.title, s.directory, s.time_updated, s.tokens_input + s.tokens_output, count(m.id), p.name, p.worktree
+                FROM session s
+                LEFT JOIN message m ON s.id=m.session_id
+                LEFT JOIN project p ON s.project_id=p.id
+                GROUP BY s.id
+                ORDER BY s.time_updated DESC
+                LIMIT 150
+            """)
             for row in cur.fetchall():
-                sid, title, directory, time_updated, tokens, msg_cnt = row
-                pname = extract_git_repo_name(get_git_repo_name_from_dir(directory)) or (os.path.basename(directory or '') if directory else 'default')
+                sid, title, directory, time_updated, tokens, msg_cnt, p_name, p_worktree = row
+                effective_dir = directory or p_worktree or ''
+                pname = extract_git_repo_name(get_git_repo_name_from_dir(effective_dir))
+                if not pname and p_name and not is_generic_name(p_name):
+                    pname = p_name
+                if not pname and p_worktree and not is_generic_path(p_worktree):
+                    pname = extract_git_repo_name(get_git_repo_name_from_dir(p_worktree)) or os.path.basename(os.path.normpath(p_worktree))
+                if not pname and effective_dir and not is_generic_path(effective_dir):
+                    pname = os.path.basename(os.path.normpath(effective_dir))
+                if not pname or is_generic_name(pname):
+                    pname = 'workspace'
+
                 sessions.append({
                     'session_key': sid,
                     'agent_id': 'opencode',
                     'title': (title or f"OpenCode Session {sid[:8]}")[:150],
-                    'project_path': directory or '',
+                    'project_path': effective_dir,
                     'project_name': pname,
                     'file_path': opencode_db,
                     'updated_at': time_updated,
@@ -406,9 +574,11 @@ def collect_all():
 
                 clean_folder = folder_name.strip('-')
                 proj_path = '/' + clean_folder.replace('-', '/')
-                proj_name = extract_git_repo_name(get_git_repo_name_from_dir(proj_path)) or clean_folder.split('-')[-1]
-                if not proj_name:
-                    proj_name = 'pi-workspace'
+                proj_name = extract_git_repo_name(get_git_repo_name_from_dir(proj_path))
+                if not proj_name or is_generic_name(proj_name):
+                    proj_name = extract_project_from_slug(folder_name)
+                if not proj_name or is_generic_name(proj_name):
+                    proj_name = 'workspace'
 
                 title = ''
                 count = 0
@@ -539,18 +709,22 @@ def collect_all():
                 proj_name = ''
 
                 if cwd:
-                    proj_name = extract_git_repo_name(get_git_repo_name_from_dir(cwd)) or os.path.basename(os.path.normpath(cwd))
+                    proj_name = extract_git_repo_name(get_git_repo_name_from_dir(cwd))
+                    if not proj_name and not is_generic_path(cwd):
+                        proj_name = os.path.basename(os.path.normpath(cwd))
 
                 if not proj_name and folder_name:
                     rec_path = resolve_slug(folder_name)
                     if os.path.exists(rec_path):
                         proj_path = rec_path
-                        proj_name = extract_git_repo_name(get_git_repo_name_from_dir(rec_path)) or os.path.basename(rec_path)
-                    else:
-                        clean = folder_name.strip('-')
-                        proj_name = clean.split('-')[-1]
+                        proj_name = extract_git_repo_name(get_git_repo_name_from_dir(rec_path))
+                        if not proj_name and not is_generic_path(rec_path):
+                            proj_name = os.path.basename(os.path.normpath(rec_path))
 
-                if not proj_name:
+                    if not proj_name or is_generic_name(proj_name):
+                        proj_name = extract_project_from_slug(folder_name)
+
+                if not proj_name or is_generic_name(proj_name):
                     proj_name = 'workspace'
 
                 sessions.append({
@@ -609,16 +783,19 @@ def collect_all():
 
                 pname = ''
                 if cwd:
-                    pname = extract_git_repo_name(get_git_repo_name_from_dir(cwd)) or os.path.basename(os.path.normpath(cwd))
+                    pname = extract_git_repo_name(get_git_repo_name_from_dir(cwd))
+                    if not pname and not is_generic_path(cwd):
+                        pname = os.path.basename(os.path.normpath(cwd))
                 if not pname and folder_name:
                     rec_path = resolve_slug(folder_name.strip('-'))
                     if os.path.exists(rec_path):
                         cwd = rec_path
-                        pname = extract_git_repo_name(get_git_repo_name_from_dir(rec_path)) or os.path.basename(rec_path)
-                    else:
-                        clean = folder_name.strip('-')
-                        pname = clean.split('-')[-1]
-                if not pname:
+                        pname = extract_git_repo_name(get_git_repo_name_from_dir(rec_path))
+                        if not pname and not is_generic_path(rec_path):
+                            pname = os.path.basename(os.path.normpath(rec_path))
+                    if not pname or is_generic_name(pname):
+                        pname = extract_project_from_slug(folder_name)
+                if not pname or is_generic_name(pname):
                     pname = 'workspace'
 
                 sessions.append({
@@ -633,7 +810,7 @@ def collect_all():
                 })
         except Exception: pass
 
-    print("___SESSIONS_JSON___" + json.dumps(sessions))
+    print("___SESSIONS_JSON___" + json.dumps(sessions, ensure_ascii=False))
 
 if __name__ == '__main__':
     collect_all()
@@ -690,12 +867,15 @@ if (Test-Path $codexIdx) {
             $obj = $_ | ConvertFrom-Json
             if ($obj.id) {
                 $sid = $obj.id
+                $projPath = if ($obj.cwd) { $obj.cwd } else { "" }
+                $projName = if ($projPath) { Split-Path $projPath -Leaf } else { "workspace" }
+                if ($projName -eq "codex-workspace" -or -not $projName) { $projName = "workspace" }
                 $codexMap[$sid] = @{
                     session_key = $sid
                     agent_id = "codex"
                     title = $obj.thread_name
-                    project_path = ""
-                    project_name = "codex-workspace"
+                    project_path = $projPath
+                    project_name = $projName
                     file_path = ""
                     updated_at = $obj.updated_at
                     message_count = 1
@@ -748,58 +928,12 @@ def clean_transcript_text(text: str) -> str:
     """Strip XML wrappers and internal agent artifacts into clean human-readable conversation text."""
     if not text:
         return ""
-    t = str(text)
-
-    # 1. Antigravity / AGY wrappers
-    m_req = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", t, re.DOTALL)
-    if m_req:
-        t = m_req.group(1).strip()
-    else:
-        t = re.sub(r"</?USER_REQUEST>\s*", "", t)
-
-    t = re.sub(r"<ADDITIONAL_METADATA>.*?</ADDITIONAL_METADATA>\s*", "", t, flags=re.DOTALL)
-    t = re.sub(r"<context_summary>.*?</context_summary>\s*", "", t, flags=re.DOTALL)
-    t = re.sub(r"<system-reminder.*?>.*?</system-reminder>\s*", "", t, flags=re.DOTALL)
-    t = re.sub(r"<collaboration_mode>.*?</collaboration_mode>\s*", "", t, flags=re.DOTALL)
-    t = re.sub(r"<environment_context>.*?</environment_context>\s*", "", t, flags=re.DOTALL)
-    t = re.sub(r"<permissions instructions>.*?</permissions instructions>\s*", "", t, flags=re.DOTALL)
-    t = re.sub(r"<skills_instructions>.*?</skills_instructions>\s*", "", t, flags=re.DOTALL)
-    t = re.sub(r"<multi_agent_mode>.*?</multi_agent_mode>\s*", "", t, flags=re.DOTALL)
-
-    # 2. Pi thought tags inside content
-    t = re.sub(r"<thought>.*?</thought>\s*", "", t, flags=re.DOTALL)
-
-    # 3. Qoder & CodeBuddy command tags
-    m_cmd = re.search(r"<command-name>\s*(.*?)\s*</command-name>", t)
-    if m_cmd:
-        cmd = m_cmd.group(1).strip()
-        msg = ""
-        m_msg = re.search(r"<command-message>\s*(.*?)\s*</command-message>", t)
-        if m_msg:
-            msg = m_msg.group(1).strip()
-        t = f"⚡ Command: {cmd}" + (f" ({msg})" if msg and msg != cmd else "")
-    t = re.sub(r"<command-args>.*?</command-args>\s*", "", t, flags=re.DOTALL)
-    t = re.sub(r"<command-message>.*?</command-message>\s*", "", t, flags=re.DOTALL)
-
-    m_out = re.search(r"<local-command-stdout>\s*(.*?)\s*</local-command-stdout>", t, re.DOTALL)
-    if m_out:
-        t = m_out.group(1).strip()
-
-    m_err = re.search(r"<local-command-stderr>\s*(.*?)\s*</local-command-stderr>", t, re.DOTALL)
-    if m_err:
-        t = m_err.group(1).strip()
-
-    # 4. Hermes model switch and untrusted tool result
-    t = re.sub(r"\[Note:\s*model was just switched from.*?\]\s*", "", t, flags=re.DOTALL)
-    m_untrusted = re.search(
-        r'<untrusted_tool_result\s+source="[^"]*">\s*(?:The following content was retrieved[^\n]*\n+)?(.*?)\s*</untrusted_tool_result>',
-        t,
-        re.DOTALL,
+    from agent_fleet.services.xml_deconstruct import (
+        extract_thinking_from_text,
+        strip_agent_harness_wrappers,
     )
-    if m_untrusted:
-        t = m_untrusted.group(1).strip()
-
-    return t.strip()
+    t, _ = extract_thinking_from_text(str(text))
+    return strip_agent_harness_wrappers(t)
 
 
 # --------------------------------------------------------------------------
@@ -1173,6 +1307,305 @@ def generate_resume_command(
     if transport == "local" or host_name in ("macbook-air", "local-controller", "localhost"):
         return cmd
     return f'ssh -t {host_name} "{cmd}"'
+
+
+def extract_git_repo_name(url: str | None) -> str:
+    """Extract clean git repository name from remote URL."""
+    if not url:
+        return ""
+    m = re.search(r"[:/]([^/:]+?)(?:\.git)?$", str(url).strip())
+    if m:
+        name = m.group(1).strip()
+        if name and name not in (".", "..", "/"):
+            return name
+    return ""
+
+
+def get_git_repo_name_from_dir(d: str | None) -> str:
+    """Read git origin URL from directory's .git/config and extract repo name."""
+    if not d or not os.path.isdir(d):
+        return ""
+    cfg = os.path.join(d, ".git", "config")
+    if os.path.isfile(cfg):
+        try:
+            with open(cfg, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+                m = re.search(r"url\s*=\s*.*[:/]([^/:]+?)(?:\.git)?$", content, re.M)
+                if m:
+                    name = m.group(1).strip()
+                    if name and name not in (".", "..", "/"):
+                        return name
+        except Exception:
+            pass
+    return ""
+
+
+def is_generic_name(name: str | None) -> bool:
+    """Check if project name is a generic placeholder."""
+    if not name:
+        return True
+    n = str(name).strip().lower()
+    return n in (
+        "workspace",
+        "codex-workspace",
+        "codebuddy-workspace",
+        "default",
+        "projects",
+        "scratch",
+    )
+
+
+def is_generic_path(p: str | None) -> bool:
+    """Check if path is a generic root or workspace folder."""
+    if not p:
+        return True
+    norm = os.path.normpath(str(p)).rstrip("/\\")
+    base = os.path.basename(norm).lower()
+    if base in (
+        "workspace",
+        "projects",
+        "scratch",
+        "documents",
+        "desktop",
+        "downloads",
+        "home",
+        "",
+    ):
+        return True
+    parts = [x for x in norm.split(os.sep) if x]
+    if len(parts) <= 2:
+        return True
+    return False
+
+
+def extract_project_from_slug(slug: str | None) -> str:
+    """Extract clean project repo slug from hierarchical or hyphenated folder names."""
+    if not slug:
+        return ""
+    clean = str(slug).strip("-")
+    patterns = [
+        r"^(?:Users|home)-[^-]+-workspace-(?:projects|scratch|references)-",
+        r"^(?:Users|home)-[^-]+-(?:projects|scratch|references)-",
+        r"^(?:Users|home)-[^-]+-workspace-",
+        r"^(?:Users|home)-[^-]+-",
+        r"^(?:workspace|repos|repositories)-(?:projects|scratch|references)-",
+        r"^(?:workspace|repos|repositories)-",
+        r"^(?:projects|scratch|references)-",
+    ]
+    candidate = clean
+    for pat in patterns:
+        m = re.sub(pat, "", candidate)
+        if m and m != candidate:
+            candidate = m
+            break
+    candidate = re.sub(r"^(?:projects|scratch|references)-", "", candidate)
+    return candidate or clean
+
+
+def detect_codex_project_from_rollout(
+    file_p: str | None, base_cwd: str = ""
+) -> tuple[str, str]:
+    """Inspect rollout file for payload.cwd, payload.gitOriginUrl, or subfolders."""
+    if not file_p:
+        return "", ""
+    target = file_p
+    if not os.path.isfile(target):
+        if os.path.isfile(target + ".zst"):
+            target = target + ".zst"
+    if not os.path.isfile(target):
+        return "", ""
+
+    lines: list[str] = []
+    if target.endswith(".zst"):
+        try:
+            import subprocess
+
+            proc = subprocess.Popen(
+                ["zstd", "-dc", target],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            for _ in range(80):
+                l = proc.stdout.readline().decode("utf-8", "ignore")
+                if not l:
+                    break
+                lines.append(l)
+            proc.terminate()
+        except Exception:
+            pass
+    else:
+        try:
+            with open(target, "r", encoding="utf-8", errors="ignore") as rf:
+                for _ in range(80):
+                    l = rf.readline()
+                    if not l:
+                        break
+                    lines.append(l)
+        except Exception:
+            pass
+
+    for l in lines:
+        try:
+            rm = json.loads(l)
+            pld = rm.get("payload", {}) if isinstance(rm.get("payload"), dict) else rm
+            rgit = (
+                pld.get("gitOriginUrl")
+                or pld.get("git_origin_url")
+                or rm.get("gitOriginUrl")
+                or rm.get("git_origin_url")
+            )
+            if rgit:
+                g = extract_git_repo_name(rgit)
+                if g and not is_generic_name(g):
+                    return g, (base_cwd or "")
+            rcwd = pld.get("cwd") or pld.get("workingDirectory") or rm.get("cwd")
+            if rcwd and not is_generic_path(rcwd):
+                g = extract_git_repo_name(get_git_repo_name_from_dir(rcwd)) or os.path.basename(os.path.normpath(rcwd))
+                if g and not is_generic_name(g):
+                    return g, rcwd
+            if isinstance(pld, dict) and pld.get("cwd") and not is_generic_path(pld.get("cwd")):
+                tc_cwd = pld.get("cwd")
+                g = extract_git_repo_name(get_git_repo_name_from_dir(tc_cwd)) or os.path.basename(os.path.normpath(tc_cwd))
+                if g and not is_generic_name(g):
+                    return g, tc_cwd
+            text_to_search = ""
+            if pld.get("type") in ("function_call", "custom_tool_call"):
+                text_to_search += str(pld.get("arguments") or "") + " " + str(pld.get("input") or "")
+            m_paths = re.findall(
+                r'(?:Add File|Update File|\*\*\* File|workdir[\"\']?\s*:\s*[\"\'])\s*:?\s*([^\s,\"\']+)',
+                text_to_search,
+            )
+            for cand_path in m_paths:
+                if not is_generic_path(cand_path):
+                    cand_dir = cand_path if os.path.isdir(cand_path) else os.path.dirname(cand_path)
+                    while cand_dir and not is_generic_path(cand_dir):
+                        g = extract_git_repo_name(get_git_repo_name_from_dir(cand_dir))
+                        if g:
+                            return g, cand_dir
+                        base_b = os.path.basename(os.path.normpath(cand_dir))
+                        if not is_generic_name(base_b):
+                            return base_b, cand_dir
+                        cand_dir = os.path.dirname(cand_dir)
+
+            m_cmds = re.findall(
+                r'(?:mkdir\s+(?:-p\s+)?|cd\s+[\'\"`]?)([\w\-\.]+)', text_to_search
+            )
+            for sub in m_cmds:
+                if not is_generic_name(sub) and not sub.startswith("-"):
+                    sub_full = os.path.join(base_cwd, sub) if base_cwd else sub
+                    g = extract_git_repo_name(get_git_repo_name_from_dir(sub_full))
+                    return g or sub, (sub_full if os.path.exists(sub_full) else (base_cwd or ""))
+
+            m_ws = re.findall(
+                r"/(?:workspace|projects|scratch)/([\w\-\.]+)", text_to_search
+            )
+            for sub in m_ws:
+                if not is_generic_name(sub) and not sub.startswith("-"):
+                    sub_full = os.path.join(base_cwd, sub) if base_cwd else sub
+                    g = extract_git_repo_name(get_git_repo_name_from_dir(sub_full))
+                    return g or sub, (sub_full if os.path.exists(sub_full) else (base_cwd or ""))
+        except Exception:
+            pass
+
+    return "", ""
+
+
+def aggregate_opencode_parts(
+    rows: list[tuple[Any, ...]]
+) -> list[dict[str, Any]]:
+    """Group OpenCode message and part rows by message ID into structured conversation turns."""
+    msgs: dict[str, dict[str, Any]] = {}
+    msg_order: list[str] = []
+
+    for row in rows:
+        mid = row[0]
+        m_ts = row[1] if len(row) > 1 else None
+        mdata_str = row[2] if len(row) > 2 else None
+        pdata_str = row[3] if len(row) > 3 else None
+
+        if mid not in msgs:
+            msg_order.append(mid)
+            mdata: dict[str, Any] = {}
+            if mdata_str:
+                try:
+                    mdata = (
+                        json.loads(mdata_str)
+                        if isinstance(mdata_str, str)
+                        else mdata_str
+                    )
+                except Exception:
+                    pass
+            msgs[mid] = {
+                "role": mdata.get("role") or "user",
+                "ts": mdata.get("time", {}).get("created") or m_ts,
+                "content_parts": [],
+                "thinking_parts": [],
+                "tool_calls": [],
+            }
+
+        if pdata_str:
+            try:
+                pdata = (
+                    json.loads(pdata_str)
+                    if isinstance(pdata_str, str)
+                    else pdata_str
+                )
+                ptype = pdata.get("type")
+                if ptype == "text" and pdata.get("text"):
+                    msgs[mid]["content_parts"].append(pdata["text"])
+                elif ptype == "reasoning" and pdata.get("text"):
+                    msgs[mid]["thinking_parts"].append(pdata["text"])
+                elif ptype == "tool":
+                    state = pdata.get("state") or {}
+                    t_name = pdata.get("tool") or "tool"
+                    t_input = state.get("input") or {}
+                    t_out = state.get("output")
+                    call_dict: dict[str, Any] = {"name": t_name, "input": t_input}
+                    if pdata.get("callID"):
+                        call_dict["id"] = pdata.get("callID")
+                    if t_out is not None:
+                        call_dict["output"] = str(t_out)
+                    msgs[mid]["tool_calls"].append(call_dict)
+                elif ptype == "patch":
+                    call_dict = {
+                        "name": "patch",
+                        "input": {
+                            "hash": pdata.get("hash"),
+                            "files": pdata.get("files") or [],
+                        },
+                    }
+                    if pdata.get("diff"):
+                        call_dict["input"]["diff"] = pdata.get("diff")
+                    if pdata.get("files"):
+                        call_dict["input"]["path"] = pdata["files"][0]
+                    msgs[mid]["tool_calls"].append(call_dict)
+            except Exception:
+                pass
+
+    turns: list[dict[str, Any]] = []
+    for mid in msg_order:
+        m = msgs[mid]
+        role = m["role"]
+        content = "\n\n".join(c for c in m["content_parts"] if c).strip()
+        thinking = "\n\n".join(t for t in m["thinking_parts"] if t).strip()
+        tools = m["tool_calls"]
+        if role == "user":
+            if content:
+                turns.append(
+                    {"role": "user", "content": content, "timestamp": m["ts"]}
+                )
+        else:
+            if content or thinking or tools:
+                turns.append(
+                    {
+                        "role": "assistant",
+                        "content": content,
+                        "thinking": thinking or None,
+                        "tool_calls": tools or None,
+                        "timestamp": m["ts"],
+                    }
+                )
+    return turns
 
 
 # --------------------------------------------------------------------------
@@ -1719,7 +2152,11 @@ PY_EOF
 
     # 1. Hermes: query ~/.hermes/state.db directly via python
     if agent == "hermes":
-        script = f"""import sqlite3, json, os
+        script = f"""import sqlite3, json, os, sys
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+except Exception: pass
 p = os.path.expanduser('~/.hermes/state.db')
 if os.path.isfile(p):
     con = sqlite3.connect(p)
@@ -1748,7 +2185,7 @@ if os.path.isfile(p):
                             tc_norm.append({{'id': c.get('id'), 'name': t_name, 'input': args}})
             except Exception: pass
         res.append({{'role': role, 'content': content, 'thinking': thinking, 'tool_calls': tc_norm, 'timestamp': r[4]}})
-    print('___HERMES_JSON___' + json.dumps(res))
+    print('___HERMES_JSON___' + json.dumps(res, ensure_ascii=False))
 else:
     print('___HERMES_JSON___[]')
 """
@@ -1761,33 +2198,86 @@ else:
 
     # 2. OpenCode: query ~/.local/share/opencode/opencode.db directly
     elif agent == "opencode":
-        script = f"""import sqlite3, json, os
+        script = f"""import sqlite3, json, os, sys
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+except Exception: pass
+
 p = os.path.expanduser('~/.local/share/opencode/opencode.db')
 if os.path.isfile(p):
     con = sqlite3.connect(p)
     cur = con.cursor()
-    cur.execute('SELECT m.id, m.data, p.data FROM message m LEFT JOIN part p ON m.id=p.message_id WHERE m.session_id=? ORDER BY m.time_created ASC', ({repr(skey)},))
-    turns = []
-    for mid, mdata_str, pdata_str in cur.fetchall():
-        try:
+    cur.execute('SELECT m.id, m.time_created, m.data, p.data FROM message m LEFT JOIN part p ON m.id=p.message_id WHERE m.session_id=? ORDER BY m.time_created ASC, p.time_created ASC, p.id ASC', ({repr(skey)},))
+    rows = cur.fetchall()
+    msgs = {{}}
+    msg_order = []
+    for mid, m_ts, mdata_str, pdata_str in rows:
+        if mid not in msgs:
+            msg_order.append(mid)
             mdata = json.loads(mdata_str) if mdata_str else {{}}
-            pdata = json.loads(pdata_str) if pdata_str else {{}}
-            role = mdata.get('role') or 'user'
-            ptype = pdata.get('type')
-            if ptype == 'text' and pdata.get('text'):
-                turns.append({{'role': role, 'content': pdata.get('text', ''), 'timestamp': mdata.get('time_created')}})
-            elif ptype == 'reasoning' and pdata.get('text'):
-                turns.append({{'role': 'assistant', 'content': '', 'thinking': pdata.get('text', ''), 'timestamp': mdata.get('time_created')}})
-            elif ptype == 'tool':
-                state = pdata.get('state') or {{}}
-                t_name = pdata.get('tool') or 'tool'
-                t_input = state.get('input')
-                t_out = state.get('output')
-                turns.append({{'role': 'tool', 'content': str(t_out) if t_out is not None else '', 'tool_calls': [{{'name': t_name, 'input': t_input}}], 'timestamp': mdata.get('time_created')}})
-            elif ptype == 'patch':
-                turns.append({{'role': 'tool', 'content': '', 'tool_calls': [{{'name': 'patch', 'input': {{'hash': pdata.get('hash'), 'files': pdata.get('files')}}}}], 'timestamp': mdata.get('time_created')}})
-        except Exception: pass
-    print('___OPENCODE_JSON___' + json.dumps(turns))
+            msgs[mid] = {{
+                'role': mdata.get('role') or 'user',
+                'ts': mdata.get('time', {{}}).get('created') or m_ts,
+                'content_parts': [],
+                'thinking_parts': [],
+                'tool_calls': []
+            }}
+        if pdata_str:
+            try:
+                pdata = json.loads(pdata_str)
+                ptype = pdata.get('type')
+                if ptype == 'text' and pdata.get('text'):
+                    msgs[mid]['content_parts'].append(pdata['text'])
+                elif ptype == 'reasoning' and pdata.get('text'):
+                    msgs[mid]['thinking_parts'].append(pdata['text'])
+                elif ptype == 'tool':
+                    state = pdata.get('state') or {{}}
+                    t_name = pdata.get('tool') or 'tool'
+                    t_input = state.get('input') or {{}}
+                    t_out = state.get('output')
+                    call_dict = {{'name': t_name, 'input': t_input}}
+                    if pdata.get('callID'):
+                        call_dict['id'] = pdata.get('callID')
+                    if t_out is not None:
+                        call_dict['output'] = str(t_out)
+                    msgs[mid]['tool_calls'].append(call_dict)
+                elif ptype == 'patch':
+                    call_dict = {{
+                        'name': 'patch',
+                        'input': {{
+                            'hash': pdata.get('hash'),
+                            'files': pdata.get('files') or []
+                        }}
+                    }}
+                    if pdata.get('diff'):
+                        call_dict['input']['diff'] = pdata.get('diff')
+                    if pdata.get('files'):
+                        call_dict['input']['path'] = pdata['files'][0]
+                    msgs[mid]['tool_calls'].append(call_dict)
+            except Exception: pass
+
+    turns = []
+    for mid in msg_order:
+        m = msgs[mid]
+        role = m['role']
+        content = '\\n\\n'.join(c for c in m['content_parts'] if c).strip()
+        thinking = '\\n\\n'.join(t for t in m['thinking_parts'] if t).strip()
+        tools = m['tool_calls']
+        if role == 'user':
+            if content:
+                turns.append({{'role': 'user', 'content': content, 'timestamp': m['ts']}})
+        else:
+            if content or thinking or tools:
+                turns.append({{
+                    'role': 'assistant',
+                    'content': content,
+                    'thinking': thinking or None,
+                    'tool_calls': tools or None,
+                    'timestamp': m['ts']
+                }})
+
+    print('___OPENCODE_JSON___' + json.dumps(turns, ensure_ascii=False))
 else:
     print('___OPENCODE_JSON___[]')
 """
@@ -1800,7 +2290,11 @@ else:
 
     # 3. Codex: first try thread_history_*.sqlite for instant turn projection
     elif agent == "codex":
-        script = f"""import sqlite3, json, os, glob
+        script = f"""import sqlite3, json, os, glob, sys
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+except Exception: pass
 home = os.path.expanduser('~')
 dbs = sorted(glob.glob(os.path.join(home, '.codex', 'thread_history_*.sqlite')), reverse=True)
 turns = []
@@ -1836,7 +2330,7 @@ if dbs and os.path.isfile(dbs[0]):
                     turns.append({{'role': 'tool', 'content': '', 'tool_calls': [{{'name': ijson.get('tool'), 'input': ijson.get('arguments')}}], 'timestamp': ts}})
             except Exception: pass
     except Exception: pass
-print('___CODEX_JSON___' + json.dumps(turns))
+print('___CODEX_JSON___' + json.dumps(turns, ensure_ascii=False))
 """
         stdout = await _run_py(script, settings.ssh_connect_timeout + 15)
         if stdout and "___CODEX_JSON___" in stdout:
@@ -1921,9 +2415,29 @@ print('___HIST_JSON___' + json.dumps(turns))
             }
         ]
 
-    # Clean XML tags and agent artifacts, then apply secret masking to every turn
+    # Clean XML tags and agent artifacts, extract residual thinking/tool_calls, then apply secret masking to every turn
+    from agent_fleet.services.xml_deconstruct import (
+        extract_thinking_from_text,
+        extract_xml_tool_calls,
+        strip_agent_harness_wrappers,
+    )
     for turn in turns:
-        c_clean = clean_transcript_text(turn.get("content") or "")
+        c_raw = str(turn.get("content") or "")
+        if c_raw:
+            c_no_th, extracted_th = extract_thinking_from_text(c_raw)
+            if extracted_th and not turn.get("thinking"):
+                turn["thinking"] = extracted_th
+
+            c_clean_tools, extracted_tc = extract_xml_tool_calls(c_no_th)
+            if extracted_tc:
+                if turn.get("tool_calls") is None:
+                    turn["tool_calls"] = []
+                turn["tool_calls"].extend(extracted_tc)
+
+            c_clean = strip_agent_harness_wrappers(c_clean_tools)
+        else:
+            c_clean = ""
+
         c, count1 = mask_sensitive_text(c_clean)
         turn["content"] = c
         total_masked += count1

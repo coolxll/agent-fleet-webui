@@ -227,6 +227,9 @@ class ParsedConfig:
     mcp_servers: list = field(default_factory=list)
     skills: list = field(default_factory=list)
     settings: dict = field(default_factory=dict)
+    # Optional, provider-specific account quota snapshot (for example the
+    # agy-swap accounts file). Only sanitized values ever reach this field.
+    quota: dict = None
     unsupported_fields: list = field(default_factory=list)
     sanitized: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
@@ -325,6 +328,10 @@ class AgentAdapter(ABC):
         # Any scope file that exists but could not be read stops the chain.
         unresolved = []
         for src in sources or []:
+            # Quota files are auxiliary; they never define the effective
+            # configuration, so an unreadable one must not lower the verdict.
+            if src.kind == "quota":
+                continue
             if src.status in ("ok", "missing", "empty", "not_probed"):
                 continue
             unresolved.append(src.path)
@@ -384,6 +391,9 @@ def scrub_config(cfg: "ParsedConfig") -> "ParsedConfig":
     cfg.sanitized = sanitize_object(cfg.sanitized) if cfg.sanitized else {}
     cfg.mcp_servers = sanitize_object(cfg.mcp_servers) if cfg.mcp_servers else []
     cfg.skills = sanitize_object(cfg.skills) if cfg.skills else []
+    # Quota snapshots are already an explicit whitelist assembled by the
+    # adapter (texts truncated, fractions clamped), so they are not passed
+    # through the depth-limited generic sanitizer.
     if isinstance(cfg.model, str):
         cfg.model = redact_value(cfg.model)
     if isinstance(cfg.model_provider, str):

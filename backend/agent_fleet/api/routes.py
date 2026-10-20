@@ -114,6 +114,25 @@ def _rt_summary(s, rt, ttl):
     }
 
 
+def _quota_summary(cfg):
+    """Compact quota health for tables; the full snapshot stays in config."""
+    quota = getattr(cfg, "quota", None) if cfg is not None else None
+    if not isinstance(quota, dict):
+        return None
+    accounts = quota.get("accounts") if isinstance(quota.get("accounts"), list) else []
+    fractions = [
+        a.get("min_remaining_fraction")
+        for a in accounts
+        if isinstance(a, dict) and isinstance(a.get("min_remaining_fraction"), (int, float))
+    ]
+    return {
+        "source": quota.get("source"),
+        "account_count": len(accounts),
+        "observed_at": quota.get("observed_at"),
+        "min_remaining_fraction": min(fractions) if fractions else None,
+    }
+
+
 def _config_summary(inst):
     cfg = getattr(inst, "config", None)
     if cfg is None:
@@ -127,6 +146,7 @@ def _config_summary(inst):
         "parse_status": cfg.parse_status,
         "resolution": cfg.resolution,
         "channel": channel,
+        "quota": _quota_summary(cfg),
     }
 
 
@@ -161,6 +181,7 @@ def _inst_detail(inst, include_config=True):
                 "mcp_servers": cfg.mcp_servers,
                 "skills": cfg.skills,
                 "settings": cfg.settings,
+                "quota": cfg.quota,
                 "unsupported_fields": cfg.unsupported_fields,
                 "sanitized": cfg.sanitized,
                 "warnings": cfg.warnings,
@@ -397,6 +418,32 @@ def delete_runtime(runtime_id: str):
     return {"ok": True, "deleted": label}
 
 
+@router.delete("/hosts/{host_id}")
+def delete_host(host_id: str):
+    """Remove a host and all its runtimes and child records."""
+    with session_scope() as s:
+        host = s.get(models.Host, host_id)
+        if host is None:
+            raise HTTPException(404, "host not found")
+        label = host.name
+        for rt in host.runtimes:
+            s.execute(
+                delete(models.AgentConfiguration).where(
+                    models.AgentConfiguration.installation_id.in_(
+                        select(models.AgentInstallation.id).where(
+                            models.AgentInstallation.runtime_id == rt.id
+                        )
+                    )
+                )
+            )
+            s.execute(delete(models.Snapshot).where(models.Snapshot.runtime_id == rt.id))
+            s.execute(delete(models.ScanTask).where(models.ScanTask.runtime_id == rt.id))
+            s.delete(rt)
+        s.delete(host)
+        s.commit()
+    return {"ok": True, "deleted": label}
+
+
 @router.post("/inventory/sync")
 def inventory_sync():
     settings = get_settings()
@@ -532,6 +579,156 @@ def _matrix_cell(inst, rt):
             "version": inst.version,
         }
     return {"state": "unknown", "installation_id": inst.id, "version": inst.version}
+
+
+# --------------------------------------------------------------------------
+# imported quota accounts
+# --------------------------------------------------------------------------
+
+
+class QuotaAccountCreate(BaseModel):
+    provider: str
+    credential: str
+    label: str | None = None
+
+
+@router.get("/quota-providers")
+def quota_providers():
+    from agent_fleet.services import quota_providers as providers
+
+    return {"providers": providers.provider_meta()}
+
+
+@router.get("/quota-accounts")
+def quota_accounts():
+    from agent_fleet.services import quota_store
+
+    try:
+        accounts = quota_store.list_accounts()
+    except ValueError as exc:
+        raise HTTPException(500, str(exc))
+    return {"accounts": accounts}
+
+
+@router.post("/quota-accounts")
+async def add_quota_account(payload: QuotaAccountCreate):
+    from agent_fleet.services import quota_store
+
+    try:
+        account = await quota_store.add_account(
+            payload.provider, payload.label, payload.credential
+        )
+    except quota_store.quota_providers.QuotaProviderError as exc:
+        raise HTTPException(400, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"credential verification failed: {exc}")
+    return account
+
+
+@router.post("/quota-accounts/{account_id}/refresh")
+async def refresh_quota_account(account_id: str):
+    from agent_fleet.services import quota_store
+
+    try:
+        account = await quota_store.refresh_account(account_id)
+    except KeyError:
+        raise HTTPException(404, "quota account not found")
+    except quota_store.quota_providers.QuotaProviderError as exc:
+        raise HTTPException(400, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"quota refresh failed: {exc}")
+    return account
+
+
+@router.delete("/quota-accounts/{account_id}")
+def delete_quota_account(account_id: str):
+    from agent_fleet.services import quota_store
+
+    try:
+        deleted = quota_store.delete_account(account_id)
+    except ValueError as exc:
+        raise HTTPException(500, str(exc))
+    if not deleted:
+        raise HTTPException(404, "quota account not found")
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------
+# account quotas
+# --------------------------------------------------------------------------
+
+
+@router.get("/quotas")
+def list_quotas(include_disabled_hosts: bool = Query(False)):
+    """Account quota snapshots collected from every runtime.
+
+    This is the data source for the standalone Quotas view. It is read-only and
+    only returns snapshots an adapter already sanitized; providers that refresh
+    quota online can fill the same structure later.
+    """
+    with session_scope() as s:
+        runtimes = s.execute(select(models.Runtime)).scalars().all()
+        if not include_disabled_hosts:
+            visible = {r.id for r in runtimes if r.host and r.host.enabled}
+        else:
+            visible = {r.id for r in runtimes}
+        by_id = {r.id: r for r in runtimes}
+        rows = s.execute(
+            select(models.AgentInstallation).where(
+                models.AgentInstallation.runtime_id.in_(list(visible))
+            )
+        ).scalars().all() if visible else []
+
+        items = []
+        provider_counts: dict = {}
+        for inst in rows:
+            cfg = getattr(inst, "config", None)
+            quota = getattr(cfg, "quota", None) if cfg is not None else None
+            if not isinstance(quota, dict):
+                continue
+            accounts = quota.get("accounts") if isinstance(quota.get("accounts"), list) else []
+            if not accounts:
+                continue
+            rt = by_id.get(inst.runtime_id)
+            if rt is None:
+                continue
+            items.append(
+                {
+                    "installation_id": inst.id,
+                    "agent": inst.agent_id,
+                    "host": rt.host.name if rt.host else None,
+                    "runtime_id": rt.id,
+                    "runtime_key": rt.key,
+                    "kind": rt.kind,
+                    "collect_user": rt.collect_user,
+                    "config_status": inst.config_status,
+                    "collected_at": _iso(cfg.collected_at) if cfg else None,
+                    "quota": quota,
+                    "quota_summary": _quota_summary(cfg),
+                }
+            )
+            summary = provider_counts.setdefault(
+                inst.agent_id,
+                {"agent": inst.agent_id, "installations": 0, "accounts": 0},
+            )
+            summary["installations"] += 1
+            summary["accounts"] += len(accounts)
+
+        items.sort(key=lambda x: ((x["host"] or ""), x["runtime_key"] or "", x["agent"]))
+        names = {a["id"]: a["name"] for a in agent_meta()}
+        for provider in provider_counts.values():
+            provider["name"] = names.get(provider["agent"], provider["agent"])
+        return {
+            "quotas": items,
+            "providers": sorted(
+                provider_counts.values(), key=lambda x: x["name"].lower()
+            ),
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+        }
 
 
 # --------------------------------------------------------------------------
@@ -847,6 +1044,8 @@ def agent_view(agent_id: str, include_disabled_hosts: bool = Query(False)):
                     "install_method": i.install_method,
                     "config_status": i.config_status,
                     "config_summary": _config_summary(i),
+                    "quota": cfg.quota if cfg else None,
+                    "quota_summary": _quota_summary(cfg),
                     "collected_at": _iso(cfg.collected_at) if cfg else None,
                 }
             )

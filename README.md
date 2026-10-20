@@ -12,7 +12,8 @@ are in `docs/requirements.md`.
 Supported agents: Codex CLI, Claude Code, OpenCode, Pi, Hermes,
 Antigravity (AGY), CodeBuddy, and Qoder (QoderCN).
 Supported targets: macOS, Linux, Windows (PowerShell) and WSL distros,
-reached over your existing SSH configuration.
+reached through your existing SSH configuration. The machine list itself comes
+only from inventory files; `~/.ssh/config` is not imported automatically.
 
 Requirements: Python 3.13, Node 20+, and the `ssh` client on the controller.
 
@@ -72,22 +73,21 @@ Then open the UI and press **Scan all**.
 
 ## Where the machine list comes from
 
-Two source kinds, merged by host name (later sources only fill gaps):
+The fleet is **exactly what the inventory files declare**. `~/.ssh/config` is
+not read automatically, so an SSH alias such as `kindle` does not create a
+host row on its own. It is still used by `ssh` for the inventory hosts that
+reference it (ProxyJump, ports, Tailscale names, per-host users keep working).
 
-1. **Inventory files** - every path in `AGENT_FLEET_INVENTORY_PATHS`, in
-   order, either an Ansible inventory (YAML `all.children.<group>.hosts`, or
-   INI, including `ansible_host`/`ansible_user`/`ansible_port`) or the project
-   YAML format. The default is the repo's `inventory.yaml`, which exists only
-   to express what SSH config cannot: runtime kind hints, WSL distro names,
-   and an `exclude:` list for SSH aliases that are not part of the fleet
-   (exclusions win over every other source).
-2. **OpenSSH client config** - every `Host` alias in `~/.ssh/config`
-   (ProxyJump, ports, Tailscale names, per-host users all keep working). It is
-   merged last, but only fills fields the inventory left empty.
+Every path in `AGENT_FLEET_INVENTORY_PATHS` is read in order. Each path may be
+an Ansible inventory (YAML `all.children.<group>.hosts`, or INI, including
+`ansible_host`/`ansible_user`/`ansible_port`) or the project YAML format. The
+default is the repo's `inventory.yaml`, which declares runtime kind hints,
+WSL distro names and optional tags.
 
 Merging fills gaps per field: `hostname`, `user`, `port`, `group`, tags, WSL
 declarations and a non-`auto` kind hint; it never overwrites a value an
-earlier source already provided.
+earlier source already provided. An optional `exclude:` list is still honored
+if an inventory deliberately wants to drop a name.
 
 To add an Ansible inventory (run from `backend/`):
 
@@ -114,6 +114,22 @@ Nothing is duplicated: if a host appears in several sources it is stored once.
   warnings, and a sanitized JSON view.
 * **Compare** - the same agent on two machines side by side, or two snapshots
   of one runtime, as a field-level change list.
+* **Quotas** - a standalone, account-based menu. You import an account
+  credential (verified against the vendor's online API before it is saved),
+  and the view shows the account, plan, weekly/5-hour bars, remaining
+  percentage and reset countdown. Refreshing calls the online API in real time.
+  Accounts are grouped by Agent. Codex/ChatGPT and Antigravity are supported.
+  Antigravity OAuth credentials are imported once; the backend independently
+  renews access tokens and reads Google quota pools. Accounts have no machine
+  association.
+* **AGY account quotas** - when a machine runs Antigravity with `agy-swap`, the
+  agent drawer and the AGY fleet view also show the account registry (name,
+  email, aliases, tier) and its Google quota pools: weekly and 5-hour bars,
+  remaining percentage, reset countdown, and the lowest pool per account. The
+  data is the last quota snapshot stored by `agy-swap` in
+  `~/.gemini/agy-swap/accounts.json` (run `agy-swap limits --refresh` to update
+  it). A normal scan only reads that snapshot; Agent Fleet never calls Google
+  or writes to the remote machine.
 
 ## Scanning
 
@@ -153,6 +169,14 @@ This is a read-only observer.
   `.kube/config`, `/etc/shadow`, keychain files and similar are on a hard deny
   list in the probe generator.
 * `~/.pi/agent/auth.json` and `~/.hermes/.env` are never requested.
+* Imported quota credentials live in `data/quota_accounts.json` with mode
+  `0600`, outside SQLite; the API never returns the credential, and the fleet
+  export never contains it. Credentials are only used for the vendor usage
+  request.
+* `~/.gemini/agy-swap/accounts.json` is read for quota display only. The
+  adapter copies an explicit whitelist (email, name, aliases, tier, quota
+  buckets), so `token_data`, `token_hash`, `secret_ref` and every other
+  credential field are dropped; the raw file is never persisted.
 * The API has no authentication and is meant to bind to loopback; do not
   expose it to untrusted networks.
 * Output is sanitized three ways: field whitelists, recursive dropping of
@@ -184,7 +208,6 @@ This is a read-only observer.
 | --- | --- | --- |
 | `AGENT_FLEET_DB_PATH` | `<repo>/data/fleet.db` | SQLite location |
 | `AGENT_FLEET_INVENTORY_PATHS` | `["<repo>/inventory.yaml"]` | extra inventory files/dirs (absolute default) |
-| `AGENT_FLEET_SSH_CONFIG_PATH` | `~/.ssh/config` | ssh config to read |
 | `AGENT_FLEET_SCAN_CONCURRENCY` | `4` | concurrent runtimes per run (hard ceiling 8) |
 | `AGENT_FLEET_COMMAND_TIMEOUT` | `25` | per-probe timeout (s); Windows chunks share it |
 | `AGENT_FLEET_SSH_CONNECT_TIMEOUT` | `10` | ssh connect timeout (s) |
@@ -241,8 +264,9 @@ The adapter only ever sees `RemoteFacts`, so it is testable without a machine.
 * Windows layout variants may show `partial` instead of `parsed`.
 * Skills are counted and listed by directory/`SKILL.md` presence; frontmatter
   is not parsed.
-* Hosts you do not want in the fleet can be excluded at the host level; they
-  keep their history but disappear from every view until you turn them back on.
+* Hosts you do not want in the fleet can be disabled or removed at the host
+  level; disabled hosts keep their history but disappear from every view until
+  you turn them back on. Inventory files are the only source of new hosts.
 * Snapshot history is kept indefinitely; there is no pruning.
 * The API has no authentication and is meant for loopback use.
 

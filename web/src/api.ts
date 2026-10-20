@@ -108,6 +108,44 @@ export type ConfigSource = {
   captured_at: string | null
 }
 
+export type QuotaBucket = {
+  id?: string | null
+  name: string
+  window: 'weekly' | '5h' | string
+  remaining_fraction: number
+  reset_at: string
+}
+
+export type QuotaGroup = {
+  id: string
+  name: string
+  buckets: QuotaBucket[]
+}
+
+export type QuotaAccount = {
+  email: string
+  name: string
+  aliases?: string[]
+  tier?: { id?: string | null; name?: string | null } | null
+  observed_at?: string | null
+  groups: QuotaGroup[]
+  min_remaining_fraction?: number | null
+}
+
+export type QuotaSnapshot = {
+  source: string
+  path?: string | null
+  observed_at?: string | null
+  accounts: QuotaAccount[]
+}
+
+export type QuotaSummary = {
+  source?: string | null
+  account_count: number
+  observed_at?: string | null
+  min_remaining_fraction?: number | null
+}
+
 export type AgentConfig = {
   id: string
   resolution: string
@@ -119,6 +157,7 @@ export type AgentConfig = {
   mcp_servers: any[] | null
   skills: any[] | null
   settings: any | null
+  quota?: QuotaSnapshot | null
   unsupported_fields: string[] | null
   sanitized: any | null
   warnings: string[] | null
@@ -141,6 +180,60 @@ export type InstallationDetail = Installation & {
   config: AgentConfig | null
   sources: ConfigSource[]
   runtime: RuntimeRef
+}
+
+export type QuotaEntry = {
+  installation_id: string
+  agent: string
+  host: string | null
+  runtime_id: string
+  runtime_key: string
+  kind: string | null
+  collect_user: string | null
+  config_status: string
+  collected_at: string | null
+  quota: QuotaSnapshot
+  quota_summary: QuotaSummary | null
+}
+
+export type QuotaProviderSummary = {
+  agent: string
+  name: string
+  installations: number
+  accounts: number
+}
+
+export type QuotaProviderInfo = {
+  id: string
+  name: string
+  agent: string
+  credential_label: string
+  credential_hint: string
+  online: boolean
+}
+
+export type ImportedQuotaAccount = {
+  id: string
+  agent: string
+  provider: string
+  provider_name: string
+  label: string | null
+  email: string | null
+  name: string | null
+  plan: string | null
+  status: 'ok' | 'error' | 'unknown'
+  last_error: string | null
+  created_at: string | null
+  updated_at: string | null
+  last_refreshed_at: string | null
+  quota: QuotaSnapshot | null
+  quota_summary: QuotaSummary | null
+}
+
+export type QuotasResponse = {
+  quotas: QuotaEntry[]
+  providers: QuotaProviderSummary[]
+  generated_at: string
 }
 
 export type ScanTask = {
@@ -183,6 +276,15 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'POST ' + path + ' failed: ' + res.status)
+  }
+  return (await res.json()) as T
+}
+
+async function del<T>(path: string): Promise<T> {
+  const res = await fetch('/api' + path, { method: 'DELETE' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'DELETE ' + path + ' failed: ' + res.status)
   }
   return (await res.json()) as T
 }
@@ -243,6 +345,17 @@ export const api = {
     return get<{ installations: Installation[] }>('/installations' + suffix)
   },
   installation: (id: string) => get<InstallationDetail>('/installations/' + id),
+  quotas: (includeDisabledHosts = false) => {
+    const qs = includeDisabledHosts ? '?include_disabled_hosts=true' : ''
+    return get<QuotasResponse>('/quotas' + qs)
+  },
+  quotaProviders: () => get<{ providers: QuotaProviderInfo[] }>('/quota-providers'),
+  quotaAccounts: () => get<{ accounts: ImportedQuotaAccount[] }>('/quota-accounts'),
+  addQuotaAccount: (payload: { provider: string; credential: string; label?: string }) =>
+    post<ImportedQuotaAccount>('/quota-accounts', payload),
+  refreshQuotaAccount: (id: string) =>
+    post<ImportedQuotaAccount>('/quota-accounts/' + id + '/refresh'),
+  deleteQuotaAccount: (id: string) => del<{ ok: boolean }>('/quota-accounts/' + id),
   scans: () => get<{ runs: any[] }>('/scans'),
   snapshots: (runtimeId?: string, limit = 100) => {
     const q = new URLSearchParams()

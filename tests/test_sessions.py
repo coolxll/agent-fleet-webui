@@ -492,6 +492,179 @@ def test_clean_transcript_text_removes_xml():
     assert "ADDITIONAL_METADATA" not in cleaned
 
 
+def test_extract_project_from_slug():
+    assert session_service.extract_project_from_slug("Users-lynn-workspace-projects-agent-fleet-webui") == "agent-fleet-webui"
+    assert session_service.extract_project_from_slug("Users-lynn-workspace-scratch-computer-playground") == "computer-playground"
+    assert session_service.extract_project_from_slug("projects-activate-typora") == "activate-typora"
+    assert session_service.extract_project_from_slug("home-dev-workspace-projects-deep-learning-tool") == "deep-learning-tool"
+    assert session_service.extract_project_from_slug("home-dev-workspace-my-repo") == "my-repo"
+    assert session_service.extract_project_from_slug("workspace-projects-foo-bar") == "foo-bar"
+    assert session_service.extract_project_from_slug("workspace-my-app") == "my-app"
+    assert session_service.extract_project_from_slug("simple-project") == "simple-project"
+    assert session_service.extract_project_from_slug("") == ""
+    assert session_service.extract_project_from_slug(None) == ""
+
+
+def test_is_generic_name_and_path():
+    assert session_service.is_generic_name("workspace") is True
+    assert session_service.is_generic_name("codex-workspace") is True
+    assert session_service.is_generic_name("codebuddy-workspace") is True
+    assert session_service.is_generic_name("default") is True
+    assert session_service.is_generic_name("projects") is True
+    assert session_service.is_generic_name("scratch") is True
+    assert session_service.is_generic_name("agent-fleet-webui") is False
+    assert session_service.is_generic_name("ChatCodex") is False
+    assert session_service.is_generic_name("") is True
+    assert session_service.is_generic_name(None) is True
+
+    assert session_service.is_generic_path("/Users/lynn/workspace") is True
+    assert session_service.is_generic_path("/Users/lynn/workspace/projects") is True
+    assert session_service.is_generic_path("/home/dev/scratch") is True
+    assert session_service.is_generic_path("/Users/lynn/workspace/projects/agent-fleet-webui") is False
+    assert session_service.is_generic_path(None) is True
+
+
+def test_aggregate_opencode_parts_with_unicode():
+    rows = [
+        # Message 1: User message with Chinese characters
+        (
+            "msg_1",
+            1776000000000,
+            json.dumps({"role": "user", "time": {"created": 1776000000000}}),
+            json.dumps({"type": "text", "text": "你好，请帮我检查并修复构建错误。"}),
+        ),
+        # Message 2: Assistant message with reasoning, text, tool call, patch, and follow-up text
+        (
+            "msg_2",
+            1776000005000,
+            json.dumps({"role": "assistant", "time": {"created": 1776000005000}}),
+            json.dumps({"type": "reasoning", "text": "正在检查项目配置文件 package.json 以及构建脚本..."}),
+        ),
+        (
+            "msg_2",
+            1776000005000,
+            json.dumps({"role": "assistant"}),
+            json.dumps({"type": "text", "text": "好的，我开始检查构建配置。"}),
+        ),
+        (
+            "msg_2",
+            1776000005000,
+            json.dumps({"role": "assistant"}),
+            json.dumps({
+                "type": "tool",
+                "tool": "bash",
+                "callID": "call_bash_001",
+                "state": {
+                    "input": {"command": "npm run build"},
+                    "output": "Error: Cannot find module 'vite'",
+                },
+            }),
+        ),
+        (
+            "msg_2",
+            1776000005000,
+            json.dumps({"role": "assistant"}),
+            json.dumps({
+                "type": "patch",
+                "hash": "c0ffee1234",
+                "files": ["package.json"],
+                "diff": "--- a/package.json\n+++ b/package.json\n@@ -10,3 +10,4 @@",
+            }),
+        ),
+        (
+            "msg_2",
+            1776000005000,
+            json.dumps({"role": "assistant"}),
+            json.dumps({"type": "text", "text": "修复方案已完成，缺失的依赖已补全。"}),
+        ),
+    ]
+
+    turns = session_service.aggregate_opencode_parts(rows)
+    assert len(turns) == 2
+
+    # Verify user turn
+    assert turns[0]["role"] == "user"
+    assert turns[0]["content"] == "你好，请帮我检查并修复构建错误。"
+    assert turns[0]["timestamp"] == 1776000000000
+
+    # Verify assistant turn
+    asst = turns[1]
+    assert asst["role"] == "assistant"
+    assert asst["thinking"] == "正在检查项目配置文件 package.json 以及构建脚本..."
+    assert asst["content"] == "好的，我开始检查构建配置。\n\n修复方案已完成，缺失的依赖已补全。"
+    assert asst["timestamp"] == 1776000005000
+
+    assert len(asst["tool_calls"]) == 2
+    tool_call = asst["tool_calls"][0]
+    assert tool_call["name"] == "bash"
+    assert tool_call["id"] == "call_bash_001"
+    assert tool_call["input"]["command"] == "npm run build"
+    assert tool_call["output"] == "Error: Cannot find module 'vite'"
+
+    patch_call = asst["tool_calls"][1]
+    assert patch_call["name"] == "patch"
+    assert patch_call["input"]["hash"] == "c0ffee1234"
+    assert patch_call["input"]["path"] == "package.json"
+    assert "package.json" in patch_call["input"]["files"]
+    assert "--- a/package.json" in patch_call["input"]["diff"]
+
+    # Verify UTF-8 serialization with ensure_ascii=False
+    serialized = json.dumps(turns, ensure_ascii=False)
+    assert "你好，请帮我检查并修复构建错误。" in serialized
+    assert "\\u4f60" not in serialized
+
+
+def test_detect_codex_project_from_rollout(tmp_path):
+    rollout_file = tmp_path / "rollout-2026-10-18.jsonl"
+    rollout_lines = [
+        json.dumps({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Check status of ChatCodex repository"}],
+            },
+        }),
+        json.dumps({
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "bash",
+                "arguments": json.dumps({"command": "cd ChatCodex && git status"}),
+            },
+        }),
+    ]
+    rollout_file.write_text("\n".join(rollout_lines), encoding="utf-8")
+
+    name, path = session_service.detect_codex_project_from_rollout(str(rollout_file), base_cwd="/Users/lynn/workspace")
+    assert name == "ChatCodex"
+    assert name != "codex-workspace"
+
+    # Test detection via file path pattern
+    rollout_file2 = tmp_path / "rollout-file-path.jsonl"
+    rollout_lines2 = [
+        json.dumps({
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "apply_patch",
+                "arguments": "*** File: /Users/lynn/workspace/projects/beszel-ui/package.json\n...",
+            },
+        }),
+    ]
+    rollout_file2.write_text("\n".join(rollout_lines2), encoding="utf-8")
+
+    name2, path2 = session_service.detect_codex_project_from_rollout(str(rollout_file2), base_cwd="/Users/lynn/workspace")
+    assert name2 == "beszel-ui"
+    assert name2 != "codex-workspace"
+
+    # Non-existent or empty rollout returns empty, never 'codex-workspace'
+    name_empty, path_empty = session_service.detect_codex_project_from_rollout(None, "")
+    assert name_empty == ""
+    assert name_empty != "codex-workspace"
+
+
+
 
 
 

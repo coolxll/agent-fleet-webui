@@ -12,6 +12,7 @@ from agent_fleet import models
 from agent_fleet.db import session_scope
 
 from test_scan import FakeRunner, _codex_stream, _make_runtime
+from helpers import fixture_text
 
 
 def agent_ids():
@@ -230,3 +231,152 @@ async def _scan(rid, settings):
 
 def _scan_one(rid, settings):
     return asyncio.run(_scan(rid, settings))
+
+
+TAB = chr(9)
+NL = chr(10)
+
+
+def _agy_swap_stream():
+    accounts = fixture_text("agy", "agy_swap_accounts.json")
+    config = fixture_text("agy", "agy_swap_config.json")
+    body = [
+        "AF" + TAB + "os" + TAB + "Linux",
+        "AF" + TAB + "arch" + TAB + "x86_64",
+        "AF" + TAB + "home" + TAB + "/home/fixture",
+        "AF" + TAB + "user" + TAB + "fixture",
+        "AF" + TAB + "probed" + TAB + "agy:agy",
+        "AF" + TAB + "which" + TAB + "agy:agy" + TAB + "/home/fixture/.local/bin/agy",
+        "AF" + TAB + "version" + TAB + "agy:agy" + TAB + "0" + TAB + "1.4.2",
+        "AF" + TAB + "file" + TAB + "~/.gemini/agy-swap/accounts.json" + TAB
+        + str(len(accounts)) + TAB + "present",
+    ]
+    body += accounts.split(NL)
+    body += [
+        "AF" + TAB + "endfile" + TAB + "~/.gemini/agy-swap/accounts.json",
+        "AF" + TAB + "file" + TAB + "~/.gemini/agy-swap/config.json" + TAB
+        + str(len(config)) + TAB + "present",
+    ]
+    body += config.split(NL)
+    body += [
+        "AF" + TAB + "endfile" + TAB + "~/.gemini/agy-swap/config.json",
+        "AF" + TAB + "done" + TAB + "1",
+    ]
+    return NL.join(body)
+
+
+def test_agy_swap_quota_reaches_api_agent_view_and_export(client, fleet_db, monkeypatch):
+    rid = _make_runtime(fleet_db, name="agy-box")
+    monkeypatch.setattr(
+        "agent_fleet.services.scanner.build_runner",
+        lambda rt, s: FakeRunner(_agy_swap_stream()),
+    )
+    _scan_one(rid, fleet_db)
+
+    insts = client.get("/api/installations?agent_id=agy").json()["installations"]
+    assert len(insts) == 1
+    detail = client.get("/api/installations/" + insts[0]["id"]).json()
+    quota = detail["config"]["quota"]
+    assert quota["source"] == "agy-swap"
+    assert [a["email"] for a in quota["accounts"]] == [
+        "alice@example.com",
+        "bob@example.com",
+    ]
+    assert detail["config_summary"]["quota"]["account_count"] == 2
+    assert detail["config_summary"]["quota"]["min_remaining_fraction"] == 0.01
+
+    blob = str(detail)
+    assert "fixture-access-token-must-not-leak" not in blob
+    assert "fixture-token-hash-must-not-leak" not in blob
+    assert "secret_ref" not in blob
+
+    view = client.get("/api/agent-view/agy").json()
+    agy_inst = next(i for i in view["installations"] if i["id"] == insts[0]["id"])
+    assert agy_inst["quota"]["accounts"][0]["aliases"] == ["work"]
+
+    exported = client.get("/api/export?agent_id=agy").json()
+    agent = exported["hosts"][0]["agents"][0]
+    assert agent["config"]["quota"]["accounts"][1]["email"] == "bob@example.com"
+
+    quotas = client.get("/api/quotas").json()
+    assert quotas["providers"] == [
+        {"agent": "agy", "name": "Antigravity (AGY)", "installations": 1, "accounts": 2}
+    ]
+    assert len(quotas["quotas"]) == 1
+    entry = quotas["quotas"][0]
+    assert entry["host"] == "agy-box"
+    assert entry["quota"]["accounts"][0]["aliases"] == ["work"]
+    assert entry["quota_summary"]["min_remaining_fraction"] == 0.01
+
+
+def test_quota_account_import_refresh_and_delete(client, fleet_db, monkeypatch):
+    from agent_fleet.services import quota_providers
+
+    async def fake_fetch(provider, raw):
+        assert provider == "codex"
+        assert "fixture-codex-credential" in raw
+        return {
+            "credential": {"access_token": "fixture-codex-credential"},
+            "identity": {"email": "quota@example.com", "name": "Quota User", "plan": "team"},
+            "quota": {
+                "source": "codex",
+                "observed_at": "2026-10-20T12:00:00Z",
+                "accounts": [
+                    {
+                        "email": "quota@example.com",
+                        "name": "Quota User",
+                        "tier": {"id": "team", "name": "team"},
+                        "observed_at": "2026-10-20T12:00:00Z",
+                        "groups": [
+                            {
+                                "id": "primary",
+                                "name": "5-Hour limit",
+                                "buckets": [
+                                    {
+                                        "id": "primary",
+                                        "name": "5-Hour",
+                                        "window": "5h",
+                                        "remaining_fraction": 0.75,
+                                        "reset_at": "2026-10-20T17:00:00Z",
+                                    }
+                                ],
+                            }
+                        ],
+                        "min_remaining_fraction": 0.75,
+                    }
+                ],
+            },
+        }
+
+    monkeypatch.setattr(quota_providers, "fetch_account", fake_fetch)
+
+    created = client.post(
+        "/api/quota-accounts",
+        json={
+            "provider": "codex",
+            "label": "work",
+            "credential": "fixture-codex-credential",
+        },
+    )
+    assert created.status_code == 200
+    account = created.json()
+    assert account["email"] == "quota@example.com"
+    assert account["label"] == "work"
+    assert account["quota_summary"]["min_remaining_fraction"] == 0.75
+    assert "credential" not in account
+    assert "fixture-codex-credential" not in str(account)
+
+    store = fleet_db.db_path.parent / "quota_accounts.json"
+    assert store.exists()
+    assert oct(store.stat().st_mode & 0o777) == "0o600"
+
+    listed = client.get("/api/quota-accounts").json()["accounts"]
+    assert [a["id"] for a in listed] == [account["id"]]
+
+    refreshed = client.post(f"/api/quota-accounts/{account['id']}/refresh")
+    assert refreshed.status_code == 200
+    assert refreshed.json()["status"] == "ok"
+
+    deleted = client.delete(f"/api/quota-accounts/{account['id']}")
+    assert deleted.status_code == 200
+    assert client.get("/api/quota-accounts").json()["accounts"] == []

@@ -9,6 +9,7 @@ import { TranscriptTurnRow } from '../components/TranscriptFormatter'
 import { useI18n } from '../i18n'
 
 export type ViewMode = 'timeline' | 'project' | 'machine' | 'agent'
+export type TimelineGroupMode = 'none' | 'day' | 'month'
 
 export interface SessionGroup {
   id: string
@@ -59,10 +60,28 @@ export default function SessionsView({
     return 'project' // 默认推荐按项目归类，极大提升找寻效率
   })
 
+  // Optional timeline grouping: none (continuous) | day | month
+  const [timelineGroup, setTimelineGroup] = useState<TimelineGroupMode>(() => {
+    try {
+      const saved = localStorage.getItem('fleet_session_timeline_group')
+      if (saved === 'none' || saved === 'day' || saved === 'month') {
+        return saved
+      }
+    } catch {}
+    return 'none' // 默认平铺连续时间序，可选按日期或月份分组
+  })
+
   const handleSelectViewMode = (mode: ViewMode) => {
     setViewMode(mode)
     try {
       localStorage.setItem('fleet_session_view_mode', mode)
+    } catch {}
+  }
+
+  const handleSelectTimelineGroup = (mode: TimelineGroupMode) => {
+    setTimelineGroup(mode)
+    try {
+      localStorage.setItem('fleet_session_timeline_group', mode)
     } catch {}
   }
 
@@ -85,7 +104,7 @@ export default function SessionsView({
         agent_id: filterAgent || undefined,
         project: filterProject || undefined,
         pinned_only: filterPinned || undefined,
-        limit: 2000
+        limit: 5000
       })
       setSessions(res.items)
       setTotal(res.total)
@@ -140,9 +159,14 @@ export default function SessionsView({
 
   // Multi-dimensional Grouping
   const groups = useMemo<SessionGroup[]>(() => {
-    if (viewMode === 'timeline') return []
+    if (viewMode === 'timeline' && timelineGroup === 'none') return []
 
     const map = new Map<string, SessionGroup>()
+    const now = new Date()
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const yesterdayDate = new Date(now)
+    yesterdayDate.setDate(now.getDate() - 1)
+    const yesterdayStr = `${yesterdayDate.getFullYear()}-${String(yesterdayDate.getMonth() + 1).padStart(2, '0')}-${String(yesterdayDate.getDate()).padStart(2, '0')}`
 
     for (const item of sessions) {
       let groupKey = ''
@@ -165,6 +189,36 @@ export default function SessionsView({
         groupTitle = item.agent_id || 'unknown'
         groupSubtitle = ''
         groupIcon = '🤖'
+      } else if (viewMode === 'timeline') {
+        const itemDate = item.updated_at ? new Date(item.updated_at) : null
+        if (!itemDate || isNaN(itemDate.getTime())) {
+          groupKey = 'undated'
+          groupTitle = t('common.unknown')
+          groupIcon = '📅'
+        } else {
+          const y = itemDate.getFullYear()
+          const m = String(itemDate.getMonth() + 1).padStart(2, '0')
+          const d = String(itemDate.getDate()).padStart(2, '0')
+          const ymd = `${y}-${m}-${d}`
+          const ym = `${y}-${m}`
+
+          if (timelineGroup === 'day') {
+            groupKey = ymd
+            groupIcon = '📅'
+            if (ymd === todayStr) {
+              groupTitle = `${t('sessions.timelineToday')} · ${ymd}`
+            } else if (ymd === yesterdayStr) {
+              groupTitle = `${t('sessions.timelineYesterday')} · ${ymd}`
+            } else {
+              groupTitle = ymd
+            }
+          } else {
+            // month
+            groupKey = ym
+            groupIcon = '🗓️'
+            groupTitle = ym
+          }
+        }
       }
 
       let grp = map.get(groupKey)
@@ -203,17 +257,19 @@ export default function SessionsView({
       }
     }
 
-    // Sort groups: pinned first, then latest active timestamp desc
+    // Sort groups: if not timeline, pinned first then latest updated desc. If timeline, strictly chronological by latestUpdatedAt desc!
     return Array.from(map.values()).sort((a, b) => {
-      if (a.hasPinned && !b.hasPinned) return -1
-      if (!a.hasPinned && b.hasPinned) return 1
+      if (viewMode !== 'timeline') {
+        if (a.hasPinned && !b.hasPinned) return -1
+        if (!a.hasPinned && b.hasPinned) return 1
+      }
       return b.latestUpdatedAt - a.latestUpdatedAt
     })
-  }, [sessions, viewMode, t])
+  }, [sessions, viewMode, timelineGroup, t])
 
   // Default expand first few groups
   useEffect(() => {
-    if (viewMode === 'timeline') return
+    if (viewMode === 'timeline' && timelineGroup === 'none') return
     setExpandedGroups((prev) => {
       const next = { ...prev }
       groups.forEach((g, idx) => {
@@ -223,7 +279,7 @@ export default function SessionsView({
       })
       return next
     })
-  }, [groups, viewMode])
+  }, [groups, viewMode, timelineGroup])
 
   const toggleGroup = (groupId: string) => {
     setExpandedGroups((prev) => ({
@@ -498,12 +554,14 @@ export default function SessionsView({
             </span>
             <span style={{ fontSize: 12, color: 'var(--muted)' }}>
               {viewMode === 'project'
-                ? `${groups.length} ${t('sessions.projectsCount', { count: groups.length }).split(' ')[1] || 'projects'} · ${total}`
+                ? `${t('sessions.projectsCount', { count: groups.length })} · ${t('sessions.sessionsTotal', { count: total })}`
                 : viewMode === 'machine'
-                ? `${groups.length} ${t('sessions.machinesCount', { count: groups.length }).split(' ')[1] || 'machines'} · ${total}`
+                ? `${t('sessions.machinesCount', { count: groups.length })} · ${t('sessions.sessionsTotal', { count: total })}`
                 : viewMode === 'agent'
-                ? `${groups.length} ${t('sessions.agentsCount', { count: groups.length }).split(' ')[1] || 'agents'} · ${total}`
-                : `${total} ${t('sessions.sessionsTotal', { count: total })}`}
+                ? `${t('sessions.agentsCount', { count: groups.length })} · ${t('sessions.sessionsTotal', { count: total })}`
+                : timelineGroup !== 'none'
+                ? `${timelineGroup === 'day' ? t('sessions.daysCount', { count: groups.length }) : t('sessions.monthsCount', { count: groups.length })} · ${t('sessions.sessionsTotal', { count: total })}`
+                : t('sessions.sessionsTotal', { count: total })}
             </span>
           </div>
 
@@ -545,16 +603,68 @@ export default function SessionsView({
             </div>
           </div>
 
+          {/* Timeline Optional Grouping Controls */}
+          {viewMode === 'timeline' && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '6px 12px',
+                background: 'var(--panel-2)',
+                borderBottom: '1px solid var(--border)'
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 11,
+                  color: 'var(--muted)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4
+                }}
+              >
+                🕒 {t('sessions.viewMode.timeline')}:
+              </span>
+              <div className="sessions-segmented-control" style={{ width: 'auto' }}>
+                <button
+                  className={`sessions-mode-tab ${timelineGroup === 'none' ? 'active' : ''}`}
+                  onClick={() => handleSelectTimelineGroup('none')}
+                  style={{ padding: '2px 8px', fontSize: 11 }}
+                >
+                  {t('sessions.timelineGroup.none')}
+                </button>
+                <button
+                  className={`sessions-mode-tab ${timelineGroup === 'day' ? 'active' : ''}`}
+                  onClick={() => handleSelectTimelineGroup('day')}
+                  style={{ padding: '2px 8px', fontSize: 11 }}
+                >
+                  {t('sessions.timelineGroup.day')}
+                </button>
+                <button
+                  className={`sessions-mode-tab ${timelineGroup === 'month' ? 'active' : ''}`}
+                  onClick={() => handleSelectTimelineGroup('month')}
+                  style={{ padding: '2px 8px', fontSize: 11 }}
+                >
+                  {t('sessions.timelineGroup.month')}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Group Expand/Collapse Actions (Only when in grouped modes) */}
-          {viewMode !== 'timeline' && groups.length > 0 && (
+          {(viewMode !== 'timeline' || timelineGroup !== 'none') && groups.length > 0 && (
             <div className="sessions-group-actions-bar">
               <span>
-                {groups.length}{' '}
                 {viewMode === 'project'
                   ? t('sessions.projectsCount', { count: groups.length })
                   : viewMode === 'machine'
                   ? t('sessions.machinesCount', { count: groups.length })
-                  : t('sessions.agentsCount', { count: groups.length })}
+                  : viewMode === 'agent'
+                  ? t('sessions.agentsCount', { count: groups.length })
+                  : timelineGroup === 'day'
+                  ? t('sessions.daysCount', { count: groups.length })
+                  : t('sessions.monthsCount', { count: groups.length })}
               </span>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="sessions-text-btn" onClick={expandAll}>
@@ -577,11 +687,11 @@ export default function SessionsView({
               <div style={{ padding: 32, textAlign: 'center', color: 'var(--muted)' }}>
                 {t('sessions.empty')}
               </div>
-            ) : viewMode === 'timeline' ? (
+            ) : viewMode === 'timeline' && timelineGroup === 'none' ? (
               // Timeline flat view
               sessions.map((item) => renderSessionCard(item, false))
             ) : (
-              // Grouped Accordion View (By Project / Machine / Agent)
+              // Grouped Accordion View (By Project / Machine / Agent / Date / Month)
               groups.map((group) => {
                 const isExpanded = isSearching ? true : !!expandedGroups[group.id]
 
@@ -649,6 +759,22 @@ export default function SessionsView({
                   </div>
                 )
               })
+            )}
+
+            {sessions.length > 0 && (
+              <div
+                style={{
+                  padding: '14px 12px 20px',
+                  textAlign: 'center',
+                  fontSize: 11,
+                  color: 'var(--muted)',
+                  borderTop: '1px solid rgba(255, 255, 255, 0.04)'
+                }}
+              >
+                {sessions.length >= total
+                  ? `✓ 已载入全部 ${total} 条历史会话（最早记录至 ${sessions[sessions.length - 1]?.updated_at?.slice(0, 10) || '2026-02'}）`
+                  : `已载入 ${sessions.length} / ${total} 条会话（包含至 ${sessions[sessions.length - 1]?.updated_at?.slice(0, 10) || ''}）`}
+              </div>
             )}
           </div>
         </div>

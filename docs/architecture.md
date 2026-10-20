@@ -62,6 +62,13 @@ be tested from fixtures with no machine and no network.
       parse_config()   normalized + whitelisted configuration
       sanitize()       recursive scrub
 
+`ParsedConfig.quota` is an optional, adapter-owned account-quota snapshot. The
+AGY adapter fills it from `agy-swap`'s local account registry (email, name,
+aliases, tier, weekly/5-hour buckets and reset times). It is an explicit
+whitelist assembled by the adapter rather than a view over the raw file; the
+registry's credential references are never copied. Quota files are auxiliary
+sources: an unreadable one does not lower the configuration `resolution`.
+
 Every adapter result passes through one central `scrub_config()` before it can
 be stored, so a future adapter cannot leak by forgetting to sanitize.
 
@@ -155,7 +162,7 @@ readable.
 ## Layout
 
     backend/agent_fleet/
-      inventory/      Ansible (YAML+INI), ssh config, project YAML
+      inventory/      Ansible (YAML+INI) and project YAML; no auto ssh-config import
       remotes/
         executor.py   Local / SSH / Windows / WSL runners
         probe.py      POSIX probe script + record parser

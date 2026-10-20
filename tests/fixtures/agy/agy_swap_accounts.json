@@ -1,0 +1,74 @@
+{
+  "alice@example.com": {
+    "email": "alice@example.com",
+    "name": "Alice Example",
+    "access_expires_at": "2026-10-20T06:44:43Z",
+    "secret_ref": "account:alice@example.com",
+    "token_hash": "sha256:fixture-token-hash-must-not-leak",
+    "token_data": "fixture-access-token-must-not-leak",
+    "quota_schema": 2,
+    "quota_snapshot": {
+      "tier": {"id": "g1-pro-tier", "name": "Google AI Pro"},
+      "observed_at": "2026-10-20T06:33:02.980606Z",
+      "groups": [
+        {
+          "id": "gemini",
+          "name": "Gemini models",
+          "buckets": [
+            {
+              "id": "gemini-5h",
+              "name": "5-Hour",
+              "window": "5h",
+              "remaining_fraction": 0.8235,
+              "reset_at": "2026-10-20T06:55:27Z"
+            }
+          ]
+        },
+        {
+          "id": "third_party",
+          "name": "Claude and GPT models",
+          "buckets": [
+            {
+              "id": "3p-weekly",
+              "name": "Weekly Limit Remaining",
+              "window": "weekly",
+              "remaining_fraction": 1,
+              "reset_at": "2026-10-27T06:33:02Z"
+            },
+            {
+              "id": "3p-5h",
+              "name": "Five Hour Limit Remaining",
+              "window": "5h",
+              "remaining_fraction": 0.5,
+              "reset_at": "2026-10-20T11:33:02Z"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "bob@example.com": {
+    "email": "bob@example.com",
+    "name": "Bob Example",
+    "secret_ref": "account:bob@example.com",
+    "quota_snapshot": {
+      "tier": {"id": "g1-pro-tier", "name": "Google AI Pro"},
+      "observed_at": "2026-10-20T05:00:00Z",
+      "groups": [
+        {
+          "id": "gemini",
+          "name": "Gemini models",
+          "buckets": [
+            {
+              "id": "gemini-weekly",
+              "name": "Weekly",
+              "window": "weekly",
+              "remaining_fraction": 0.01,
+              "reset_at": "2026-10-23T23:19:44Z"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

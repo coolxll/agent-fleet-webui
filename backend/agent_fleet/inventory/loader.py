@@ -285,10 +285,12 @@ def load_all(settings) -> list[DiscoveredHost]:
         elif p.exists():
             add_many(load_ansible_inventory(p))
 
-    add_many(load_ssh_config(settings.ssh_config_path))
+    # ~/.ssh/config is deliberately NOT read automatically. The fleet is
+    # exactly what the inventory files declare; an SSH alias alone must not
+    # create a host row.
 
-    # inventory.yaml can exclude hosts outright (for example ssh aliases that
-    # are not part of the fleet). Exclusions win over every source.
+    # inventory.yaml can still exclude hosts explicitly. Exclusions win over
+    # every source.
     excluded: set[str] = set()
     for p in settings.inventory_paths:
         p = Path(p)

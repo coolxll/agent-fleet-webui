@@ -127,6 +127,7 @@ def _config_view(inst):
         "mcp_servers": cfg.mcp_servers,
         "skills": cfg.skills,
         "settings": cfg.settings,
+        "quota": cfg.quota,
         "unsupported_fields": cfg.unsupported_fields,
         "warnings": cfg.warnings,
         "collected_at": _iso(cfg.collected_at),

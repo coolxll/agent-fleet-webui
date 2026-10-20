@@ -203,6 +203,8 @@ class AgentConfiguration(Base):
     mcp_servers: Mapped[list | None] = mapped_column(JSON, nullable=True)
     skills: Mapped[list | None] = mapped_column(JSON, nullable=True)
     settings: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Optional sanitized account-quota snapshot (agy-swap and similar).
+    quota: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     unsupported_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
     sanitized: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 

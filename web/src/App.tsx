@@ -4,12 +4,13 @@ import MachinesView from './views/MachinesView'
 import AgentsView from './views/AgentsView'
 import Matrix from './views/Matrix'
 import SessionsView from './views/SessionsView'
+import QuotasView from './views/QuotasView'
 import SettingsModal from './components/SettingsModal'
 import TasksDrawer from './components/TasksDrawer'
 import { useI18n } from './i18n'
 import { UpgradesProvider, useUpgrades } from './context/UpgradesContext'
 
-type ViewTab = 'machines' | 'agents' | 'matrix' | 'sessions'
+type ViewTab = 'machines' | 'agents' | 'quotas' | 'matrix' | 'sessions'
 
 function AppShell({
   toast,
@@ -123,6 +124,12 @@ function AppShell({
               🤖 {t('nav.agents')}
             </button>
             <button
+              className={tab === 'quotas' ? 'active' : ''}
+              onClick={() => handleTabSwitch('quotas')}
+            >
+              🪙 {t('nav.quotas')}
+            </button>
+            <button
               className={tab === 'matrix' ? 'active' : ''}
               onClick={() => handleTabSwitch('matrix')}
             >
@@ -210,6 +217,7 @@ function AppShell({
       <main className="container">
         {tab === 'machines' && <MachinesView refreshSignal={refreshSignal} />}
         {tab === 'agents' && <AgentsView refreshSignal={refreshSignal} />}
+        {tab === 'quotas' && <QuotasView refreshSignal={refreshSignal} />}
         {tab === 'matrix' && <Matrix refreshSignal={refreshSignal} />}
         {tab === 'sessions' && <SessionsView setToast={setToast} />}
       </main>
