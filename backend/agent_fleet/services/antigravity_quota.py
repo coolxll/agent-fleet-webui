@@ -65,8 +65,8 @@ def _require_client_secret(client_id: str) -> str:
     )
 
 
-API = "https://cloudcode-pa.googleapis.com/v1internal:"
-FALLBACK_API = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
+API = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
+PROD_API = "https://cloudcode-pa.googleapis.com/v1internal:"
 TIERS = {"free-tier": "Free", "g1-pro-tier": "Google AI Pro", "g1-ultra-tier": "Google AI Ultra", "g1-ultra-lite-tier": "Google AI Ultra Lite"}
 
 
@@ -414,13 +414,6 @@ async def _fetch(credential: dict) -> dict:
                     await refresh()
                     return await request_json(client, method, endpoint, operation, headers={
                         "Authorization": "Bearer " + credential["access_token"], "User-Agent": "antigravity"}, **kwargs)
-                if API in endpoint:
-                    fallback_ep = endpoint.replace(API, FALLBACK_API)
-                    try:
-                        return await request_json(client, method, fallback_ep, operation, headers={
-                            "Authorization": "Bearer " + credential["access_token"], "User-Agent": "antigravity"}, **kwargs)
-                    except Exception:
-                        pass
                 raise
 
         user = await call("GET", "https://www.googleapis.com/oauth2/v1/userinfo", "Google identity")
@@ -430,10 +423,20 @@ async def _fetch(credential: dict) -> dict:
         project = info.get("cloudaicompanionProject")
         if not isinstance(project, str) or not project:
             raise QuotaProviderError("Google returned no Code Assist project")
-        summary = await call("POST", API + "retrieveUserQuotaSummary", "retrieveUserQuotaSummary", json={"project": project})
-        groups = quota_groups(summary)
 
-        # 尝试从已有的 group 中获取周重置基准时间
+        # 1. 优先从 PROD_API 获取 retrieveUserQuotaSummary（包含全局周限额与多模型池）
+        summary = None
+        for base in (PROD_API, API):
+            try:
+                res = await call("POST", base + "retrieveUserQuotaSummary", "retrieveUserQuotaSummary", json={"project": project})
+                if res and res.get("groups"):
+                    summary = res
+                    break
+            except Exception:
+                pass
+        groups = quota_groups(summary) if summary else []
+
+        # 2. 从 API (Daily) 获取 fetchAvailableModels（包含实时 5 小时滚动消耗与各模型配额）
         ref_weekly_reset = None
         for g in groups:
             for b in g.get("buckets", []):
@@ -443,33 +446,49 @@ async def _fetch(credential: dict) -> dict:
             if ref_weekly_reset:
                 break
 
-        gemini_group_obj = next((g for g in groups if g["id"] == "gemini"), None)
-        has_gemini = gemini_group_obj is not None
-        has_gemini_weekly = gemini_group_obj is not None and any(b.get("window") == "weekly" for b in gemini_group_obj.get("buckets", []))
+        try:
+            models = await call("POST", API + "fetchAvailableModels", "fetchAvailableModels", json={"project": project})
+            model_groups = gemini_groups_from_models(models, reference_weekly_reset=ref_weekly_reset)
+        except Exception:
+            model_groups = []
 
-        if not has_gemini or not has_gemini_weekly:
-            try:
-                models = await call("POST", API + "fetchAvailableModels", "fetchAvailableModels", json={"project": project})
-                model_groups = gemini_groups_from_models(models, reference_weekly_reset=ref_weekly_reset)
-                if not has_gemini:
-                    for mg in reversed(model_groups):
-                        if not any(g["id"] == mg["id"] for g in groups):
-                            groups.insert(0, mg)
-                else:
-                    fallback_gemini = next((mg for mg in model_groups if mg["id"] == "gemini"), None)
-                    if fallback_gemini:
-                        existing_windows = {b["window"] for b in gemini_group_obj.get("buckets", [])}
-                        for b in fallback_gemini.get("buckets", []):
-                            if b["window"] not in existing_windows:
-                                gemini_group_obj["buckets"].append(b)
-                        gemini_group_obj["buckets"].sort(key=lambda b: 0 if b["window"] == "5h" else 1)
-                    fallback_g4 = next((mg for mg in model_groups if mg["id"] == "gemini_4"), None)
-                    if fallback_g4 and not any(g["id"] == "gemini_4" for g in groups):
-                        idx = next((i for i, g in enumerate(groups) if g["id"] == "gemini"), -1)
-                        groups.insert(idx + 1, fallback_g4)
-            except QuotaProviderError:
-                if not groups:
-                    raise
+        # 3. 融合逻辑（参考 yetone/magpie 中的 pools + modelInfo 融合机制）：
+        # Gemini 模型的周限额取自 retrieveUserQuotaSummary，5 小时限额取自 daily fetchAvailableModels 的真实滚动余量
+        gemini_group_obj = next((g for g in groups if g["id"] == "gemini"), None)
+        model_gemini_obj = next((mg for mg in model_groups if mg["id"] == "gemini"), None)
+
+        if not gemini_group_obj:
+            if model_gemini_obj:
+                groups.insert(0, model_gemini_obj)
+        else:
+            if model_gemini_obj:
+                mod_5h = next((b for b in model_gemini_obj["buckets"] if b["window"] == "5h"), None)
+                if mod_5h:
+                    g_5h = next((b for b in gemini_group_obj["buckets"] if b["window"] == "5h"), None)
+                    if g_5h:
+                        g_5h["remaining_fraction"] = mod_5h["remaining_fraction"]
+                        g_5h["reset_at"] = mod_5h["reset_at"]
+                    else:
+                        gemini_group_obj["buckets"].append(mod_5h)
+            if not any(b["window"] == "5h" for b in gemini_group_obj["buckets"]):
+                gemini_group_obj["buckets"].append({
+                    "id": "gemini-5h",
+                    "name": "Five Hour Limit Remaining",
+                    "window": "5h",
+                    "remaining_fraction": 1.0,
+                    "reset_at": _iso(datetime.now(timezone.utc) + timedelta(hours=5))
+                })
+
+        # 检查并注入 Gemini 4 / Argon 独立配额组
+        model_g4_obj = next((mg for mg in model_groups if mg["id"] == "gemini_4"), None)
+        if model_g4_obj and not any(g["id"] == "gemini_4" for g in groups):
+            idx = next((i for i, g in enumerate(groups) if g["id"] == "gemini"), -1)
+            groups.insert(idx + 1, model_g4_obj)
+
+        # 保证每个组内的排序与 agy cli 一致：周限额在前，5 小时限额在后
+        for g in groups:
+            g["buckets"].sort(key=lambda b: 0 if b["window"] == "weekly" else (1 if b["window"] == "5h" else 2))
+
         if not groups:
             raise QuotaProviderError("Google returned no quota groups")
         tier = info.get("paidTier") or info.get("currentTier") or {}
