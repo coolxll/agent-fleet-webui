@@ -43,11 +43,22 @@ PROVIDERS: dict[str, dict] = {
     "workbuddy": {
         "id": "workbuddy",
         "name": "WorkBuddy / CodeBuddy",
-        "agent": "workbuddy",
-        "credential_label": "Workbuddy auth JSON / token",
+        "agent": "codebuddy",
+        "credential_label": "Workbuddy / Codebuddy auth JSON or token",
         "credential_hint": (
-            "Paste Workbuddy auth.json, workbuddy-*.json, or Bearer accessToken. "
-            "Supports both CodeBuddy CN and Workbuddy Global."
+            "Leave blank or enter 'auto' to auto-detect from local CodeBuddyExtension, "
+            "or paste auth.json / Bearer accessToken. Supports both CodeBuddy CN and Workbuddy Global."
+        ),
+        "online": True,
+    },
+    "codebuddy": {
+        "id": "codebuddy",
+        "name": "CodeBuddy",
+        "agent": "codebuddy",
+        "credential_label": "Codebuddy auth JSON or token",
+        "credential_hint": (
+            "Leave blank or enter 'auto' to auto-detect from local CodeBuddyExtension, "
+            "or paste auth.json / Bearer accessToken. Supports both CodeBuddy CN and Workbuddy Global."
         ),
         "online": True,
     },
@@ -285,7 +296,7 @@ async def fetch_account(provider: str, raw_credential: str) -> dict:
     if provider == "codex":
         normalized = _parse_codex_credential(raw_credential)
         return await _fetch_codex(normalized)
-    if provider == "workbuddy":
+    if provider in ("workbuddy", "codebuddy"):
         from agent_fleet.services.workbuddy_quota import fetch
 
         return await fetch(raw_credential)

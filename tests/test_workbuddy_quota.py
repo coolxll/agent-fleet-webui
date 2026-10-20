@@ -56,15 +56,40 @@ def test_parse_credential_nested_json():
     assert res["nickname"] == "GlobalTester"
 
 
-def test_parse_credential_empty():
+def test_parse_credential_empty(monkeypatch):
+    monkeypatch.setattr(wb, "find_local_workbuddy_auth", lambda: None)
     with pytest.raises(QuotaProviderError, match="empty"):
         wb.parse_credential("   ")
+
+
+def test_parse_credential_auto_detected(monkeypatch):
+    dummy_auth = json.dumps({"auth": {"accessToken": "auto-found-token"}, "account": {"uid": "auto-uid"}})
+    monkeypatch.setattr(wb, "find_local_workbuddy_auth", lambda: dummy_auth)
+    res = wb.parse_credential("auto")
+    assert res["access_token"] == "auto-found-token"
+    assert res["uid"] == "auto-uid"
+
+
+def test_codebuddy_provider_alias(monkeypatch):
+    dummy_auth = json.dumps({"auth": {"accessToken": "alias-token"}})
+    def handler(request: httpx.Request):
+        assert request.headers.get("User-Agent") == "WorkBuddy/5.5.6"
+        return httpx.Response(200, json={"code": 0, "Response": {"Data": {"Accounts": []}}})
+
+    orig_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: orig_client(transport=httpx.MockTransport(handler), **kw),
+    )
+    res = asyncio.run(fetch_account("codebuddy", dummy_auth))
+    assert res["quota"]["source"] == "workbuddy"
 
 
 def test_fetch_workbuddy_cn_success(monkeypatch):
     def handler(request: httpx.Request):
         assert request.url.host == "www.codebuddy.cn"
-        assert request.url.path == "/v2/billing/meter/get-user-resource"
+        assert request.url.path in ("/billing/meter/get-user-resource", "/v2/billing/meter/get-user-resource")
         assert request.headers["Authorization"] == "Bearer cn-token"
         assert request.headers["X-User-Id"] == "cn-user-99"
 
@@ -190,3 +215,38 @@ def test_fetch_workbuddy_global_fallback(monkeypatch):
     account = result["quota"]["accounts"][0]
     assert account["min_remaining_fraction"] == 0.8
     assert account["groups"][0]["buckets"][0]["remaining"] == 400
+
+
+def test_workbuddy_identity_is_stable_and_realm_scoped(monkeypatch):
+    def handler(request: httpx.Request):
+        return httpx.Response(200, json={"code": 0, "Response": {"Data": {"Accounts": []}}})
+
+    orig_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: orig_client(transport=httpx.MockTransport(handler), **kw),
+    )
+
+    cn_one = asyncio.run(wb.fetch("cn-token-one"))
+    cn_one_again = asyncio.run(wb.fetch("Bearer cn-token-one"))
+    cn_two = asyncio.run(wb.fetch("cn-token-two"))
+    global_one = asyncio.run(wb.fetch(json.dumps({
+        "accessToken": "global-token-one",
+        "realm": "global",
+        "uid": "same-user",
+    })))
+    cn_uid = asyncio.run(wb.fetch(json.dumps({
+        "accessToken": "cn-user-token",
+        "domain": "www.codebuddy.cn",
+        "uid": "same-user",
+    })))
+
+    first_id = cn_one["identity"]["account_id"]
+    assert first_id == cn_one_again["identity"]["account_id"]
+    assert first_id != cn_two["identity"]["account_id"]
+    assert cn_one["identity"]["email"] is None
+    assert "cn-token-one" not in first_id
+    assert global_one["identity"]["account_id"] != cn_uid["identity"]["account_id"]
+    assert global_one["identity"]["email"] == cn_uid["identity"]["email"] == "same-user@workbuddy"
+    assert cn_uid["credential"]["uid"] == "same-user"

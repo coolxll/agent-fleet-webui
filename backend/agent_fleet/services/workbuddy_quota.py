@@ -6,8 +6,11 @@ remaining credits, usage, and reset windows.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -34,10 +37,60 @@ def _parse_cycle_time(time_str: str | None) -> str | None:
     return None
 
 
-def parse_credential(raw: str) -> dict:
+def find_local_workbuddy_auth() -> str | None:
+    """Auto-detect local WorkBuddy / CodeBuddy login credential documents."""
+    home = Path.home()
+    candidate_dirs = [
+        home / "Library/Application Support/CodeBuddyExtension/Data/Public/auth",
+        home / ".local/share/CodeBuddyExtension/Data/Public/auth",
+        home / ".codebuddy",
+        home / ".workbuddy",
+    ]
+    appdata = os.environ.get("LOCALAPPDATA")
+    if appdata:
+        candidate_dirs.append(Path(appdata) / "CodeBuddyExtension/Data/Public/auth")
+
+    file_priorities = [
+        "Tencent-Cloud.coding-copilot.info",
+        "workbuddy-desktop.info",
+        "workbuddy-desktop-ai.info",
+    ]
+
+    for d in candidate_dirs:
+        if not d.is_dir():
+            continue
+        for name in file_priorities:
+            f = d / name
+            if f.is_file():
+                try:
+                    txt = f.read_text(encoding="utf-8").strip()
+                    if txt:
+                        data = json.loads(txt)
+                        auth = data.get("auth", {})
+                        if auth.get("accessToken") or auth.get("access_token"):
+                            return txt
+                except Exception:
+                    continue
+        for f in d.glob("*.info"):
+            try:
+                txt = f.read_text(encoding="utf-8").strip()
+                if txt:
+                    data = json.loads(txt)
+                    auth = data.get("auth", {})
+                    if auth.get("accessToken") or auth.get("access_token"):
+                        return txt
+            except Exception:
+                continue
+    return None
+
+
+def parse_credential(raw: str | None) -> dict:
     text = (raw or "").strip()
-    if not text:
-        raise QuotaProviderError("Workbuddy credential is empty")
+    if not text or text.lower() == "auto":
+        local_auth = find_local_workbuddy_auth()
+        if not local_auth:
+            raise QuotaProviderError("Workbuddy credential is empty and no local CodeBuddyExtension login found")
+        text = local_auth
 
     if text.lower().startswith("bearer "):
         text = text[7:].strip()
@@ -145,19 +198,21 @@ async def fetch(raw_credential: str | dict) -> dict:
 
     is_global = _is_global(cred)
     base_domain = "www.workbuddy.ai" if is_global else "www.codebuddy.cn"
-    paths = (
-        ["/billing/meter/get-user-resource", "/v2/billing/meter/get-user-resource"]
-        if is_global
-        else ["/v2/billing/meter/get-user-resource"]
-    )
+    paths = [
+        "/billing/meter/get-user-resource",
+        "/v2/billing/meter/get-user-resource",
+    ]
 
     headers = {
         "Authorization": f"Bearer {cred['access_token']}",
         "Content-Type": "application/json",
         "Accept": "application/json",
+        "User-Agent": "WorkBuddy/5.5.6",
         "Origin": f"https://{base_domain}",
         "Referer": f"https://{base_domain}/",
         "X-Domain": base_domain,
+        "X-Product": "SaaS",
+        "X-IDE-Type": "WorkBuddy",
     }
     if cred.get("uid"):
         headers["X-User-Id"] = cred["uid"]
@@ -212,8 +267,10 @@ async def fetch(raw_credential: str | dict) -> dict:
         raise QuotaProviderError(f"Workbuddy API request failed: {last_error or 'no response'}")
 
     # Extract accounts and dosages
-    resp_obj = payload.get("Response") or payload.get("data") or payload
-    data_obj = resp_obj.get("Data") if isinstance(resp_obj, dict) else {}
+    resp_obj = payload.get("data") or payload.get("Response") or payload
+    if isinstance(resp_obj, dict) and "Response" in resp_obj:
+        resp_obj = resp_obj["Response"]
+    data_obj = resp_obj.get("Data") or resp_obj.get("data") or resp_obj
     raw_accounts = data_obj.get("Accounts") or []
     total_dosage = int(data_obj.get("TotalDosage") or 0)
 
@@ -314,11 +371,24 @@ async def fetch(raw_credential: str | dict) -> dict:
     ]
 
     observed_at = _iso(datetime.now(timezone.utc))
-    account_uid = cred.get("uid") or "workbuddy-user"
+    realm = "global" if is_global else "cn"
+    account_uid = cred.get("uid")
     display_name = cred.get("nickname") or cred.get("uid") or "Workbuddy"
 
+    # Workbuddy credentials do not always include a user id. Do not invent an
+    # email-shaped identity in that case: use a one-way token fingerprint for
+    # stable, private deduplication. Realm is part of the key because CN and
+    # Global user-id spaces are independent.
+    if account_uid:
+        account_id = f"workbuddy:{realm}:uid:{account_uid}"
+        email = f"{account_uid}@workbuddy" if "@" not in str(account_uid) else account_uid
+    else:
+        token_fingerprint = hashlib.sha256(cred["access_token"].encode("utf-8")).hexdigest()
+        account_id = f"workbuddy:{realm}:token:{token_fingerprint}"
+        email = None
+
     account = {
-        "email": f"{account_uid}@workbuddy" if "@" not in str(account_uid) else account_uid,
+        "email": email,
         "name": display_name,
         "tier": {"id": "workbuddy", "name": "WorkBuddy Global" if is_global else "WorkBuddy CN"},
         "observed_at": observed_at,
@@ -339,6 +409,7 @@ async def fetch(raw_credential: str | dict) -> dict:
         },
         "identity": {
             "email": account["email"],
+            "account_id": account_id,
             "name": account["name"],
             "plan": account["tier"]["name"],
         },

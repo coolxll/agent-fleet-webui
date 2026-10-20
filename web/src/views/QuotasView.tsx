@@ -76,7 +76,7 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
   const submit = async () => {
     let cred = credential.trim()
     if (!cred) {
-      if (provider === 'qodercn') {
+      if (provider === 'qodercn' || provider === 'workbuddy' || provider === 'codebuddy') {
         cred = 'auto'
       } else {
         setAddError(t('quotas.credentialRequired'))

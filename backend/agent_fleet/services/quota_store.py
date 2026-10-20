@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +20,11 @@ from agent_fleet.settings import get_settings
 
 STORE_VERSION = 1
 STORE_NAME = "quota_accounts.json"
+
+# The store is used by the API process and synchronous routes may run in a
+# thread pool. Keep file read/modify/write sequences atomic within that process.
+# Never hold this lock while fetching a provider response.
+_STORE_LOCK = threading.RLock()
 
 
 def _now() -> str:
@@ -95,18 +101,22 @@ def public_account(account: dict) -> dict:
 
 
 def list_accounts() -> list[dict]:
-    return [public_account(a) for a in _read()["accounts"]]
+    with _STORE_LOCK:
+        return [public_account(a) for a in _read()["accounts"]]
 
 
 def get_account(account_id: str) -> dict | None:
-    return next(
-        (a for a in _read()["accounts"] if a.get("id") == account_id), None
-    )
+    with _STORE_LOCK:
+        return next(
+            (a for a in _read()["accounts"] if a.get("id") == account_id), None
+        )
 
 
 def _apply_result(account: dict, result: dict) -> None:
     identity = result.get("identity") or {}
     account["credential"] = result.get("credential") or account.get("credential")
+    if identity.get("account_id"):
+        account["account_id"] = identity["account_id"]
     account["email"] = identity.get("email") or account.get("email")
     account["name"] = identity.get("name") or account.get("name")
     account["plan"] = identity.get("plan")
@@ -121,70 +131,119 @@ async def add_account(provider: str, label: str | None, raw_credential: str) -> 
     if provider not in quota_providers.PROVIDERS:
         raise ValueError(f"unsupported provider: {provider}")
     result = await quota_providers.fetch_account(provider, raw_credential)
-    data = _read()
-    ident_email = result.get("identity", {}).get("email")
-    ident_uid = result.get("credential", {}).get("uid")
-    existing = next(
-        (
-            a
-            for a in data["accounts"]
-            if a.get("provider") == provider
-            and (
-                (ident_email and a.get("email") == ident_email)
-                or (ident_uid and a.get("credential", {}).get("uid") == ident_uid)
+    with _STORE_LOCK:
+        data = _read()
+        identity = result.get("identity", {})
+        result_credential = result.get("credential", {})
+        stable_account_id = identity.get("account_id")
+        ident_email = identity.get("email")
+        ident_uid = result_credential.get("uid")
+        existing = next(
+            (
+                a
+                for a in data["accounts"]
+                if a.get("provider") == provider
+                and (
+                    (a.get("account_id") == stable_account_id)
+                    if stable_account_id
+                    else (
+                        (ident_email and a.get("email") == ident_email)
+                        or (ident_uid and a.get("credential", {}).get("uid") == ident_uid)
+                    )
+                )
+            ),
+            None,
+        )
+        if existing is None and stable_account_id:
+            # Upgrade a legacy row only with a realm plus matching credential
+            # identifier; email or raw uid alone can collide across realms.
+            realm = str(result_credential.get("realm") or "").lower()
+            token = result_credential.get("access_token")
+            existing = next(
+                (
+                    a for a in data["accounts"]
+                    if a.get("provider") == provider
+                    and not a.get("account_id")
+                    and realm
+                    and str(a.get("credential", {}).get("realm") or "").lower() == realm
+                    and (
+                        (token and a.get("credential", {}).get("access_token") == token)
+                        or (ident_uid and a.get("credential", {}).get("uid") == ident_uid)
+                    )
+                ),
+                None,
             )
-        ),
-        None,
-    )
-    if existing:
-        if label and label.strip():
-            existing["label"] = label.strip()[:120]
-        _apply_result(existing, result)
+        if existing:
+            if label and label.strip():
+                existing["label"] = label.strip()[:120]
+            _apply_result(existing, result)
+            _write(data)
+            return public_account(existing)
+        account = {
+            "id": models.new_id(),
+            "provider": provider,
+            "label": (label or "").strip()[:120] or None,
+            "status": "ok",
+            "created_at": _now(),
+            "updated_at": _now(),
+        }
+        _apply_result(account, result)
+        data["accounts"].append(account)
         _write(data)
-        return public_account(existing)
-    account = {
-        "id": models.new_id(),
-        "provider": provider,
-        "label": (label or "").strip()[:120] or None,
-        "status": "ok",
-        "created_at": _now(),
-        "updated_at": _now(),
-    }
-    _apply_result(account, result)
-    data["accounts"].append(account)
-    _write(data)
-    return public_account(account)
+        return public_account(account)
 
 
 async def refresh_account(account_id: str) -> dict:
-    data = _read()
-    account = next((a for a in data["accounts"] if a.get("id") == account_id), None)
-    if account is None:
-        raise KeyError(account_id)
-    credential = account.get("credential")
-    if not isinstance(credential, dict):
-        raise ValueError("stored credential is missing")
-    raw = json.dumps(credential)
+    with _STORE_LOCK:
+        data = _read()
+        account = next((a for a in data["accounts"] if a.get("id") == account_id), None)
+        if account is None:
+            raise KeyError(account_id)
+        credential = account.get("credential")
+        if not isinstance(credential, dict):
+            raise ValueError("stored credential is missing")
+        # Keep an immutable snapshot for optimistic credential rotation checks.
+        credential_snapshot = json.loads(json.dumps(credential))
+        provider = account.get("provider", "")
     try:
-        result = await quota_providers.fetch_account(account.get("provider", ""), raw)
+        result = await quota_providers.fetch_account(provider, json.dumps(credential_snapshot))
     except Exception as exc:
-        if isinstance(getattr(exc, "credential", None), dict):
-            account["credential"] = exc.credential
-        account["status"] = "error"
-        account["last_error"] = str(exc)[:300]
-        account["updated_at"] = _now()
-        _write(data)
+        with _STORE_LOCK:
+            data = _read()
+            account = next((a for a in data["accounts"] if a.get("id") == account_id), None)
+            if account is None:
+                raise KeyError(account_id) from exc
+            # A concurrent refresh may have rotated the credential. Do not let
+            # an error response based on an older token replace it.
+            if account.get("credential") == credential_snapshot:
+                if isinstance(getattr(exc, "credential", None), dict):
+                    account["credential"] = exc.credential
+                account["status"] = "error"
+                account["last_error"] = str(exc)[:300]
+                account["updated_at"] = _now()
+                _write(data)
         raise
-    _apply_result(account, result)
-    _write(data)
-    return public_account(account)
+    with _STORE_LOCK:
+        data = _read()
+        account = next((a for a in data["accounts"] if a.get("id") == account_id), None)
+        if account is None:
+            raise KeyError(account_id)
+        current_credential = account.get("credential")
+        rotated_credential = current_credential != credential_snapshot
+        _apply_result(account, result)
+        if rotated_credential:
+            # Preserve a newer credential written by another refresh.
+            account["credential"] = current_credential
+        _write(data)
+        return public_account(account)
 
 
 def delete_account(account_id: str) -> bool:
-    data = _read()
-    before = len(data["accounts"])
-    data["accounts"] = [a for a in data["accounts"] if a.get("id") != account_id]
-    if len(data["accounts"]) == before:
-        return False
-    _write(data)
-    return True
+    with _STORE_LOCK:
+        data = _read()
+        before = len(data["accounts"])
+        data["accounts"] = [a for a in data["accounts"] if a.get("id") != account_id]
+        if len(data["accounts"]) == before:
+            return False
+        _write(data)
+        return True
