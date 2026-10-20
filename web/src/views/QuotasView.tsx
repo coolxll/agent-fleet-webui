@@ -138,14 +138,6 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
     }
   }
 
-  const lowestColor =
-    totals.lowest === null
-      ? undefined
-      : totals.lowest > 0.3
-        ? 'var(--ok)'
-        : totals.lowest > 0.1
-          ? 'var(--warn)'
-          : 'var(--bad)'
 
   return (
     <div>
@@ -254,11 +246,25 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
           <div className="hint">{t('quotas.healthy', { count: totals.ok })}</div>
         </div>
         <div className="card">
-          <div className="label">{t('quotas.lowest')}</div>
-          <div className="value" style={{ color: lowestColor }}>
-            {totals.lowest === null ? '—' : `${(totals.lowest * 100).toFixed(1)}%`}
+          <div className="label">{t('quotas.healthyRate')}</div>
+          <div
+            className="value"
+            style={{
+              color:
+                totals.accounts === 0
+                  ? undefined
+                  : totals.ok === totals.accounts
+                    ? 'var(--ok)'
+                    : totals.ok > 0
+                      ? 'var(--warn)'
+                      : 'var(--bad)'
+            }}
+          >
+            {totals.accounts === 0 ? '—' : `${((totals.ok / totals.accounts) * 100).toFixed(0)}%`}
           </div>
-          <div className="hint">{t('quotas.lowestHint')}</div>
+          <div className="hint">
+            {t('quotas.healthyRateHint', { ok: totals.ok, total: totals.accounts })}
+          </div>
         </div>
         <div className="card">
           <div className="label">{t('quotas.online')}</div>

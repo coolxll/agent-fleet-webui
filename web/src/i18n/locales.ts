@@ -381,7 +381,9 @@ export const translations = {
     'quotas.machinesCovered': 'across {count} machine(s)',
     'quotas.snapshots': 'Snapshots',
     'quotas.snapshotsHint': 'one per agent installation',
-    'quotas.lowestHint': 'across every account'
+    'quotas.lowestHint': 'across every account',
+    'quotas.healthyRate': 'Ready Rate',
+    'quotas.healthyRateHint': '{ok} of {total} accounts healthy'
   },
   zh: {
     // Navigation & header
@@ -763,7 +765,9 @@ export const translations = {
     'quotas.machinesCovered': '覆盖 {count} 台机器',
     'quotas.snapshots': '快照数',
     'quotas.snapshotsHint': '每个 Agent 安装一条',
-    'quotas.lowestHint': '所有账号中的最低值'
+    'quotas.lowestHint': '所有账号中的最低值',
+    'quotas.healthyRate': '账号就绪率',
+    'quotas.healthyRateHint': '{ok} / {total} 个账号正常就绪'
   }
 } as const
 

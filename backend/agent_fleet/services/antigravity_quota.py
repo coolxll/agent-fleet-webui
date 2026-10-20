@@ -65,7 +65,8 @@ def _require_client_secret(client_id: str) -> str:
     )
 
 
-API = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
+API = "https://cloudcode-pa.googleapis.com/v1internal:"
+FALLBACK_API = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
 TIERS = {"free-tier": "Free", "g1-pro-tier": "Google AI Pro", "g1-ultra-tier": "Google AI Ultra", "g1-ultra-lite-tier": "Google AI Ultra Lite"}
 
 
@@ -231,6 +232,8 @@ def quota_groups(summary: dict) -> list[dict]:
                 seen_windows.add(item["window"])
                 
         if parsed_buckets:
+            # 优先展示周限额，其次展示 5 小时限额（与 agy cli /usage 保持一致）
+            parsed_buckets.sort(key=lambda b: 0 if b["window"] == "weekly" else (1 if b["window"] == "5h" else 2))
             groups.append({
                 "id": group_id,
                 "name": group_name,
@@ -318,18 +321,17 @@ def gemini_groups_from_models(models: dict, reference_weekly_reset: str | None =
 
         if not has_weekly:
             weekly_reset = reference_weekly_reset or _iso(now + timedelta(days=7))
-            min_rem = min((c[1] for c in candidates), default=1.0)
             buckets.append({
                 "id": f"{gid}-weekly",
                 "name": "Weekly",
                 "window": "weekly",
-                "remaining_fraction": min_rem,
+                "remaining_fraction": 1.0,
                 "reset_at": weekly_reset
             })
 
         if not has_5h:
             five_h_reset = _iso(now + timedelta(hours=5))
-            buckets.insert(0, {
+            buckets.append({
                 "id": f"{gid}-5h",
                 "name": "5-Hour",
                 "window": "5h",
@@ -337,7 +339,7 @@ def gemini_groups_from_models(models: dict, reference_weekly_reset: str | None =
                 "reset_at": five_h_reset
             })
 
-        buckets.sort(key=lambda b: 0 if b["window"] == "5h" else 1)
+        buckets.sort(key=lambda b: 0 if b["window"] == "weekly" else (1 if b["window"] == "5h" else 2))
         return {"id": gid, "name": gname, "buckets": buckets}
 
     result = []
@@ -408,11 +410,18 @@ async def _fetch(credential: dict) -> dict:
                 return await request_json(client, method, endpoint, operation, headers={
                     "Authorization": "Bearer " + credential["access_token"], "User-Agent": "antigravity"}, **kwargs)
             except QuotaProviderError as exc:
-                if "HTTP 401" not in str(exc) or refreshed:
-                    raise
-                await refresh()
-                return await request_json(client, method, endpoint, operation, headers={
-                    "Authorization": "Bearer " + credential["access_token"], "User-Agent": "antigravity"}, **kwargs)
+                if "HTTP 401" in str(exc) and not refreshed:
+                    await refresh()
+                    return await request_json(client, method, endpoint, operation, headers={
+                        "Authorization": "Bearer " + credential["access_token"], "User-Agent": "antigravity"}, **kwargs)
+                if API in endpoint:
+                    fallback_ep = endpoint.replace(API, FALLBACK_API)
+                    try:
+                        return await request_json(client, method, fallback_ep, operation, headers={
+                            "Authorization": "Bearer " + credential["access_token"], "User-Agent": "antigravity"}, **kwargs)
+                    except Exception:
+                        pass
+                raise
 
         user = await call("GET", "https://www.googleapis.com/oauth2/v1/userinfo", "Google identity")
         if not user.get("email") or not (user.get("verified_email") or user.get("email_verified")):
