@@ -67,6 +67,7 @@ def _require_client_secret(client_id: str) -> str:
 
 API = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
 PROD_API = "https://cloudcode-pa.googleapis.com/v1internal:"
+USER_AGENT = "antigravity/2.24.0 (aidev_client; os_type=darwin; arch=arm64)"
 TIERS = {"free-tier": "Free", "g1-pro-tier": "Google AI Pro", "g1-ultra-tier": "Google AI Ultra", "g1-ultra-lite-tier": "Google AI Ultra Lite"}
 
 
@@ -279,7 +280,7 @@ def gemini_groups_from_models(models: dict, reference_weekly_reset: str | None =
             if not reset_str or not isinstance(reset_str, str):
                 continue
             reset = datetime.fromisoformat(reset_str.replace("Z", "+00:00"))
-            remaining = fraction(info.get("remainingFraction", 0))
+            remaining = fraction(info.get("remainingFraction"))
             if remaining is None:
                 continue
                 
@@ -314,30 +315,6 @@ def gemini_groups_from_models(models: dict, reference_weekly_reset: str | None =
                     "remaining_fraction": best[1],
                     "reset_at": best[3]
                 })
-
-        # 确保 Gemini models 拥有完整的 5h 和 weekly 双桶
-        has_5h = any(b["window"] == "5h" for b in buckets)
-        has_weekly = any(b["window"] == "weekly" for b in buckets)
-
-        if not has_weekly:
-            weekly_reset = reference_weekly_reset or _iso(now + timedelta(days=7))
-            buckets.append({
-                "id": f"{gid}-weekly",
-                "name": "Weekly Limit Remaining",
-                "window": "weekly",
-                "remaining_fraction": 1.0,
-                "reset_at": weekly_reset
-            })
-
-        if not has_5h:
-            five_h_reset = _iso(now + timedelta(hours=5))
-            buckets.append({
-                "id": f"{gid}-5h",
-                "name": "Five Hour Limit Remaining",
-                "window": "5h",
-                "remaining_fraction": 1.0,
-                "reset_at": five_h_reset
-            })
 
         buckets.sort(key=lambda b: 0 if b["window"] == "weekly" else (1 if b["window"] == "5h" else 2))
         return {"id": gid, "name": gname, "buckets": buckets}
@@ -408,12 +385,12 @@ async def _fetch(credential: dict) -> dict:
         async def call(method, endpoint, operation, **kwargs):
             try:
                 return await request_json(client, method, endpoint, operation, headers={
-                    "Authorization": "Bearer " + credential["access_token"], "User-Agent": "antigravity"}, **kwargs)
+                    "Authorization": "Bearer " + credential["access_token"], "User-Agent": USER_AGENT}, **kwargs)
             except QuotaProviderError as exc:
                 if "HTTP 401" in str(exc) and not refreshed:
                     await refresh()
                     return await request_json(client, method, endpoint, operation, headers={
-                        "Authorization": "Bearer " + credential["access_token"], "User-Agent": "antigravity"}, **kwargs)
+                        "Authorization": "Bearer " + credential["access_token"], "User-Agent": USER_AGENT}, **kwargs)
                 raise
 
         user = await call("GET", "https://www.googleapis.com/oauth2/v1/userinfo", "Google identity")
@@ -424,24 +401,26 @@ async def _fetch(credential: dict) -> dict:
         if not isinstance(project, str) or not project:
             raise QuotaProviderError("Google returned no Code Assist project")
 
-        # 1. 跨 PROD_API 与 API (Daily) 查询 retrieveUserQuotaSummary 并合并配额组（参考 openusage cloudCodeAllHosts）
+        # 1. 跨 API (Daily) 与 PROD_API 查询 retrieveUserQuotaSummary 并合并配额组（参考 openusage cloudCodeAllHosts 与 worst-case wins）
         summary_groups = []
-        seen_group_ids = set()
-        for base in (PROD_API, API):
+        for base in (API, PROD_API):
             try:
                 res = await call("POST", base + "retrieveUserQuotaSummary", "retrieveUserQuotaSummary", json={"project": project})
                 if res and res.get("groups"):
                     for g in quota_groups(res):
-                        if g["id"] not in seen_group_ids:
+                        existing = next((eg for eg in summary_groups if eg["id"] == g["id"]), None)
+                        if not existing:
                             summary_groups.append(g)
-                            seen_group_ids.add(g["id"])
                         else:
-                            existing = next((eg for eg in summary_groups if eg["id"] == g["id"]), None)
-                            if existing:
-                                existing_wins = {b["window"] for b in existing["buckets"]}
-                                for b in g["buckets"]:
-                                    if b["window"] not in existing_wins:
-                                        existing["buckets"].append(b)
+                            for b in g["buckets"]:
+                                eg_b = next((eb for eb in existing["buckets"] if eb["window"] == b["window"]), None)
+                                if not eg_b:
+                                    existing["buckets"].append(b)
+                                else:
+                                    # Worst-case wins: 如果另一个端点返回了更低（更真实）的余量，则更新
+                                    if b["remaining_fraction"] < eg_b["remaining_fraction"]:
+                                        eg_b["remaining_fraction"] = b["remaining_fraction"]
+                                        eg_b["reset_at"] = b["reset_at"]
             except Exception:
                 pass
         groups = summary_groups
@@ -468,24 +447,6 @@ async def _fetch(credential: dict) -> dict:
 
         if not gemini_group_obj:
             if model_gemini_obj:
-                has_5h = any(b["window"] == "5h" for b in model_gemini_obj["buckets"])
-                has_weekly = any(b["window"] == "weekly" for b in model_gemini_obj["buckets"])
-                if not has_5h:
-                    model_gemini_obj["buckets"].append({
-                        "id": "gemini-5h",
-                        "name": "Five Hour Limit Remaining",
-                        "window": "5h",
-                        "remaining_fraction": 1.0,
-                        "reset_at": _iso(datetime.now(timezone.utc) + timedelta(hours=5))
-                    })
-                if not has_weekly:
-                    model_gemini_obj["buckets"].append({
-                        "id": "gemini-weekly",
-                        "name": "Weekly Limit Remaining",
-                        "window": "weekly",
-                        "remaining_fraction": 1.0,
-                        "reset_at": _iso(datetime.now(timezone.utc) + timedelta(days=7))
-                    })
                 groups.insert(0, model_gemini_obj)
         else:
             if model_gemini_obj:
@@ -509,24 +470,6 @@ async def _fetch(credential: dict) -> dict:
                             g_weekly["reset_at"] = mod_weekly["reset_at"]
                     else:
                         gemini_group_obj["buckets"].append(mod_weekly)
-
-            # 确保 5h 和 weekly 双桶均存在
-            if not any(b["window"] == "5h" for b in gemini_group_obj["buckets"]):
-                gemini_group_obj["buckets"].append({
-                    "id": "gemini-5h",
-                    "name": "Five Hour Limit Remaining",
-                    "window": "5h",
-                    "remaining_fraction": 1.0,
-                    "reset_at": _iso(datetime.now(timezone.utc) + timedelta(hours=5))
-                })
-            if not any(b["window"] == "weekly" for b in gemini_group_obj["buckets"]):
-                gemini_group_obj["buckets"].append({
-                    "id": "gemini-weekly",
-                    "name": "Weekly Limit Remaining",
-                    "window": "weekly",
-                    "remaining_fraction": 1.0,
-                    "reset_at": _iso(datetime.now(timezone.utc) + timedelta(days=7))
-                })
 
         # 检查并注入 Gemini 4 / Argon 独立配额组
         model_g4_obj = next((mg for mg in model_groups if mg["id"] == "gemini_4"), None)
