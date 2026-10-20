@@ -51,6 +51,17 @@ PROVIDERS: dict[str, dict] = {
         ),
         "online": True,
     },
+    "qodercn": {
+        "id": "qodercn",
+        "name": "QoderCN",
+        "agent": "qoder",
+        "credential_label": "QoderCN auth / token",
+        "credential_hint": (
+            "Leave blank or enter 'auto' to auto-detect from ~/.qoder-cn/.auth/, "
+            "or paste decrypted user credentials / Bearer token."
+        ),
+        "online": True,
+    },
 }
 
 
@@ -276,6 +287,10 @@ async def fetch_account(provider: str, raw_credential: str) -> dict:
         return await _fetch_codex(normalized)
     if provider == "workbuddy":
         from agent_fleet.services.workbuddy_quota import fetch
+
+        return await fetch(raw_credential)
+    if provider == "qodercn":
+        from agent_fleet.services.qoder_quota import fetch
 
         return await fetch(raw_credential)
     raise QuotaProviderError(f"unsupported provider: {provider}")
