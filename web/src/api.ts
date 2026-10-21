@@ -132,7 +132,8 @@ export type QuotaBucket = {
   name: string
   window: 'weekly' | '5h' | string
   remaining_fraction: number
-  reset_at: string
+  reset_at?: string | null
+  reset_kind?: 'expires' | 'partial_expiry' | 'reset'
   used?: number | null
   total?: number | null
   remaining?: number | null
@@ -680,6 +681,8 @@ export function getUpdateCommand(
   else if (agent === 'agy') cmd = 'agy update'
   else if (agent === 'hermes')
     cmd = `hermes update || bash -c 'tmp=$(mktemp) && curl -fsSL ${HERMES_INSTALL_URL} -o $tmp && bash $tmp; status=$?; rm -f $tmp; exit $status'`
+  else if (agent === 'herdr') cmd = 'herdr update'
+  else if (agent === 'paseo') cmd = withFallback('npm install -g @getpaseo/cli@latest', npmFallback)
   else if (pkg) cmd = npmFallback
   else cmd = `npm install -g ${agent}@latest`
 

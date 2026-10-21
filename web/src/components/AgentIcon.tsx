@@ -20,8 +20,11 @@ const COLORS: Record<string, string> = {
   agy: '#4285f4',
   codebuddy: '#00b96f',
   workbuddy: '#00b96f',
+  trae: '#32d6a0',
   qoder: '#2adb5c',
-  qodercn: '#2adb5c'
+  qodercn: '#2adb5c',
+  herdr: '#60a5fa',
+  paseo: '#a855f7'
 }
 
 const LABELS: Record<string, string> = {
@@ -33,8 +36,11 @@ const LABELS: Record<string, string> = {
   agy: 'Antigravity (AGY)',
   codebuddy: 'CodeBuddy',
   workbuddy: 'WorkBuddy',
+  trae: 'Trae CN',
   qoder: 'Qoder',
-  qodercn: 'QoderCN'
+  qodercn: 'QoderCN',
+  herdr: 'Herdr',
+  paseo: 'Paseo'
 }
 
 const AGENT_OFFICIAL_URLS: Record<string, string> = {
@@ -46,8 +52,11 @@ const AGENT_OFFICIAL_URLS: Record<string, string> = {
   agy: 'https://deepmind.google',
   codebuddy: 'https://codebuddy.cn',
   workbuddy: 'https://codebuddy.cn',
+  trae: 'https://www.trae.cn',
   qoder: 'https://qoder.com.cn',
-  qodercn: 'https://qoder.com.cn'
+  qodercn: 'https://qoder.com.cn',
+  herdr: 'https://herdr.dev',
+  paseo: 'https://paseo.sh'
 }
 
 const AGENT_LOCAL_ICONS: Record<string, string> = {
@@ -60,7 +69,9 @@ const AGENT_LOCAL_ICONS: Record<string, string> = {
   codebuddy: '/icons/codebuddy.svg',
   workbuddy: '/icons/codebuddy.svg',
   qoder: '/icons/qoder.svg',
-  qodercn: '/icons/qoder.svg'
+  qodercn: '/icons/qoder.svg',
+  herdr: '/icons/herdr.svg',
+  paseo: '/icons/paseo.svg'
 }
 
 export function agentLabel(agent: string): string {
@@ -147,6 +158,15 @@ function Hermes() {
   )
 }
 
+function Trae() {
+  return (
+    <>
+      <path d="M4 5h16v4H14v11h-4V9H4z" fill="currentColor" />
+      <path d="M17 12h3v8h-3z" fill="currentColor" opacity="0.5" />
+    </>
+  )
+}
+
 function Qoder() {
   // shield with code brackets
   return (
@@ -155,6 +175,16 @@ function Qoder() {
       <path d="M9.5 10.5l-2 1.5 2 1.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M14.5 10.5l2 1.5-2 1.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M13 9.5l-2 5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </>
+  )
+}
+
+function Herdr() {
+  return (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M7 9l3 3-3 3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M13 15h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </>
   )
 }
@@ -168,8 +198,10 @@ const SHAPES: Record<string, () => JSX.Element> = {
   agy: Agy,
   codebuddy: CodeBuddy,
   workbuddy: CodeBuddy,
+  trae: Trae,
   qoder: Qoder,
-  qodercn: Qoder
+  qodercn: Qoder,
+  herdr: Herdr
 }
 
 export default function AgentIcon({ agent, size = 16, title }: Props) {

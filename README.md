@@ -1,13 +1,13 @@
 # Agent Fleet Explorer
 
-Read-only control plane for the AI coding agents installed across your
-machines. It answers one question per machine: **which agents are installed,
-and what are they configured to use?**
+Control plane for the AI coding agents installed across your machines:
+inspect installations and configuration, manage work on a task board, and
+observe Paseo services across the fleet.
 
-Phase 1 is discovery, collection and display only. It never modifies a remote
-machine, never installs anything, and never executes a command that comes from
-the web UI. The requirements it satisfies (and the verification behind each)
-are in `docs/requirements.md`.
+Discovery and configuration scans remain read-only. Explicit upgrade and task
+handoff actions can change the target machine; handoff starts a coding Agent
+in the selected existing working directory. The original discovery requirements
+and verification are in `docs/requirements.md`.
 
 Supported agents: Codex CLI, Claude Code, OpenCode, Pi, Hermes,
 Antigravity (AGY), CodeBuddy, and Qoder (QoderCN).
@@ -118,7 +118,10 @@ Nothing is duplicated: if a host appears in several sources it is stored once.
   credential (verified against the vendor's online API before it is saved),
   and the view shows the account, plan, weekly/5-hour bars, remaining
   percentage and reset countdown. Refreshing calls the online API in real time.
-  Accounts are grouped by Agent. Codex/ChatGPT and Antigravity are supported.
+  Accounts are grouped by Agent. Codex/ChatGPT, Antigravity, QoderCN,
+  WorkBuddy/CodeBuddy and Trae CN are supported. Trae CN accepts a
+  `Cloud-IDE-JWT` access token or JSON with `access_token` and optional
+  `device_id`; it reads the online credit summary and package details.
   Antigravity OAuth credentials are imported once; the backend independently
   renews access tokens and reads Google quota pools. Accounts have no machine
   association.
@@ -130,6 +133,44 @@ Nothing is duplicated: if a host appears in several sources it is stored once.
   `~/.gemini/agy-swap/accounts.json` (run `agy-swap limits --refresh` to update
   it). A normal scan only reads that snapshot; Agent Fleet never calls Google
   or writes to the remote machine.
+
+## Task board and handoff
+
+The **Task board** is for coding work; the header's **Jobs** drawer remains
+for administrative background jobs such as upgrades. A task keeps its goal,
+status, linked sessions and execution history across Agent changes.
+
+Create a task, optionally link an indexed session, then select a target runtime,
+Claude Code or Codex, and an existing absolute project directory. Preview the
+handoff before starting it. Agent status comes from Claude's structured output
+or Codex's app-server protocol; independently launched sessions may have unknown
+live status. A completed Agent turn moves work toward review, not user acceptance.
+When returning to an Agent on the same runtime and directory, automatic mode
+tries its previous native session. If that session cannot be resumed, select
+**New session**, preview again, and retry with the full available context.
+
+Use one backend worker for managed execution. Its connections belong to that
+process; shutdown cancels the executions it started, and restart marks unfinished
+stages as interrupted instead of assuming they are still running.
+
+Managed execution supports POSIX local and SSH runtimes. For a WSL target,
+use its own SSH runtime; native Windows/PowerShell and nested `wsl.exe` execution
+are not supported for managed handoff. Cross-machine handoff transfers context;
+prepare the target repository and working directory separately.
+
+## Daemons and supervisors
+
+The **Daemons** view and machine details show cached service observations per
+runtime for Paseo and Herdr: installation, daemon/server status, listen port or
+Unix socket, CLI/server version, upgrade availability, workspaces and sessions.
+Press **Refresh** to run read-only native CLI queries through the existing runners.
+Opening the page does not connect to remote machines. Services are not modified,
+started or stopped by these read-only observation checks.
+
+Paseo supplies its own Agent IDs, and Herdr tracks workspaces, panes and recognized
+coding agents. These observations retain their respective source tags (`paseo`, `herdr`).
+Failed checks keep previously retrieved data and mark it stale. Authentication, stopped
+servers and unsupported CLI schemas are shown as explicit statuses.
 
 ## Scanning
 
@@ -162,7 +203,8 @@ root):
 
 ## Security
 
-This is a read-only observer.
+Inventory/configuration scanning and Paseo observation are read-only. Explicit
+upgrade and coding-task execution actions use the target user's permissions.
 
 * Only whitelisted, known config paths are read; `.ssh/`, private keys,
   `.gnupg/`, `.aws/credentials`, `.npmrc`, `.netrc`, `.docker/config.json`,

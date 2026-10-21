@@ -12,9 +12,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent_fleet.api.routes import router
+from agent_fleet.api.daemon_routes import router as daemon_router
+from agent_fleet.api.paseo_routes import router as paseo_router
+from agent_fleet.api.task_routes import router as task_router
 from agent_fleet.db import create_all, init_engine
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
 from agent_fleet.services.scheduler import get_schedule
+from agent_fleet.services import task_service
 from agent_fleet.settings import ROOT, get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -28,6 +32,7 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     init_engine(settings.db_path)
     create_all()
+    task_service.recover_interrupted()
     if settings.include_local_runtime:
         try:
             add_local_runtime(settings)
@@ -45,7 +50,10 @@ async def lifespan(app: FastAPI):
             log.info("scheduled scanning enabled (every %ss)", schedule.interval_seconds)
     except Exception as exc:
         log.warning("scheduler start failed: %s", exc)
-    yield
+    try:
+        yield
+    finally:
+        await task_service.shutdown()
 
 
 app = FastAPI(title="Agent Fleet Explorer", version="0.1.0", lifespan=lifespan)
@@ -64,6 +72,9 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api")
+app.include_router(daemon_router, prefix="/api")
+app.include_router(paseo_router, prefix="/api")
+app.include_router(task_router, prefix="/api")
 
 
 if WEB_DIST.is_dir():

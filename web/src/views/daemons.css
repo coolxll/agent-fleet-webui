@@ -1,0 +1,212 @@
+.daemons-view { padding: 20px; }
+.daemons-header { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
+.daemons-title h2 { margin: 0; font-size: 20px; font-weight: 600; }
+.daemons-title p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.daemons-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.daemons-filter-tabs { display: flex; gap: 4px; background: var(--panel-hover, rgba(255,255,255,0.05)); padding: 4px; border-radius: 8px; border: 1px solid var(--border); }
+.daemons-filter-btn { padding: 5px 12px; font-size: 12px; font-weight: 500; border: none; background: transparent; color: var(--muted); border-radius: 6px; cursor: pointer; transition: all 0.15s ease; }
+.daemons-filter-btn.active { background: var(--accent, #3b82f6); color: #fff; }
+
+.daemons-summary-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.daemon-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: var(--panel, rgba(255,255,255,0.04));
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+.daemon-stat-pill:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text, #fff);
+}
+.daemon-stat-pill.active {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: #3b82f6;
+  color: #fff;
+  font-weight: 500;
+}
+.daemon-stat-pill strong { color: var(--text, #fff); }
+.daemon-stat-dot { width: 8px; height: 8px; border-radius: 50%; }
+.daemon-stat-dot.ok { background: #10b981; }
+.daemon-stat-dot.warn { background: #f59e0b; }
+.daemon-stat-dot.bad { background: #ef4444; }
+.daemon-stat-dot.unknown { background: #6b7280; }
+
+.daemons-view-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.daemons-view-switch-btn {
+  padding: 5px 10px;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.daemons-view-switch-btn.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-weight: 500;
+}
+
+/* Grouping dimension switch */
+.daemons-dimension-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.daemons-dimension-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.daemons-dimension-btn.active {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Machine Row styles */
+.machine-daemon-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.machine-daemon-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.machine-daemon-endpoint {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: monospace;
+}
+
+/* Checkbox toggle */
+.daemons-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  transition: all 0.15s ease;
+}
+.daemons-toggle-label:hover {
+  color: var(--text, #fff);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.daemons-toggle-label input {
+  cursor: pointer;
+}
+
+.machine-daemon-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.daemons-table-container {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow-x: auto;
+  background: var(--panel, #12171f);
+}
+.daemons-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: left;
+}
+.daemons-table th {
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.daemons-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.daemons-table tr.daemon-row:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+.daemons-table tr.daemon-row.expanded td {
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: none;
+}
+.daemon-expand-row td {
+  padding: 0 14px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--border);
+}
+.daemon-expand-content {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+/* Card View */
+.daemons-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 16px; }
+.daemon-card { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel, var(--bg)); min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.daemon-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.daemon-service-identity { display: flex; align-items: center; gap: 8px; }
+.daemon-service-icon { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; font-size: 12px; font-weight: bold; }
+.daemon-badges { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.daemon-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 12px; margin: 0; }
+.daemon-facts dt { color: var(--muted); }
+.daemon-facts dd { margin: 0; overflow-wrap: anywhere; }
+.daemon-error { color: #d98e79; font-size: 12px; overflow-wrap: anywhere; margin: 0; }
+.daemon-workspaces { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.daemon-workspace-tag { padding: 3px 8px; font-size: 11px; border-radius: 6px; background: rgba(255,255,255,0.06); border: 1px solid var(--border); font-family: monospace; }
+.daemon-sessions-box { margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+.daemon-session-item { padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 12px; }
+.daemon-session-item:last-child { border-bottom: none; }
+.daemon-session-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+
+/* Compact mode for embedding inside Machine/Runtime view */
+.daemons-compact { padding: 10px 0; }
+.daemons-compact .daemons-header { margin-bottom: 10px; }
+.daemons-compact .daemons-grid { gap: 10px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+.daemons-compact .daemons-table td,
+.daemons-compact .daemons-table th { padding: 8px 10px; font-size: 12px; }

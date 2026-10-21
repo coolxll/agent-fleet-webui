@@ -225,7 +225,10 @@ def agents():
 
 @router.get("/updates")
 def list_updates():
-    return {aid: latest_available(aid) for aid in agent_ids()}
+    res = {aid: latest_available(aid) for aid in agent_ids()}
+    res["paseo"] = latest_available("paseo")
+    res["herdr"] = latest_available("herdr")
+    return res
 
 
 # --------------------------------------------------------------------------

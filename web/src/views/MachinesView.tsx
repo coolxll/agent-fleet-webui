@@ -5,6 +5,7 @@ import AgentDetail from '../components/AgentDetail'
 import UpgradeModal, { UpgradeIcon, UpgradeTarget } from '../components/UpgradeModal'
 import { useI18n } from '../i18n'
 import { useUpgrades } from '../context/UpgradesContext'
+import { RuntimeDaemonsSummary } from './DaemonsView'
 
 function ago(iso: string | null, t: any): string {
   if (!iso) return ''
@@ -518,6 +519,12 @@ export default function MachinesView({
                     </div>
                   )}
                 </div>
+
+                {(hostDetail.runtimes || [])
+                  .filter((rt: any) => activeRuntimeKey === 'all' || rt.key === activeRuntimeKey)
+                  .map((rt: any) => (
+                    <RuntimeDaemonsSummary key={rt.id} runtimeId={rt.id} refreshSignal={refreshSignal} />
+                  ))}
 
                 {/* Horizontal Agent Switcher Strip */}
                 <div style={{ marginBottom: 16 }}>

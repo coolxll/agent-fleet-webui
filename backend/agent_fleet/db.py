@@ -43,6 +43,7 @@ def get_engine():
 
 def create_all():
     from agent_fleet import models  # noqa: F401 - registers tables
+    from agent_fleet import herdr_models, paseo_models, task_models  # noqa: F401 - feature tables
 
     Base.metadata.create_all(get_engine())
     _add_missing_columns()

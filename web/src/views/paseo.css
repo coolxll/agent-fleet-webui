@@ -1,0 +1,17 @@
+.paseo-view { padding: 20px; }
+.paseo-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; }
+.paseo-heading h2 { margin: 0; font-size: 20px; }
+.paseo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 16px; margin-top: 16px; }
+.paseo-card { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel, var(--bg)); min-width: 0; }
+.paseo-badges { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+.paseo-facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; font-size: 12px; }
+.paseo-facts dt { color: var(--muted); }
+.paseo-facts dd { margin: 0; overflow-wrap: anywhere; }
+.paseo-error { color: #d98e79; font-size: 12px; overflow-wrap: anywhere; }
+.paseo-sessions { margin-top: 12px; }
+.paseo-session { padding: 12px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.paseo-session > div { margin-bottom: 5px; }
+.paseo-session .tag { margin-left: 8px; }
+.paseo-compact { padding: 12px 0; }
+.paseo-compact .paseo-heading h2 { font-size: 15px; }
+.paseo-compact .paseo-grid { margin-top: 8px; }

@@ -3,6 +3,7 @@ import { api } from '../api'
 import AgentIcon, { agentLabel } from '../components/AgentIcon'
 import UpgradeModal, { UpgradeIcon, UpgradeTarget } from '../components/UpgradeModal'
 import { useI18n, type TranslationKey } from '../i18n'
+import { RuntimeDaemonsSummary } from './DaemonsView'
 
 export default function MachineView({
   hostId,
@@ -104,6 +105,7 @@ export default function MachineView({
             {rt.stale ? <span className="tag warn">{t('common.stale')}</span> : null}
           </h2>
           <div className="body">
+            <RuntimeDaemonsSummary runtimeId={rt.id} />
             {rt.installations.length === 0 ? (
               <div className="muted small">{t('machine.noAgentsOnMachine')}</div>
             ) : (

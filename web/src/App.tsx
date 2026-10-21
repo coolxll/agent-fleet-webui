@@ -5,12 +5,14 @@ import AgentsView from './views/AgentsView'
 import Matrix from './views/Matrix'
 import SessionsView from './views/SessionsView'
 import QuotasView from './views/QuotasView'
+import TaskBoardView from './views/TaskBoardView'
+import DaemonsView from './views/DaemonsView'
 import SettingsModal from './components/SettingsModal'
 import TasksDrawer from './components/TasksDrawer'
 import { useI18n } from './i18n'
 import { UpgradesProvider, useUpgrades } from './context/UpgradesContext'
 
-type ViewTab = 'machines' | 'agents' | 'quotas' | 'matrix' | 'sessions'
+type ViewTab = 'machines' | 'agents' | 'quotas' | 'matrix' | 'sessions' | 'tasks' | 'daemons' | 'paseo'
 
 function AppShell({
   toast,
@@ -104,7 +106,7 @@ function AppShell({
   return (
     <div>
       <header className="app-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div className="header-navigation">
           <div className="brand-logo" onClick={() => handleTabSwitch('machines')}>
             <span style={{ fontSize: 16 }}>⚡</span>
             <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: 0.4 }}>Agent Fleet</span>
@@ -124,6 +126,24 @@ function AppShell({
               🤖 {t('nav.agents')}
             </button>
             <button
+              className={tab === 'daemons' || tab === 'paseo' ? 'active' : ''}
+              onClick={() => handleTabSwitch('daemons')}
+            >
+              ⚡ {t('nav.daemons')}
+            </button>
+            <button
+              className={tab === 'sessions' ? 'active' : ''}
+              onClick={() => handleTabSwitch('sessions')}
+            >
+              💬 {t('nav.sessions')}
+            </button>
+            <button
+              className={tab === 'tasks' ? 'active' : ''}
+              onClick={() => handleTabSwitch('tasks')}
+            >
+              📋 {language === 'zh' ? '任务看板' : 'Task board'}
+            </button>
+            <button
               className={tab === 'quotas' ? 'active' : ''}
               onClick={() => handleTabSwitch('quotas')}
             >
@@ -134,12 +154,6 @@ function AppShell({
               onClick={() => handleTabSwitch('matrix')}
             >
               🎛️ {t('nav.matrix')}
-            </button>
-            <button
-              className={tab === 'sessions' ? 'active' : ''}
-              onClick={() => handleTabSwitch('sessions')}
-            >
-              💬 {t('nav.sessions')}
             </button>
           </nav>
         </div>
@@ -169,18 +183,18 @@ function AppShell({
           <button
             className={'btn small ' + (activeCount > 0 ? 'primary ' : '')}
             onClick={openTasksDrawer}
-            title={language === 'zh' ? '查看后台任务中心' : 'Task Center'}
+            title={language === 'zh' ? '查看扫描和升级等后台任务' : 'Scan and upgrade jobs'}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
           >
             {activeCount > 0 ? (
               <>
                 <span className="spinner small" />
-                <span>{language === 'zh' ? `任务 (${activeCount})` : `Tasks (${activeCount})`}</span>
+                <span>{language === 'zh' ? `后台任务 (${activeCount})` : `Jobs (${activeCount})`}</span>
               </>
             ) : (
               <>
                 <span>📋</span>
-                <span>{language === 'zh' ? '任务' : 'Tasks'}</span>
+                <span>{language === 'zh' ? '后台任务' : 'Jobs'}</span>
               </>
             )}
           </button>
@@ -217,9 +231,13 @@ function AppShell({
       <main className="container">
         {tab === 'machines' && <MachinesView refreshSignal={refreshSignal} />}
         {tab === 'agents' && <AgentsView refreshSignal={refreshSignal} />}
+        {(tab === 'daemons' || tab === 'paseo') && (
+          <DaemonsView refreshSignal={refreshSignal} setToast={setToast} />
+        )}
+        {tab === 'sessions' && <SessionsView setToast={setToast} />}
+        {tab === 'tasks' && <TaskBoardView refreshSignal={refreshSignal} setToast={setToast} />}
         {tab === 'quotas' && <QuotasView refreshSignal={refreshSignal} />}
         {tab === 'matrix' && <Matrix refreshSignal={refreshSignal} />}
-        {tab === 'sessions' && <SessionsView setToast={setToast} />}
       </main>
 
       <SettingsModal

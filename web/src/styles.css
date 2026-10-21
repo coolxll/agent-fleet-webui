@@ -26,6 +26,7 @@ code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, m
 
 .app-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 16px;
   padding: 10px 18px;
@@ -44,9 +45,11 @@ code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, m
 
 .app-header .sub { color: var(--muted); font-size: 12px; }
 
-.tabs { display: flex; gap: 4px; margin-left: auto; }
+.header-navigation { display: flex; align-items: center; gap: 14px; min-width: 0; flex-wrap: wrap; }
+.tabs { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
 
 .tabs button {
+  white-space: nowrap;
   background: transparent;
   border: 1px solid transparent;
   color: var(--muted);

@@ -21,14 +21,17 @@ NPM_PACKAGES = {
     "pi": "@earendil-works/pi-coding-agent",
     "codebuddy": "@tencent-ai/codebuddy-code",
     "qoder": "@qoder-ai/qodercli",
+    "paseo": "@getpaseo/cli",
 }
 
-# Agents distributed outside npm. The repo is the project's own release feed.
+# Agents and supervisors distributed outside npm. The repo is the project's own release feed.
 # Verified 2026-10-18: agy --version -> 1.4.2, latest tag 1.4.2;
 # hermes --version -> v0.22.2 (d923a5eb), latest tag v0.22.2.
+# herdr -> herdrdev/herdr
 GITHUB_REPOS = {
     "agy": "google-antigravity/antigravity-cli",
     "hermes": "NousResearch/hermes-agent",
+    "herdr": "herdrdev/herdr",
 }
 
 # Prerelease tags consulted only when the local install is already ahead of
