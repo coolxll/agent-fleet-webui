@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -163,31 +164,45 @@ def _is_global(credential: dict) -> bool:
     return domain == "workbuddy.ai" or domain.endswith(".workbuddy.ai")
 
 
-def _package_remain_used(acct: dict) -> tuple[int, int, int]:
-    cycle_size = int(acct.get("CycleCapacitySize") or 0)
-    cycle_remain = int(acct.get("CycleCapacityRemain") or 0)
-    cycle_used = int(acct.get("CycleCapacityUsed") or 0)
+def _package_remain_used(acct: dict) -> tuple[float, float, float]:
+    def amount(key, default=0):
+        value = acct.get(key)
+        value = default if value is None else value
+        try:
+            number = float(value)
+            if not math.isfinite(number) or number < 0:
+                raise ValueError()
+            return number
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise QuotaProviderError("Workbuddy returned invalid package amounts") from exc
 
-    if cycle_size > 0:
-        remain = max(0, min(cycle_size, cycle_remain))
-        size = cycle_size
-        used = size - remain
-        if cycle_used > used:
-            used = cycle_used
-            if size >= used:
-                remain = size - used
-        return remain, used, size
+    prefix = "CycleCapacity" if amount("CycleCapacitySize") > 0 else "Capacity"
+    size = amount(prefix + "Size")
+    if acct.get(prefix + "Remain") is None and acct.get(prefix + "Used") is None and size > 0:
+        raise QuotaProviderError("Workbuddy returned no package balance")
+    used = amount(prefix + "Used")
+    remain = min(size, amount(prefix + "Remain", max(0, size - used)))
+    # Amounts must all describe the same cycle, never the lifetime package.
+    used = max(used, size - remain)
+    return max(0, size - used), used, size
 
-    cap_size = int(acct.get("CapacitySize") or 0)
-    cap_remain = int(acct.get("CapacityRemain") or 0)
-    cap_used = int(acct.get("CapacityUsed") or 0)
 
-    remain = cap_remain
-    used = cap_used
-    size = cap_size
-    if used == 0 and size > remain:
-        used = size - remain
-    return remain, used, size
+def _resource_data(payload) -> dict:
+    if not isinstance(payload, dict):
+        raise QuotaProviderError("Workbuddy returned an invalid resource document")
+    code = payload.get("code", payload.get("Code", 0))
+    if code not in (0, "0"):
+        raise QuotaProviderError("Workbuddy API returned an error code")
+    obj = payload.get("data") or payload.get("Response") or payload
+    if isinstance(obj, dict):
+        obj = obj.get("Response", obj)
+    if isinstance(obj, dict):
+        obj = obj.get("Data") or obj.get("data") or obj
+    if not isinstance(obj, dict) or not isinstance(obj.get("Accounts"), list):
+        raise QuotaProviderError("Workbuddy returned no package list")
+    if not all(isinstance(a, dict) for a in obj["Accounts"]):
+        raise QuotaProviderError("Workbuddy returned invalid packages")
+    return obj
 
 
 async def fetch(raw_credential: str | dict) -> dict:
@@ -217,7 +232,7 @@ async def fetch(raw_credential: str | dict) -> dict:
     if cred.get("uid"):
         headers["X-User-Id"] = cred["uid"]
 
-    now = datetime.now()
+    now = datetime.now(timezone(timedelta(hours=8)))
     begin = now.strftime("%Y-%m-%d %H:%M:%S")
     end = (now + timedelta(days=365 * 100)).strftime("%Y-%m-%d %H:%M:%S")
     body = {
@@ -229,50 +244,37 @@ async def fetch(raw_credential: str | dict) -> dict:
         "PackageEndTimeRangeEnd": end,
     }
 
-    last_error = ""
-    payload = None
-
+    raw_accounts = []
     async with httpx.AsyncClient(timeout=25) as client:
-        for path in paths:
-            url = f"https://{base_domain}{path}"
-            try:
-                resp = await client.post(url, headers=headers, json=body)
-            except httpx.HTTPError as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-                continue
-
-            if resp.status_code == 404 and len(paths) > 1 and path == paths[0]:
-                continue
-
-            if resp.status_code != 200:
-                last_error = f"HTTP {resp.status_code}: {resp.text[:160]}"
-                continue
-
-            try:
-                res_json = resp.json()
-            except Exception as exc:
-                last_error = f"invalid JSON: {exc}"
-                continue
-
-            # Check response envelope
-            code = res_json.get("code") if "code" in res_json else res_json.get("Code", 0)
-            if code != 0:
-                msg = res_json.get("msg") or res_json.get("Message") or f"code={code}"
-                raise QuotaProviderError(f"Workbuddy API error: {msg}")
-
-            payload = res_json
-            break
-
-    if payload is None:
-        raise QuotaProviderError(f"Workbuddy API request failed: {last_error or 'no response'}")
-
-    # Extract accounts and dosages
-    resp_obj = payload.get("data") or payload.get("Response") or payload
-    if isinstance(resp_obj, dict) and "Response" in resp_obj:
-        resp_obj = resp_obj["Response"]
-    data_obj = resp_obj.get("Data") or resp_obj.get("data") or resp_obj
-    raw_accounts = data_obj.get("Accounts") or []
-    total_dosage = int(data_obj.get("TotalDosage") or 0)
+        for page in range(1, 101):
+            last_error = "no response"
+            page_data = None
+            for path in paths:
+                try:
+                    resp = await client.post(f"https://{base_domain}{path}", headers=headers,
+                                             json={**body, "PageNumber": page})
+                    if resp.status_code != 200:
+                        last_error = f"HTTP {resp.status_code}"
+                        continue
+                    page_data = _resource_data(resp.json())
+                    break
+                except (httpx.HTTPError, ValueError, QuotaProviderError) as exc:
+                    last_error = str(exc)
+            if page_data is None:
+                raise QuotaProviderError(f"Workbuddy API request failed: {last_error}")
+            rows = page_data["Accounts"]
+            raw_accounts.extend(rows)
+            total_count = page_data.get("TotalCount")
+            if isinstance(total_count, int) and len(raw_accounts) >= total_count:
+                break
+            if not rows:
+                if isinstance(total_count, int) and len(raw_accounts) < total_count:
+                    raise QuotaProviderError("Workbuddy returned an incomplete package list")
+                break
+            if total_count is None and len(rows) < body["PageSize"]:
+                break
+        else:
+            raise QuotaProviderError("Workbuddy package pagination exceeded its limit")
 
     total_remain = 0
     total_used = 0
@@ -284,21 +286,19 @@ async def fetch(raw_credential: str | dict) -> dict:
 
     for acct in raw_accounts:
         r, u, s = _package_remain_used(acct)
-        total_remain += r
-        total_used += u
-        total_size += s
-
         pkg_name = acct.get("PackageName") or "积分套餐"
         end_time_raw = acct.get("CycleEndTime") or acct.get("PackageEndTime")
         end_iso = _parse_cycle_time(end_time_raw)
 
         if end_iso:
-            try:
-                dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
-                if dt > now_utc:
-                    future_reset_times.append(dt)
-            except Exception:
-                pass
+            dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+            if dt <= now_utc:
+                continue
+            if r > 0:
+                future_reset_times.append(dt)
+        total_remain += r
+        total_used += u
+        total_size += s
 
         if pkg_name not in pkg_groups:
             pkg_groups[pkg_name] = {
@@ -336,11 +336,6 @@ async def fetch(raw_credential: str | dict) -> dict:
         if (total_size - total_remain) > total_used:
             total_used = total_size - total_remain
 
-    if total_dosage > total_size:
-        total_size = total_dosage
-        if (total_size - total_remain) > total_used:
-            total_used = total_size - total_remain
-
     # Identify daily grant packages (e.g. daily check-in / allowance gifts)
     daily_breakdown = []
     for pkg in packages_detail:
@@ -370,6 +365,7 @@ async def fetch(raw_credential: str | dict) -> dict:
         "window": "cycle",
         "remaining_fraction": remaining_fraction,
         "reset_at": earliest_reset_iso,
+        "reset_kind": "partial_expiry",
         "used": total_used,
         "total": total_size,
         "remaining": total_remain,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -168,6 +169,32 @@ def parse_credential(raw: str | None) -> dict:
     }
 
 
+def _quota_values(quota: dict, capacity_key: str = "total") -> tuple[float, float, float]:
+    try:
+        total = float(quota[capacity_key])
+        used_raw = quota.get("used")
+        remain_raw = quota.get("remaining")
+        if used_raw is None and remain_raw is None:
+            raise ValueError()
+        used = float(used_raw) if used_raw is not None else total - float(remain_raw)
+        remaining = float(remain_raw) if remain_raw is not None else total - used
+        if not all(math.isfinite(v) and v >= 0 for v in (total, used, remaining)):
+            raise ValueError()
+        return total, used, min(total, remaining)
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise QuotaProviderError("QoderCN returned invalid quota amounts") from exc
+
+
+def _expiry_time(value) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    ts = value / 1000 if value > 1e11 else value
+    # Unlimited plans may return a year-9999 sentinel, not a cycle boundary.
+    if not 0 < ts < datetime(2100, 1, 1, tzinfo=timezone.utc).timestamp():
+        return None
+    return _iso(datetime.fromtimestamp(ts, timezone.utc))
+
+
 async def fetch(raw_credential: str | dict | None) -> dict:
     if isinstance(raw_credential, dict):
         cred = raw_credential
@@ -198,8 +225,11 @@ async def fetch(raw_credential: str | dict | None) -> dict:
                 if resp.status_code == 200:
                     data = resp.json()
                     if isinstance(data, dict):
-                        usage_data = data
-                        break
+                        candidate = data.get("qoderUsage") or data
+                        if isinstance(candidate, dict) and isinstance(candidate.get("userQuota"), dict):
+                            _quota_values(candidate["userQuota"])
+                            usage_data = data
+                            break
             except Exception:
                 continue
 
@@ -225,18 +255,9 @@ async def fetch(raw_credential: str | dict | None) -> dict:
     # Unpack usage details
     qoder_usage = usage_data.get("qoderUsage") or usage_data
     user_quota = qoder_usage.get("userQuota") or {}
-    total = float(user_quota.get("total") or 0)
-    used = float(user_quota.get("used") or 0)
-    remaining = float(user_quota.get("remaining") or (total - used))
+    total, used, remaining = _quota_values(user_quota)
     unit = user_quota.get("unit") or "credits"
-
-    # Reset time
-    expires_at_ms = qoder_usage.get("expiresAt")
-    reset_at_iso = None
-    if isinstance(expires_at_ms, (int, float)) and expires_at_ms > 0:
-        # If timestamp is in milliseconds
-        ts = expires_at_ms / 1000.0 if expires_at_ms > 1e11 else float(expires_at_ms)
-        reset_at_iso = _iso(datetime.fromtimestamp(ts, timezone.utc))
+    reset_at_iso = _expiry_time(qoder_usage.get("expiresAt"))
 
     remaining_fraction = round(remaining / total, 4) if total > 0 else 0.0
     remaining_fraction = max(0.0, min(1.0, remaining_fraction))
@@ -277,6 +298,7 @@ async def fetch(raw_credential: str | dict | None) -> dict:
             "window": "cycle",
             "remaining_fraction": remaining_fraction,
             "reset_at": reset_at_iso,
+            "reset_kind": "expires",
             "used": used,
             "remaining": remaining,
             "total": total,
@@ -294,31 +316,39 @@ async def fetch(raw_credential: str | dict | None) -> dict:
         }
     ]
 
-    # Check orgResourcePackage
-    org_pkg = qoder_usage.get("orgResourcePackage") or {}
-    if org_pkg.get("available"):
-        org_cap = float(org_pkg.get("cap") or 0)
-        org_used = float(org_pkg.get("used") or 0)
-        org_remain = float(org_pkg.get("remaining") or (org_cap - org_used))
-        org_frac = round(org_remain / org_cap, 4) if org_cap > 0 else 0.0
+    # Keep independent consumable pools separate, preserving explicit zeros.
+    for key, bucket_id, label in (
+        ("addOnQuota", "add_on", "加购额度"),
+        ("orgResourcePackage", "org_package", "企业资源包"),
+    ):
+        pkg = qoder_usage.get(key)
+        if not isinstance(pkg, dict) or pkg.get("available") is False:
+            continue
+        if key == "orgResourcePackage" and pkg.get("available") is not True:
+            continue
+        capacity_key = "total" if "total" in pkg else "cap"
+        if not pkg.get(capacity_key):
+            continue
+        pkg_total, pkg_used, pkg_remaining = _quota_values(pkg, capacity_key)
+        pkg_expiry = _expiry_time(pkg.get("expiresAt"))
+        pkg_frac = round(pkg_remaining / pkg_total, 4)
         buckets.append({
-            "id": "org_package",
-            "name": "企业资源包",
-            "window": "cycle",
-            "remaining_fraction": max(0.0, min(1.0, org_frac)),
-            "reset_at": reset_at_iso,
-            "used": org_used,
-            "remaining": org_remain,
-            "total": org_cap,
-            "unit": org_pkg.get("unit") or "credits",
+            "id": bucket_id, "name": label, "window": "cycle",
+            "remaining_fraction": max(0.0, min(1.0, pkg_frac)),
+            "reset_at": pkg_expiry, "reset_kind": "expires",
+            "used": pkg_used, "remaining": pkg_remaining, "total": pkg_total,
+            "unit": pkg.get("unit") or "credits",
         })
         packages_detail.append({
-            "name": f"企业资源包 ({org_name or 'Org'})",
-            "total": org_cap,
-            "used": org_used,
-            "remaining": org_remain,
-            "reset_at": reset_at_iso,
+            "name": label, "total": pkg_total, "used": pkg_used,
+            "remaining": pkg_remaining, "reset_at": pkg_expiry,
         })
+
+    if total <= 0:
+        buckets = [b for b in buckets if b["id"] != "qoder_credits"]
+        packages_detail = [p for p in packages_detail if p["total"] > 0]
+    if not buckets:
+        raise QuotaProviderError("QoderCN returned no usable credit pools")
 
     daily_consumption = [
         {
@@ -333,7 +363,7 @@ async def fetch(raw_credential: str | dict | None) -> dict:
     groups = [
         {
             "id": "credits_group",
-            "name": f"积分余额: {int(remaining):,} / {int(total):,} credits",
+            "name": "积分额度",
             "buckets": buckets,
             "packages": packages_detail,
             "daily_consumption": daily_consumption,
@@ -348,7 +378,7 @@ async def fetch(raw_credential: str | dict | None) -> dict:
         "tier": {"id": "qoder", "name": f"Qoder {plan_name}"},
         "observed_at": observed_at,
         "groups": groups,
-        "min_remaining_fraction": remaining_fraction,
+        "min_remaining_fraction": min(b["remaining_fraction"] for b in buckets),
         "packages": packages_detail,
         "daily_consumption": daily_consumption,
     }

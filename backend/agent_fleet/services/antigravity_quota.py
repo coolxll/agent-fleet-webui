@@ -4,6 +4,7 @@ import base64
 import json
 import math
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -109,6 +110,8 @@ def expiry(credential: dict) -> datetime:
 
 
 def fraction(value):
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
         return max(0.0, min(1.0, number)) if math.isfinite(number) else None
@@ -116,221 +119,168 @@ def fraction(value):
         return None
 
 
-def extract_raw_groups(summary: dict) -> list[dict]:
+def extract_raw_groups(summary: dict) -> list[dict] | None:
     if not isinstance(summary, dict):
-        return []
-    for key in ("groups", "response", "summary", "command"):
-        val = summary.get(key)
-        if isinstance(val, list):
-            return val
-        if isinstance(val, dict):
-            if isinstance(val.get("groups"), list):
-                return val["groups"]
-            if isinstance(val.get("data", {}).get("groups"), list):
-                return val["data"]["groups"]
-    return []
+        return None
+    if isinstance(summary.get("groups"), list):
+        return summary["groups"]
+    for key in ("response", "summary", "command", "data"):
+        nested = summary.get(key)
+        if isinstance(nested, dict):
+            groups = extract_raw_groups(nested)
+            if groups is not None:
+                return groups
+    return None
+
+
+SUMMARY_BUCKETS = {
+    "gemini-weekly": ("gemini", "weekly"),
+    "gemini-5h": ("gemini", "5h"),
+    "3p-weekly": ("third_party", "weekly"),
+    "3p-5h": ("third_party", "5h"),
+}
+ARGON_BUCKET = "gemini-argon-wtu-weekly"
 
 
 def resolve_group_id_and_name(display_name: str, desc: str, buckets: list[dict]) -> tuple[str, str]:
     name = (display_name or "").strip()
-    desc_str = (desc or "").strip()
-    combined = f"{name} {desc_str}".lower()
-    
-    # 检查 buckets 中是否有 argon / gemini 4 标识
-    bucket_idents = " ".join(b.get("bucketId", "") or b.get("id", "") for b in buckets).lower()
-    
-    # 1. Gemini 4 / Argon 独立额度
-    if "argon" in combined or "argon" in bucket_idents or ("gemini" in combined and any(c.isdigit() for c in name)):
-        return "gemini_4", name or "Gemini 4 Argon"
-    
-    # 2. 标准 Gemini 模型组
-    if "gemini" in combined or any(b.get("bucketId", "").startswith("gemini-") for b in buckets):
+    if name.lower() == "gemini 4 argon":
+        return "gemini_4", name
+    ids = {b.get("bucketId") or b.get("id") for b in buckets if isinstance(b, dict)}
+    if ids & {"gemini-weekly", "gemini-5h"}:
         return "gemini", name or "Gemini models"
-        
-    # 3. 第三方模型组 (Claude / GPT)
-    if any(k in combined for k in ("claude", "gpt", "3p", "third")) or any(b.get("bucketId", "").startswith("3p-") for b in buckets):
+    if ids & {"3p-weekly", "3p-5h"}:
         return "third_party", name or "Claude and GPT models"
-        
-    slug = name.lower().replace(" ", "_") if name else "quota"
-    return slug, name or "Quota"
+    return name.lower().replace(" ", "_") or "quota", name or "Quota"
+
+
+def _reset_time(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return value if dt.tzinfo is not None else None
+    except (ValueError, OverflowError):
+        return None
 
 
 def resolve_bucket(bucket: dict) -> dict | None:
-    if not isinstance(bucket, dict) or bucket.get("disabled"):
+    if not isinstance(bucket, dict):
         return None
-        
-    ident = (bucket.get("bucketId") or bucket.get("id") or "").strip()
-    name = (bucket.get("displayName") or bucket.get("name") or "").strip()
-    
-    # 提取剩余比例
+    disabled = bucket.get("disabled", False)
+    if not isinstance(disabled, bool) or disabled:
+        return None
+    ident = bucket.get("bucketId") or bucket.get("id") or ""
+    if not isinstance(ident, str):
+        return None
+    ident = ident.strip()
     remaining = fraction(bucket.get("remainingFraction"))
-    if remaining is None:
-        rem_obj = bucket.get("remaining")
-        if isinstance(rem_obj, dict):
-            remaining = fraction(rem_obj.get("remainingFraction"))
-            if remaining is None:
-                remaining = fraction(rem_obj.get("value"))
+    if remaining is None and isinstance(bucket.get("remaining"), dict):
+        remaining = fraction(bucket["remaining"].get("remainingFraction"))
     if remaining is None:
         return None
-        
-    reset = bucket.get("resetTime") or bucket.get("reset_time")
-    if not reset or not isinstance(reset, str):
+    known = SUMMARY_BUCKETS.get(ident)
+    window = bucket.get("window") or (known[1] if known else None)
+    if ident == ARGON_BUCKET:
+        if window is not None and window != "weekly":
+            return None
+        window = "weekly"
+    if window not in ("weekly", "5h") or (known and window != known[1]):
         return None
-        
-    # 判断 window
-    raw_window = (bucket.get("window") or "").strip().lower()
-    if raw_window in ("weekly", "5h"):
-        window = raw_window
-    else:
-        check_str = f"{raw_window} {ident.lower()} {name.lower()}"
-        if "week" in check_str:
-            window = "weekly"
-        elif any(k in check_str for k in ("5h", "5-hour", "five", "session", "hour")):
-            window = "5h"
-        else:
-            try:
-                dt = datetime.fromisoformat(reset.replace("Z", "+00:00"))
-                diff = dt - datetime.now(timezone.utc)
-                window = "5h" if diff <= timedelta(hours=6) else "weekly"
-            except Exception:
-                window = "5h"
-
-    display_name = name or ("5-Hour" if window == "5h" else "Weekly")
     return {
         "id": ident or f"bucket-{window}",
-        "name": display_name,
+        "name": bucket.get("displayName") or bucket.get("name") or ("Weekly" if window == "weekly" else "5-Hour"),
         "window": window,
         "remaining_fraction": remaining,
-        "reset_at": reset
+        "reset_at": _reset_time(bucket.get("resetTime") or bucket.get("reset_time")),
     }
 
 
 def quota_groups(summary: dict) -> list[dict]:
-    raw_groups = extract_raw_groups(summary)
     groups = []
-    
-    for group in raw_groups:
-        if not isinstance(group, dict):
+    for group in extract_raw_groups(summary) or []:
+        if not isinstance(group, dict) or not isinstance(group.get("buckets"), list):
             continue
-            
-        raw_buckets = group.get("buckets", [])
-        if not isinstance(raw_buckets, list):
-            continue
-            
-        group_id, group_name = resolve_group_id_and_name(
-            group.get("displayName") or group.get("name") or "",
-            group.get("description") or "",
-            raw_buckets
-        )
-        
-        parsed_buckets = []
-        seen_windows = set()
-        for b in raw_buckets:
-            item = resolve_bucket(b)
-            if item:
-                # 若同一 group 内有多个相同 window 的 bucket，保留余量更低或更早重置的
-                parsed_buckets.append(item)
-                seen_windows.add(item["window"])
-                
-        if parsed_buckets:
-            # 优先展示周限额，其次展示 5 小时限额（与 agy cli /usage 保持一致）
-            parsed_buckets.sort(key=lambda b: 0 if b["window"] == "weekly" else (1 if b["window"] == "5h" else 2))
-            groups.append({
-                "id": group_id,
-                "name": group_name,
-                "buckets": parsed_buckets
-            })
-            
-    # 按标准顺序排序: gemini -> gemini_4 -> third_party -> 其他
-    def group_sort_key(g):
-        gid = g["id"]
-        if gid == "gemini":
-            return (0, "")
+        raw_buckets = [b for b in group["buckets"] if isinstance(b, dict)]
+        gid, name = resolve_group_id_and_name(group.get("displayName") or group.get("name") or "", "", raw_buckets)
         if gid == "gemini_4":
-            return (1, "")
-        if gid == "third_party":
-            return (2, "")
-        return (3, g["name"])
-        
-    groups.sort(key=group_sort_key)
-    return groups
+            # Separate Argon quota is evidenced by its own summary group, not
+            # by a model catalogue entry. Never borrow shared Gemini buckets.
+            raw_buckets = [b for b in raw_buckets if (b.get("window") == "weekly" or
+                           (b.get("bucketId") or b.get("id")) == ARGON_BUCKET)]
+            if len(raw_buckets) != 1:
+                continue
+            ident = raw_buckets[0].get("bucketId") or raw_buckets[0].get("id")
+            if not ident or ident in SUMMARY_BUCKETS:
+                continue
+        else:
+            # Only known shared bucket IDs establish a shared pool and period.
+            raw_buckets = [b for b in raw_buckets if SUMMARY_BUCKETS.get(b.get("bucketId") or b.get("id"), (None,))[0] == gid]
+        buckets = {}
+        for raw in raw_buckets:
+            item = resolve_bucket(raw)
+            if item and (item["window"] not in buckets or item["remaining_fraction"] < buckets[item["window"]]["remaining_fraction"]):
+                buckets[item["window"]] = item
+        if buckets:
+            groups.append({"id": gid, "name": name, "buckets": sorted(buckets.values(), key=lambda b: b["window"] != "weekly")})
+    order = {"gemini": 0, "gemini_4": 1, "third_party": 2}
+    return sorted(groups, key=lambda g: (order.get(g["id"], 3), g["name"]))
 
 
-def gemini_groups_from_models(models: dict, reference_weekly_reset: str | None = None) -> list[dict]:
+def merge_quota_summaries(summaries: list[dict]) -> list[dict]:
+    groups = {}
+    blocked = set()
+    for summary in summaries:
+        for raw_group in extract_raw_groups(summary) or []:
+            if not isinstance(raw_group, dict) or not isinstance(raw_group.get("buckets"), list):
+                continue
+            for bucket in raw_group["buckets"]:
+                if isinstance(bucket, dict) and bucket.get("disabled") is True:
+                    ident = bucket.get("bucketId") or bucket.get("id")
+                    if ident in SUMMARY_BUCKETS:
+                        blocked.add(SUMMARY_BUCKETS[ident])
+                    elif (raw_group.get("displayName") or raw_group.get("name") or "").lower() == "gemini 4 argon":
+                        if bucket.get("window") == "weekly" or ident == ARGON_BUCKET:
+                            blocked.add(("gemini_4", "weekly"))
+        for group in quota_groups(summary):
+            existing = groups.setdefault(group["id"], {**group, "buckets": []})
+            for bucket in group["buckets"]:
+                key = (group["id"], bucket["window"])
+                if key not in blocked and not any(b["window"] == bucket["window"] for b in existing["buckets"]):
+                    existing["buckets"].append(bucket)
+    return sorted((g for g in groups.values() if g["buckets"]), key=lambda g: {"gemini": 0, "gemini_4": 1, "third_party": 2}.get(g["id"], 3))
+
+
+def gemini_groups_from_models(models: dict) -> list[dict]:
+    """Legacy fallback: model quotas do not identify a weekly/5h window.
+
+    The reset can represent the currently limiting window. In particular, a
+    weekly limit remains weekly during its last six hours. Do not infer its
+    period, or a separate Argon pool, from this endpoint.
+    """
     raw_models = models.get("models", {})
     if not isinstance(raw_models, dict):
         return []
-        
-    gemini_candidates = []
-    gemini_4_candidates = []
-    now = datetime.now(timezone.utc)
-    
+    buckets = []
     for ident, model in raw_models.items():
-        if not isinstance(model, dict):
+        if not isinstance(model, dict) or not isinstance(ident, str):
             continue
-        lower_id = ident.lower()
-        display_name = (model.get("displayName") or model.get("label") or "").lower()
-        
-        if not lower_id.startswith("gemini-") and "gemini" not in lower_id:
+        label = model.get("displayName") or ident
+        combined = f"{ident} {label}".lower()
+        if "gemini" not in combined or "argon" in combined or re.search(r"gemini[- ]4(?:[- .]|$)", combined):
             continue
-            
-        info = model.get("quotaInfo") or {}
-        try:
-            reset_str = info.get("resetTime")
-            if not reset_str or not isinstance(reset_str, str):
-                continue
-            reset = datetime.fromisoformat(reset_str.replace("Z", "+00:00"))
-            remaining = fraction(info.get("remainingFraction"))
-            if remaining is None:
-                continue
-                
-            diff = reset - now
-            window = "5h" if diff <= timedelta(hours=6) else "weekly"
-            
-            # 判断是否为 Gemini 4 / Argon 独立模型
-            is_gemini_4 = "4" in lower_id or "argon" in lower_id or "4" in display_name or "argon" in display_name
-            target = gemini_4_candidates if is_gemini_4 else gemini_candidates
-            target.append((window, remaining, reset, reset_str, model.get("displayName") or ident))
-        except (KeyError, ValueError, TypeError):
+        info = model.get("quotaInfo")
+        if not isinstance(info, dict):
             continue
-
-    def build_group(gid: str, gname: str, candidates: list) -> dict | None:
-        if not candidates:
-            return None
-        buckets = []
-        win_candidates = {
-            "5h": [c for c in candidates if c[0] == "5h"],
-            "weekly": [c for c in candidates if c[0] == "weekly"],
-        }
-        for win in ("5h", "weekly"):
-            clist = win_candidates[win]
-            if clist:
-                # 优先按余量升序，其次按重置时间升序
-                clist.sort(key=lambda c: (c[1], c[2]))
-                best = clist[0]
-                buckets.append({
-                    "id": f"{gid}-{win}",
-                    "name": "5-Hour" if win == "5h" else "Weekly",
-                    "window": win,
-                    "remaining_fraction": best[1],
-                    "reset_at": best[3]
-                })
-
-        buckets.sort(key=lambda b: 0 if b["window"] == "weekly" else (1 if b["window"] == "5h" else 2))
-        return {"id": gid, "name": gname, "buckets": buckets}
-
-    result = []
-    g_main = build_group("gemini", "Gemini models", gemini_candidates)
-    if g_main:
-        result.append(g_main)
-    g_4 = build_group("gemini_4", "Gemini 4 Argon", gemini_4_candidates)
-    if g_4:
-        result.append(g_4)
-    return result
+        remaining = fraction(info.get("remainingFraction"))
+        if remaining is None:
+            continue
+        buckets.append({"id": ident, "name": label, "window": "model", "remaining_fraction": remaining,
+                        "reset_at": _reset_time(info.get("resetTime"))})
+    return [{"id": "gemini", "name": "Gemini models", "buckets": buckets}] if buckets else []
 
 
 def gemini_group(models: dict) -> dict | None:
-    # 保持向后兼容函数接口
     groups = gemini_groups_from_models(models)
     return groups[0] if groups else None
 
@@ -401,85 +351,28 @@ async def _fetch(credential: dict) -> dict:
         if not isinstance(project, str) or not project:
             raise QuotaProviderError("Google returned no Code Assist project")
 
-        # 1. 跨 API (Daily) 与 PROD_API 查询 retrieveUserQuotaSummary 并合并配额组（参考 openusage cloudCodeAllHosts 与 worst-case wins）
-        summary_groups = []
+        # Prefer the primary Antigravity host. A secondary host only fills
+        # missing buckets; a smaller fraction does not prove a fresher reset.
+        summaries = []
         for base in (API, PROD_API):
             try:
                 res = await call("POST", base + "retrieveUserQuotaSummary", "retrieveUserQuotaSummary", json={"project": project})
-                if res and res.get("groups"):
-                    for g in quota_groups(res):
-                        existing = next((eg for eg in summary_groups if eg["id"] == g["id"]), None)
-                        if not existing:
-                            summary_groups.append(g)
-                        else:
-                            for b in g["buckets"]:
-                                eg_b = next((eb for eb in existing["buckets"] if eb["window"] == b["window"]), None)
-                                if not eg_b:
-                                    existing["buckets"].append(b)
-                                else:
-                                    # Worst-case wins: 如果另一个端点返回了更低（更真实）的余量，则更新
-                                    if b["remaining_fraction"] < eg_b["remaining_fraction"]:
-                                        eg_b["remaining_fraction"] = b["remaining_fraction"]
-                                        eg_b["reset_at"] = b["reset_at"]
-            except Exception:
+                if extract_raw_groups(res) is not None:
+                    summaries.append(res)
+            except QuotaProviderError:
+                continue
+        groups = merge_quota_summaries(summaries)
+
+        # An explicit summary is authoritative, including disabled/missing
+        # windows. Legacy per-model quota must never overwrite those windows.
+        if not summaries:
+            try:
+                models = await call("POST", API + "fetchAvailableModels", "fetchAvailableModels", json={"project": project})
+                groups = gemini_groups_from_models(models)
+            except QuotaProviderError:
                 pass
-        groups = summary_groups
-
-        # 2. 从 API (Daily) 获取 fetchAvailableModels（包含实时 5 小时滚动消耗与各模型配额）
-        ref_weekly_reset = None
-        for g in groups:
-            for b in g.get("buckets", []):
-                if b.get("window") == "weekly":
-                    ref_weekly_reset = b.get("reset_at")
-                    break
-            if ref_weekly_reset:
-                break
-
-        try:
-            models = await call("POST", API + "fetchAvailableModels", "fetchAvailableModels", json={"project": project})
-            model_groups = gemini_groups_from_models(models, reference_weekly_reset=ref_weekly_reset)
-        except Exception:
-            model_groups = []
-
-        # 3. 融合逻辑（参考 openusage 的 worst-case wins 与 magpie 的 pools + modelInfo 融合机制）：
-        gemini_group_obj = next((g for g in groups if g["id"] == "gemini"), None)
-        model_gemini_obj = next((mg for mg in model_groups if mg["id"] == "gemini"), None)
-
-        if not gemini_group_obj:
-            if model_gemini_obj:
-                groups.insert(0, model_gemini_obj)
-        else:
-            if model_gemini_obj:
-                # 3.1 5 小时滚动配额：若实时模型探测到 5h 配额，以模型实时余量为准
-                mod_5h = next((b for b in model_gemini_obj["buckets"] if b["window"] == "5h"), None)
-                if mod_5h:
-                    g_5h = next((b for b in gemini_group_obj["buckets"] if b["window"] == "5h"), None)
-                    if g_5h:
-                        g_5h["remaining_fraction"] = mod_5h["remaining_fraction"]
-                        g_5h["reset_at"] = mod_5h["reset_at"]
-                    else:
-                        gemini_group_obj["buckets"].append(mod_5h)
-
-                # 3.2 周配额：依据 openusage 的 worst-case wins 原则，若模型检测到更严格的周限额，更新周余量与重置时间
-                mod_weekly = next((b for b in model_gemini_obj["buckets"] if b["window"] == "weekly"), None)
-                if mod_weekly:
-                    g_weekly = next((b for b in gemini_group_obj["buckets"] if b["window"] == "weekly"), None)
-                    if g_weekly:
-                        if mod_weekly["remaining_fraction"] < g_weekly["remaining_fraction"]:
-                            g_weekly["remaining_fraction"] = mod_weekly["remaining_fraction"]
-                            g_weekly["reset_at"] = mod_weekly["reset_at"]
-                    else:
-                        gemini_group_obj["buckets"].append(mod_weekly)
-
-        # 检查并注入 Gemini 4 / Argon 独立配额组
-        model_g4_obj = next((mg for mg in model_groups if mg["id"] == "gemini_4"), None)
-        if model_g4_obj and not any(g["id"] == "gemini_4" for g in groups):
-            idx = next((i for i, g in enumerate(groups) if g["id"] == "gemini"), -1)
-            groups.insert(idx + 1, model_g4_obj)
-
-        # 保证每个组内的排序与 agy cli 一致：周限额在前，5 小时限额在后
-        for g in groups:
-            g["buckets"].sort(key=lambda b: 0 if b["window"] == "weekly" else (1 if b["window"] == "5h" else 2))
+        for group in groups:
+            group["buckets"].sort(key=lambda b: b["window"] != "weekly")
 
         if not groups:
             raise QuotaProviderError("Google returned no quota groups")

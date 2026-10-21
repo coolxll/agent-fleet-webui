@@ -146,3 +146,62 @@ def test_fetch_qoder_success(monkeypatch):
     assert bucket["total"] == 3000
     assert len(group["packages"]) == 1
     assert len(group["daily_consumption"]) == 1
+
+
+def fetch_usage(monkeypatch, usage):
+    original = httpx.AsyncClient
+    def handler(request):
+        if request.url.path.endswith('/usage'):
+            return httpx.Response(200, json={'qoderUsage': usage})
+        return httpx.Response(404)
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
+    return asyncio.run(qoder.fetch('test-token'))['quota']['accounts'][0]
+
+
+def test_explicit_zero_balance_is_not_replaced_by_total_minus_used(monkeypatch):
+    account = fetch_usage(monkeypatch, {
+        'userQuota': {'total': 3000, 'used': 10, 'remaining': 0},
+        'orgResourcePackage': {'cap': 500, 'used': 1, 'remaining': 0, 'available': True},
+    })
+    assert [b['remaining'] for b in account['groups'][0]['buckets']] == [0, 0]
+    assert account['min_remaining_fraction'] == 0
+
+
+def test_addon_and_org_pools_keep_their_own_expiry_and_affect_lowest_pool(monkeypatch):
+    account = fetch_usage(monkeypatch, {
+        'expiresAt': 1795017600000,
+        'userQuota': {'total': 3000, 'used': 30, 'remaining': 2970},
+        'addOnQuota': {'total': 100, 'used': 50, 'remaining': 50, 'expiresAt': 1796000000000},
+        'orgResourcePackage': {'cap': 100, 'used': 80, 'remaining': 20, 'available': True},
+    })
+    buckets = {b['id']: b for b in account['groups'][0]['buckets']}
+    assert set(buckets) == {'qoder_credits', 'add_on', 'org_package'}
+    assert account['min_remaining_fraction'] == 0.2
+    assert buckets['org_package']['reset_at'] is None
+    assert buckets['add_on']['reset_at'] != buckets['qoder_credits']['reset_at']
+    assert buckets['qoder_credits']['reset_kind'] == 'expires'
+
+
+def test_free_plan_with_addon_does_not_display_nonexistent_zero_capacity_pool(monkeypatch):
+    account = fetch_usage(monkeypatch, {
+        'userQuota': {'total': 0, 'used': 0, 'remaining': 0},
+        'addOnQuota': {'total': 100, 'used': 0, 'remaining': 100},
+        'orgResourcePackage': {'cap': 500, 'used': 0, 'remaining': 500, 'available': False},
+    })
+    assert [b['id'] for b in account['groups'][0]['buckets']] == ['add_on']
+    assert account['min_remaining_fraction'] == 1
+
+
+@pytest.mark.parametrize('payload', [{}, {'code': 401}, {'userQuota': {'total': 100, 'used': float('nan')}}])
+def test_invalid_usage_is_not_shown_as_successful_zero_balance(monkeypatch, payload):
+    from agent_fleet.services.quota_providers import QuotaProviderError
+    with pytest.raises(QuotaProviderError):
+        fetch_usage(monkeypatch, payload)
+
+
+def test_unlimited_expiration_sentinel_is_not_a_reset(monkeypatch):
+    account = fetch_usage(monkeypatch, {
+        'expiresAt': 253402300799000,
+        'userQuota': {'total': 100, 'used': 0, 'remaining': 100},
+    })
+    assert account['groups'][0]['buckets'][0]['reset_at'] is None

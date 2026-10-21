@@ -160,7 +160,7 @@ def test_quota_groups_parses_gemini_weekly_and_gemini_4_argon():
     assert g4_buckets['weekly']['remaining_fraction'] == 0.42
 
 
-def test_gemini_groups_from_models_handles_weekly_and_gemini_4():
+def test_model_fallback_keeps_period_unknown_and_does_not_invent_argon_pool():
     now = datetime.now(timezone.utc)
     models = {
         'models': {
@@ -188,15 +188,9 @@ def test_gemini_groups_from_models_handles_weekly_and_gemini_4():
     groups = agy.gemini_groups_from_models(models)
     group_map = {g['id']: g for g in groups}
     assert 'gemini' in group_map
-    assert 'gemini_4' in group_map
-
-    gemini_windows = {b['window'] for b in group_map['gemini']['buckets']}
-    assert '5h' in gemini_windows
-    assert 'weekly' in gemini_windows
-    assert group_map['gemini_4']['name'] == 'Gemini 4 Argon'
-    g4_windows = {b['window'] for b in group_map['gemini_4']['buckets']}
-    assert 'weekly' in g4_windows
-    assert any(b['window'] == 'weekly' and b['remaining_fraction'] == 0.35 for b in group_map['gemini_4']['buckets'])
+    assert 'gemini_4' not in group_map
+    assert {b['window'] for b in group_map['gemini']['buckets']} == {'model'}
+    assert {b['remaining_fraction'] for b in group_map['gemini']['buckets']} == {0.9, 0.65}
 
 
 def test_gemini_groups_from_models_does_not_invent_missing_window():
@@ -206,14 +200,14 @@ def test_gemini_groups_from_models_does_not_invent_missing_window():
             'remainingFraction': 0.7,
             'resetTime': reset,
         }}}
-    }, reference_weekly_reset=(datetime.now(timezone.utc) + timedelta(days=7)).isoformat())
+    })
 
     assert len(groups) == 1
-    assert [bucket['window'] for bucket in groups[0]['buckets']] == ['weekly']
+    assert [bucket['window'] for bucket in groups[0]['buckets']] == ['model']
     assert groups[0]['buckets'][0]['remaining_fraction'] == 0.7
 
 
-def test_fetch_blends_worst_case_weekly_quota(monkeypatch):
+def test_fetch_summary_is_authoritative_over_model_quota(monkeypatch):
     now = datetime.now(timezone.utc)
     weekly_reset = (now + timedelta(days=3, hours=7)).isoformat()
     five_h_reset = (now + timedelta(hours=4)).isoformat()
@@ -261,14 +255,14 @@ def test_fetch_blends_worst_case_weekly_quota(monkeypatch):
     gemini_group = next(g for g in account['groups'] if g['id'] == 'gemini')
     buckets = {b['window']: b for b in gemini_group['buckets']}
 
-    # Weekly should be updated to the true 1.3% from live models, not stale 92.6%
-    assert abs(buckets['weekly']['remaining_fraction'] - 0.013393676) < 1e-6
-    assert buckets['weekly']['reset_at'] == weekly_reset
+    # Model reset distance does not establish its pool or period.
+    assert buckets['weekly']['remaining_fraction'] == 0.92567885
+    assert buckets['weekly']['reset_at'] == '2026-10-22T08:38:59Z'
     # 5h should be preserved as 100%
     assert buckets['5h']['remaining_fraction'] == 1.0
 
 
-def test_fetch_keeps_real_summary_5h_when_models_only_report_weekly(monkeypatch):
+def test_fetch_does_not_invent_weekly_from_unclassified_models(monkeypatch):
     weekly_reset = (datetime.now(timezone.utc) + timedelta(days=4)).isoformat()
     five_h_reset = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat()
 
@@ -303,8 +297,7 @@ def test_fetch_keeps_real_summary_5h_when_models_only_report_weekly(monkeypatch)
 
     assert buckets['5h']['remaining_fraction'] == 0.2
     assert buckets['5h']['reset_at'] == five_h_reset
-    assert buckets['weekly']['remaining_fraction'] == 0.8
-    assert set(buckets) == {'5h', 'weekly'}
+    assert set(buckets) == {'5h'}
 
 
 def test_fetch_does_not_add_window_missing_from_summary_only(monkeypatch):
@@ -394,3 +387,134 @@ def test_fetch_cross_host_worst_case_wins_weekly_quota(monkeypatch):
     assert buckets['5h']['reset_at'] == daily_5h_reset
 
 
+
+
+@pytest.mark.parametrize('primary_state', ['complete', 'missing_window', 'unavailable'])
+def test_summary_prefers_primary_reset_over_lower_stale_prod_balance(monkeypatch, primary_state):
+    daily_reset = '2026-10-24T09:27:49Z'
+    prod_reset = '2026-10-21T06:13:27Z'
+
+    def response(request):
+        if request.url.path.endswith(':retrieveUserQuotaSummary'):
+            primary = request.url.host == 'daily-cloudcode-pa.googleapis.com'
+            if primary and primary_state == 'unavailable':
+                return httpx.Response(503)
+            buckets = [{
+                'bucketId': 'gemini-weekly', 'window': 'weekly',
+                'remainingFraction': 0.77471346 if primary else 0.7745911,
+                'resetTime': daily_reset if primary else prod_reset,
+            }]
+            if primary and primary_state == 'missing_window':
+                buckets = [{
+                    'bucketId': 'gemini-5h', 'window': '5h',
+                    'remainingFraction': 0.99, 'resetTime': '2026-10-21T07:48:14Z',
+                }]
+            return httpx.Response(200, json={'groups': [{
+                'displayName': 'Gemini Models', 'buckets': buckets,
+            }]})
+        if request.url.path.endswith(':fetchAvailableModels'):
+            return httpx.Response(200, json={'models': {}})
+        return handler(request)
+
+    install_transport(monkeypatch, response)
+    result = asyncio.run(agy.fetch(credential()))
+    group = next(g for g in result['quota']['accounts'][0]['groups'] if g['id'] == 'gemini')
+    weekly = next(b for b in group['buckets'] if b['window'] == 'weekly')
+    if primary_state == 'complete':
+        assert weekly['reset_at'] == daily_reset
+        assert weekly['remaining_fraction'] == 0.77471346
+    else:
+        assert weekly['reset_at'] == prod_reset
+        assert weekly['remaining_fraction'] == 0.7745911
+
+
+def test_weekly_near_reset_keeps_explicit_period_and_zero_balance():
+    reset = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    buckets = agy.quota_groups({'groups': [{'buckets': [
+        {'bucketId': 'gemini-weekly', 'remainingFraction': 0, 'resetTime': reset},
+    ]}]})[0]['buckets']
+    assert buckets[0]['window'] == 'weekly'
+    assert buckets[0]['remaining_fraction'] == 0
+    assert buckets[0]['reset_at'] == reset
+
+
+@pytest.mark.parametrize('reset', [None, 'invalid', '2026-10-21T12:00:00'])
+def test_summary_keeps_known_balance_when_reset_unknown(reset):
+    groups = agy.quota_groups({'groups': [{'buckets': [{
+        'bucketId': 'gemini-weekly', 'remainingFraction': 0.4, 'resetTime': reset,
+    }]}]})
+    assert groups[0]['buckets'][0]['remaining_fraction'] == 0.4
+    assert groups[0]['buckets'][0]['reset_at'] is None
+
+
+def test_disabled_primary_window_cannot_be_revived_by_secondary_host():
+    def summary(disabled):
+        return {'groups': [{'displayName': 'Claude and GPT models', 'buckets': [
+            {'bucketId': '3p-weekly', 'window': 'weekly', 'remainingFraction': 0},
+            {'bucketId': '3p-5h', 'window': '5h', 'remainingFraction': 1, 'disabled': disabled},
+        ]}]}
+    groups = agy.merge_quota_summaries([summary(True), summary(False)])
+    assert [b['window'] for b in groups[0]['buckets']] == ['weekly']
+
+
+@pytest.mark.parametrize('window,disabled,remaining', [
+    ('weekly', False, 0), ('weekly', False, 1), ('weekly', True, 1),
+    ('5h', False, 0.5), ('weekly', False, None), ('weekly', False, True),
+])
+def test_argon_requires_distinct_usable_weekly_summary(window, disabled, remaining):
+    groups = agy.quota_groups({'groups': [{'displayName': 'Gemini 4 Argon', 'buckets': [{
+        'bucketId': agy.ARGON_BUCKET, 'window': window,
+        'remainingFraction': remaining, 'disabled': disabled,
+    }]}]})
+    if window == 'weekly' and not disabled and remaining is not None and not isinstance(remaining, bool):
+        assert groups[0]['id'] == 'gemini_4'
+        assert groups[0]['buckets'][0]['remaining_fraction'] == remaining
+    else:
+        assert groups == []
+
+
+@pytest.mark.parametrize('name,bucket_id', [
+    ('Gemini 3.8 Flash', 'future-weekly'), ('Gemini 4 Argon Images', 'future-weekly'),
+    ('Gemini Models', agy.ARGON_BUCKET), ('Gemini 4 Argon', 'gemini-weekly'),
+])
+def test_unverified_argon_groups_and_ids_do_not_create_shared_or_argon_pool(name, bucket_id):
+    assert agy.quota_groups({'groups': [{'displayName': name, 'buckets': [{
+        'bucketId': bucket_id, 'window': 'weekly', 'remainingFraction': 0.5,
+    }]}]}) == []
+
+
+def test_summary_deduplicates_and_preserves_balance_reset_pair():
+    groups = agy.quota_groups({'groups': [{'buckets': [
+        {'bucketId': 'gemini-weekly', 'remainingFraction': 0.8, 'resetTime': '2026-10-24T00:00:00Z'},
+        {'bucketId': 'gemini-weekly', 'remainingFraction': 0.2, 'resetTime': '2026-10-25T00:00:00Z'},
+    ]}]})
+    assert len(groups[0]['buckets']) == 1
+    assert groups[0]['buckets'][0]['remaining_fraction'] == 0.2
+    assert groups[0]['buckets'][0]['reset_at'] == '2026-10-25T00:00:00Z'
+
+
+def test_empty_authoritative_summary_does_not_fall_back_to_models(monkeypatch):
+    def response(request):
+        if request.url.path.endswith(':retrieveUserQuotaSummary'):
+            return httpx.Response(200, json={'groups': []})
+        assert not request.url.path.endswith(':fetchAvailableModels')
+        return handler(request)
+    install_transport(monkeypatch, response)
+    with pytest.raises(QuotaProviderError, match='no quota groups'):
+        asyncio.run(agy.fetch(credential()))
+
+
+def test_model_fallback_only_when_summary_unavailable(monkeypatch):
+    def response(request):
+        if request.url.path.endswith(':retrieveUserQuotaSummary'):
+            return httpx.Response(404)
+        if request.url.path.endswith(':fetchAvailableModels'):
+            return httpx.Response(200, json={'models': {
+                'gemini-3.8-flash': {'quotaInfo': {'remainingFraction': 0.7, 'resetTime': '2026-10-24T00:00:00Z'}},
+                'gemini-4-argon': {'quotaInfo': {'remainingFraction': 1, 'resetTime': '2026-10-24T00:00:00Z'}},
+            }})
+        return handler(request)
+    install_transport(monkeypatch, response)
+    groups = asyncio.run(agy.fetch(credential()))['quota']['accounts'][0]['groups']
+    assert [g['id'] for g in groups] == ['gemini']
+    assert [b['window'] for b in groups[0]['buckets']] == ['model']

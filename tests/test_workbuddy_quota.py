@@ -294,3 +294,67 @@ def test_package_aggregation(monkeypatch):
     assert trial_pkg["used"] == 0
     assert trial_pkg["remaining"] == 500
     assert trial_pkg["count"] == 1
+
+
+def test_fetch_all_package_pages_and_ignore_total_dosage_as_capacity(monkeypatch):
+    pages = []
+    def handler(request):
+        page = json.loads(request.content)['PageNumber']
+        pages.append(page)
+        rows = [{'AccountId': f'{page}-{i}', 'CapacitySize': 10,
+                 'CapacityRemain': 4, 'CapacityUsed': 6} for i in range(100 if page == 1 else 5)]
+        return httpx.Response(200, json={'code': 0, 'Response': {'Data': {
+            'TotalCount': 105, 'TotalDosage': 9999, 'Accounts': rows,
+        }}})
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
+    account = asyncio.run(wb.fetch('test-token'))['quota']['accounts'][0]
+    assert pages == [1, 2]
+    bucket = account['groups'][0]['buckets'][0]
+    assert bucket['total'] == 1050
+    assert bucket['remaining'] == 420
+    assert bucket['used'] == 630
+    assert bucket['remaining_fraction'] == 0.4
+    assert bucket['reset_kind'] == 'partial_expiry'
+
+
+def test_expired_packages_and_empty_balances_do_not_set_next_expiry(monkeypatch):
+    def handler(request):
+        return httpx.Response(200, json={'Response': {'Data': {'Accounts': [
+            {'CapacitySize': 100, 'CapacityRemain': 100, 'CycleEndTime': '2020-01-01 00:00:00'},
+            {'CapacitySize': 100, 'CapacityRemain': 0, 'CycleEndTime': '2027-01-01 00:00:00'},
+            {'CapacitySize': 100, 'CapacityRemain': 80, 'CycleEndTime': '2027-02-01 00:00:00'},
+        ]}}})
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
+    bucket = asyncio.run(wb.fetch('test-token'))['quota']['accounts'][0]['groups'][0]['buckets'][0]
+    assert bucket['total'] == 200
+    assert bucket['remaining'] == 80
+    assert bucket['reset_at'] == '2027-01-31T16:00:00Z'
+
+
+def test_partial_pagination_failure_does_not_save_incomplete_quota(monkeypatch):
+    def handler(request):
+        page = json.loads(request.content)['PageNumber']
+        if page == 2:
+            return httpx.Response(503)
+        return httpx.Response(200, json={'Response': {'Data': {
+            'TotalCount': 2, 'Accounts': [{'CapacitySize': 100, 'CapacityRemain': 80}],
+        }}})
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
+    with pytest.raises(QuotaProviderError, match='503'):
+        asyncio.run(wb.fetch('test-token'))
+
+
+@pytest.mark.parametrize('payload', [{}, {'code': 0, 'data': {}}, {'code': 1}, {'Response': {'Data': {'Accounts': 'invalid'}}}])
+def test_invalid_resource_is_not_shown_as_zero_balance(monkeypatch, payload):
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=payload)), **kw))
+    with pytest.raises(QuotaProviderError):
+        asyncio.run(wb.fetch('test-token'))
+
+
+def test_cycle_amounts_keep_zero_and_fractional_credits():
+    assert wb._package_remain_used({'CycleCapacitySize': 100, 'CycleCapacityRemain': 0, 'CycleCapacityUsed': 5}) == (0, 100, 100)
+    assert wb._package_remain_used({'CapacitySize': 10.5, 'CapacityRemain': 2.25}) == (2.25, 8.25, 10.5)

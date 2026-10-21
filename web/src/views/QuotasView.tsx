@@ -24,7 +24,9 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
   const [credential, setCredential] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [addError, setAddError] = useState<string | null>(null)
-  const [refreshing, setRefreshing] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState<Set<string>>(new Set())
+  const [refreshProgress, setRefreshProgress] = useState<{ done: number; total: number } | null>(null)
+  const refreshBusy = useRef(false)
   const [agentFilter, setAgentFilter] = useState<string>('all')
   const [layoutMode, setLayoutMode] = useState<'flat' | 'grouped'>('flat')
   const fileInput = useRef<HTMLInputElement | null>(null)
@@ -123,18 +125,47 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
     }
   }
 
-  const refresh = async (account: ImportedQuotaAccount) => {
-    setRefreshing(account.id)
+  const refreshAccounts = async (targets: ImportedQuotaAccount[], batch = false) => {
+    if (refreshBusy.current || targets.length === 0) return
+    refreshBusy.current = true
+    setError(null)
+    if (batch) setRefreshProgress({ done: 0, total: targets.length })
+    const failures: string[] = []
+    const queue = [...targets]
+    const worker = async () => {
+      for (let account = queue.shift(); account; account = queue.shift()) {
+        setRefreshing((prev) => new Set([...prev, account.id]))
+        try {
+          const updated = await api.refreshQuotaAccount(account.id)
+          setAccounts((prev) => (prev || []).map((a) => a.id === updated.id ? updated : a))
+        } catch (e: any) {
+          failures.push(`${account.email || account.label || account.id}: ${String(e.message || e)}`)
+        } finally {
+          const id = account.id
+          setRefreshing((prev) => {
+            const next = new Set(prev)
+            next.delete(id)
+            return next
+          })
+          if (batch) setRefreshProgress((prev) => prev && ({ ...prev, done: prev.done + 1 }))
+        }
+      }
+    }
     try {
-      const updated = await api.refreshQuotaAccount(account.id)
-      setAccounts((prev) =>
-        (prev || []).map((a) => (a.id === updated.id ? updated : a))
-      )
-    } catch (e: any) {
-      load()
-      setError(String(e.message || e))
+      await Promise.all(Array.from({ length: Math.min(3, targets.length) }, worker))
+      if (failures.length) {
+        // Read persisted error states without losing the batch failure summary.
+        try {
+          const result = await api.quotaAccounts()
+          setAccounts(result.accounts)
+        } catch (e: any) {
+          failures.push(String(e.message || e))
+        }
+      }
+      setError(failures.length ? failures.join(' · ') : null)
     } finally {
-      setRefreshing(null)
+      refreshBusy.current = false
+      setRefreshProgress(null)
     }
   }
 
@@ -175,15 +206,26 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
           <div style={{ fontWeight: 600, fontSize: 16 }}>{t('quotas.title')}</div>
           <div className="muted small">{t('quotas.subtitle')}</div>
         </div>
-        <button
-          className="btn primary small"
-          onClick={() => {
-            setShowAdd((v) => !v)
-            setAddError(null)
-          }}
-        >
-          {showAdd ? t('common.close') : `+ ${t('quotas.importAccount')}`}
-        </button>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            className="btn small"
+            onClick={() => refreshAccounts(accounts || [], true)}
+            disabled={!accounts?.length || refreshing.size > 0 || refreshProgress !== null}
+          >
+            {refreshProgress
+              ? `${t('quotas.refreshing')} ${refreshProgress.done}/${refreshProgress.total}`
+              : `↻ ${t('quotas.refreshAll')}`}
+          </button>
+          <button
+            className="btn primary small"
+            onClick={() => {
+              setShowAdd((v) => !v)
+              setAddError(null)
+            }}
+          >
+            {showAdd ? t('common.close') : `+ ${t('quotas.importAccount')}`}
+          </button>
+        </div>
       </div>
 
       {showAdd ? (
@@ -355,9 +397,10 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
                 key={account.id}
                 account={account}
                 agent={agent}
-                refreshing={refreshing === account.id}
-                onRefresh={() => refresh(account)}
-                onRemove={() => remove(account)}
+                refreshing={refreshing.has(account.id)}
+                refreshDisabled={refreshProgress !== null || refreshing.size > 0}
+                onRefresh={() => refreshAccounts([account])}
+                onRemove={refreshProgress !== null || refreshing.has(account.id) ? undefined : () => remove(account)}
               />
             )
           })}
@@ -381,9 +424,10 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
                     key={account.id}
                     account={account}
                     agent={agent}
-                    refreshing={refreshing === account.id}
-                    onRefresh={() => refresh(account)}
-                    onRemove={() => remove(account)}
+                    refreshing={refreshing.has(account.id)}
+                    refreshDisabled={refreshProgress !== null || refreshing.size > 0}
+                    onRefresh={() => refreshAccounts([account])}
+                    onRemove={refreshProgress !== null || refreshing.has(account.id) ? undefined : () => remove(account)}
                   />
                 )
               })}

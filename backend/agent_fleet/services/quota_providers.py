@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -59,6 +60,17 @@ PROVIDERS: dict[str, dict] = {
         "credential_hint": (
             "Leave blank or enter 'auto' to auto-detect from local CodeBuddyExtension, "
             "or paste auth.json / Bearer accessToken. Supports both CodeBuddy CN and Workbuddy Global."
+        ),
+        "online": True,
+    },
+    "trae": {
+        "id": "trae",
+        "name": "Trae CN",
+        "agent": "trae",
+        "credential_label": "Cloud-IDE-JWT access token / JSON",
+        "credential_hint": (
+            "Trae 国内版：在 www.trae.cn 个人中心的积分请求中复制 Authorization 值，"
+            "可直接粘贴 Cloud-IDE-JWT token，或导入含 access_token 和可选 device_id 的 JSON。"
         ),
         "online": True,
     },
@@ -174,33 +186,41 @@ def _codex_window(value, group_id: str) -> dict | None:
     if not isinstance(value, dict):
         return None
     try:
-        used = float(value.get("used_percent"))
-    except (TypeError, ValueError):
+        raw_used = value.get("used_percent")
+        if isinstance(raw_used, bool):
+            return None
+        used = float(raw_used)
+        if not math.isfinite(used):
+            return None
+    except (TypeError, ValueError, OverflowError):
         return None
     used = max(0.0, min(100.0, used))
     remaining = round(1.0 - used / 100.0, 6)
+
+    def valid_number(number):
+        return isinstance(number, (int, float)) and not isinstance(number, bool) and math.isfinite(number)
+
     reset_at = value.get("reset_at")
-    if not isinstance(reset_at, (int, float)):
+    if not valid_number(reset_at):
         reset_after = value.get("reset_after_seconds")
-        if isinstance(reset_after, (int, float)):
-            reset_at = datetime.now(timezone.utc).timestamp() + float(reset_after)
-    if not isinstance(reset_at, (int, float)):
-        reset_at = None
+        reset_at = datetime.now(timezone.utc).timestamp() + reset_after if valid_number(reset_after) else None
     seconds = value.get("limit_window_seconds")
-    window = "5h"
-    if isinstance(seconds, (int, float)) and seconds > 6 * 3600:
-        window = "weekly"
+    window = {18000: "5h", 604800: "weekly", 86400: "daily"}.get(seconds, "quota") if valid_number(seconds) else "quota"
+    label = {"5h": "5-Hour", "weekly": "Weekly", "daily": "Daily"}.get(window, "Usage")
     bucket = {
         "id": group_id,
-        "name": "5-Hour" if window == "5h" else "Weekly",
+        "name": label,
         "window": window,
         "remaining_fraction": remaining,
     }
     if reset_at is not None:
-        bucket["reset_at"] = _iso(datetime.fromtimestamp(float(reset_at), timezone.utc))
+        try:
+            bucket["reset_at"] = _iso(datetime.fromtimestamp(float(reset_at), timezone.utc))
+        except (ValueError, OverflowError, OSError):
+            pass
     return {
         "id": group_id,
-        "name": "5-Hour limit" if window == "5h" else "Weekly limit",
+        "name": f"{label} limit",
         "buckets": [bucket],
     }
 
@@ -249,6 +269,25 @@ async def _fetch_codex(credential: dict) -> dict:
         groups.append(primary)
     if secondary:
         groups.append(secondary)
+    # Optional independently metered features use the same rate-window
+    # schema as the primary pool (OpenAI Codex AdditionalRateLimitDetails).
+    feature_rates = [("code_review", "Code review", payload.get("code_review_rate_limit"))]
+    additional = payload.get("additional_rate_limits")
+    if isinstance(additional, list):
+        for index, entry in enumerate(additional):
+            if isinstance(entry, dict):
+                name = entry.get("limit_name") or entry.get("metered_feature") or "Additional quota"
+                feature_rates.append((f"additional-{index}", str(name), entry.get("rate_limit")))
+    for ident, name, feature_rate in feature_rates:
+        if not isinstance(feature_rate, dict):
+            continue
+        buckets = []
+        for key in ("primary_window", "secondary_window"):
+            parsed = _codex_window(feature_rate.get(key), f"{ident}-{key}")
+            if parsed:
+                buckets.extend(parsed["buckets"])
+        if buckets:
+            groups.append({"id": ident, "name": name, "buckets": buckets})
     observed_at = _iso(datetime.now(timezone.utc))
     if not groups:
         raise QuotaProviderError("usage API returned no rate-limit windows")
@@ -298,6 +337,10 @@ async def fetch_account(provider: str, raw_credential: str) -> dict:
         return await _fetch_codex(normalized)
     if provider in ("workbuddy", "codebuddy"):
         from agent_fleet.services.workbuddy_quota import fetch
+
+        return await fetch(raw_credential)
+    if provider == "trae":
+        from agent_fleet.services.trae_quota import fetch
 
         return await fetch(raw_credential)
     if provider == "qodercn":

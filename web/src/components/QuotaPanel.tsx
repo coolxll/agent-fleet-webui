@@ -54,12 +54,14 @@ export function QuotaCard({
   account,
   agent,
   refreshing,
+  refreshDisabled,
   onRefresh,
   onRemove
 }: {
   account: ImportedQuotaAccount
   agent: string
   refreshing?: boolean
+  refreshDisabled?: boolean
   onRefresh?: () => void
   onRemove?: () => void
 }) {
@@ -73,16 +75,17 @@ export function QuotaCard({
     return () => clearInterval(timer)
   }, [])
 
-  const windowLabel = (window: string) =>
-    window === 'weekly'
-      ? t('quota.weekly')
-      : window === '5h'
-        ? t('quota.fiveHour')
-        : window === 'cycle'
-          ? language === 'zh'
-            ? '周期额度'
-            : 'Cycle'
-          : window
+  const windowLabel = (window: string) => {
+    switch (window) {
+      case 'weekly': return t('quota.weekly')
+      case '5h': return t('quota.fiveHour')
+      case 'daily': return t('quota.daily')
+      case 'model': return t('quota.model')
+      case 'quota': return t('quota.unclassified')
+      case 'cycle': return language === 'zh' ? '周期额度' : 'Cycle'
+      default: return window
+    }
+  }
 
   const displayName = account.label || account.name || account.email || account.id
   const showEmail = Boolean(account.email && displayName !== account.email)
@@ -137,7 +140,7 @@ export function QuotaCard({
             <button
               className="btn small"
               onClick={onRefresh}
-              disabled={refreshing}
+              disabled={refreshing || refreshDisabled}
               title={t('quotas.refresh')}
               style={{ padding: '2px 8px' }}
             >
@@ -179,13 +182,13 @@ export function QuotaCard({
                   resetAt === null
                     ? null
                     : resetAt <= now
-                      ? t('quota.refreshDue')
-                      : t('quota.resetsIn', { time: duration(resetAt - now) })
+                      ? t(bucket.reset_kind === 'expires' ? 'quota.expired' : 'quota.refreshDue')
+                      : t(bucket.reset_kind === 'partial_expiry' ? 'quota.nextExpiry' : bucket.reset_kind === 'expires' ? 'quota.expiresIn' : 'quota.resetsIn', { time: duration(resetAt - now) })
                 return (
                   <div className="quota-bucket" key={bucket.id || bucket.window + bucket.name}>
                     <div className="quota-bucket-header">
                       <div className="quota-bucket-label-wrap">
-                        <span className="quota-bucket-window">{windowLabel(bucket.window)}</span>
+                        <span className="quota-bucket-window">{['model', 'cycle'].includes(bucket.window) ? bucket.name : windowLabel(bucket.window)}</span>
                         {bucket.total !== null && bucket.total !== undefined && (
                           <span className="quota-bucket-counts muted">
                             {bucket.remaining?.toLocaleString()} / {bucket.total.toLocaleString()} {bucket.unit || ''}
@@ -198,9 +201,9 @@ export function QuotaCard({
                           {resetAt !== null && (
                             <span className="quota-reset-at">
                               {' · '}
-                              {new Date(resetAt).toLocaleTimeString(
+                              {new Date(resetAt).toLocaleString(
                                 language === 'zh' ? 'zh-CN' : 'en-US',
-                                { hour: '2-digit', minute: '2-digit' }
+                                { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }
                               )}
                             </span>
                           )}
@@ -233,7 +236,7 @@ export function QuotaCard({
             {dailyItems.length > 0 && (
               <div className="quota-detail-block">
                 <div className="quota-detail-header">
-                  {language === 'zh' ? '按日消耗明细' : 'Daily Consumption'}
+                  {language === 'zh' ? '用量明细' : 'Usage details'}
                 </div>
                 {dailyItems.map((item, idx) => (
                   <div className="quota-detail-row" key={idx}>
@@ -332,7 +335,9 @@ export default function QuotaPanel({
   if (usable.length === 0) return null
 
   const windowLabel = (window: string) =>
-    window === 'weekly' ? t('quota.weekly') : window === '5h' ? t('quota.fiveHour') : window
+    window === 'weekly' ? t('quota.weekly') : window === '5h' ? t('quota.fiveHour')
+      : window === 'model' ? t('quota.model') : window === 'daily' ? t('quota.daily')
+        : window === 'quota' ? t('quota.unclassified') : window
 
   return (
     <div className="panel quota-panel">
@@ -400,20 +405,20 @@ export default function QuotaPanel({
                               resetAt === null
                                 ? t('common.unknown')
                                 : resetAt <= now
-                                  ? t('quota.refreshDue')
-                                  : t('quota.resetsIn', { time: duration(resetAt - now) })
+                                  ? t(bucket.reset_kind === 'expires' ? 'quota.expired' : 'quota.refreshDue')
+                                  : t(bucket.reset_kind === 'partial_expiry' ? 'quota.nextExpiry' : bucket.reset_kind === 'expires' ? 'quota.expiresIn' : 'quota.resetsIn', { time: duration(resetAt - now) })
                             return (
                               <div className="quota-bucket" key={bucket.id || bucket.window + bucket.name}>
                                 <div className="quota-bucket-header">
-                                  <span className="quota-bucket-window">{windowLabel(bucket.window)}</span>
+                                  <span className="quota-bucket-window">{['model', 'cycle'].includes(bucket.window) ? bucket.name : windowLabel(bucket.window)}</span>
                                   <span className="quota-bucket-reset small muted" title={bucket.reset_at || undefined}>
                                     {resetText}
                                     {resetAt !== null && (
                                       <span className="quota-reset-at">
                                         {' · '}
-                                        {new Date(resetAt).toLocaleTimeString(
+                                        {new Date(resetAt).toLocaleString(
                                           language === 'zh' ? 'zh-CN' : 'en-US',
-                                          { hour: '2-digit', minute: '2-digit' }
+                                          { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }
                                         )}
                                       </span>
                                     )}
