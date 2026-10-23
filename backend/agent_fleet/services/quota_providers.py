@@ -21,6 +21,10 @@ class QuotaProviderError(Exception):
     """A provider refused the credential or returned an unusable answer."""
 
 
+class QuotaAuthError(QuotaProviderError):
+    """The usage endpoint rejected the current access token."""
+
+
 PROVIDERS: dict[str, dict] = {
     "codex": {
         "id": "codex",
@@ -241,6 +245,8 @@ async def _fetch_codex(credential: dict) -> dict:
     except httpx.HTTPError as exc:
         raise QuotaProviderError(f"usage request failed: {type(exc).__name__}") from exc
     if response.status_code != 200:
+        if response.status_code in (401, 403):
+            raise QuotaAuthError(f"usage API returned HTTP {response.status_code}")
         detail = ""
         try:
             body = response.json()

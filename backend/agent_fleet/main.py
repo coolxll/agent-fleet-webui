@@ -15,10 +15,11 @@ from agent_fleet.api.routes import router
 from agent_fleet.api.daemon_routes import router as daemon_router
 from agent_fleet.api.paseo_routes import router as paseo_router
 from agent_fleet.api.task_routes import router as task_router
+from agent_fleet.api.quota_source_routes import router as quota_source_router
 from agent_fleet.db import create_all, init_engine
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
 from agent_fleet.services.scheduler import get_schedule
-from agent_fleet.services import task_service
+from agent_fleet.services import task_service, magpie_quota
 from agent_fleet.settings import ROOT, get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -50,9 +51,12 @@ async def lifespan(app: FastAPI):
             log.info("scheduled scanning enabled (every %ss)", schedule.interval_seconds)
     except Exception as exc:
         log.warning("scheduler start failed: %s", exc)
+    quota_collector = magpie_quota.Collector()
+    quota_collector.start()
     try:
         yield
     finally:
+        await quota_collector.stop()
         await task_service.shutdown()
 
 
@@ -75,6 +79,7 @@ app.include_router(router, prefix="/api")
 app.include_router(daemon_router, prefix="/api")
 app.include_router(paseo_router, prefix="/api")
 app.include_router(task_router, prefix="/api")
+app.include_router(quota_source_router, prefix="/api")
 
 
 if WEB_DIST.is_dir():

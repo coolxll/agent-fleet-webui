@@ -134,6 +134,34 @@ Nothing is duplicated: if a host appears in several sources it is stored once.
   it). A normal scan only reads that snapshot; Agent Fleet never calls Google
   or writes to the remote machine.
 
+### Read-only magpie quota collection
+
+In **Quotas → Link magpie accounts**, select the Codex accounts to associate.
+An existing import with the same account identity is reused, keeping its label
+and last quota snapshot. Linking removes its copied credentials from our store;
+only the magpie login reference is saved. Other accounts stay manually managed.
+Removing a linked account removes only our record, leaving magpie untouched.
+
+Each query reads magpie's current access token from `logins.json` and calls the
+vendor usage endpoint. This integration never uses a refresh token, invokes
+magpie, writes its files, or changes an Agent's login. A rejected access token
+causes one re-read of the source; a retry happens only if magpie has changed the
+token. Otherwise the account asks you to update its login in magpie. Failed
+queries retain the last successful quota and its original collection time.
+
+Background queries default to every 10 minutes, apply **only to linked Codex
+accounts**, and can be paused or have their interval changed in Quotas. Settings
+and per-account next-query times survive restarts. Failures back off up to an
+hour (or the configured interval when longer); collection uses at most three
+concurrent account queries. Manual and background requests for the same account
+share in-flight work and a 30-second cooldown. The page polls saved snapshots;
+opening it does not query vendors. Run one backend worker for collection.
+
+The source defaults to `~/.config/magpie`. Set
+`AGENT_FLEET_MAGPIE_CONFIG_DIR` when magpie uses another directory. This directory
+is on the backend machine; remote account discovery is not included. Skills,
+MCP configuration and token renewal remain managed by magpie.
+
 ## Task board and handoff
 
 The **Task board** is for coding work; the header's **Jobs** drawer remains
@@ -215,6 +243,7 @@ upgrade and coding-task execution actions use the target user's permissions.
   `0600`, outside SQLite; the API never returns the credential, and the fleet
   export never contains it. Credentials are only used for the vendor usage
   request.
+  Magpie-linked accounts store a source reference instead of credentials.
 * Antigravity OAuth client secrets are not stored in source. Put them in
   `data/antigravity_clients.json` (mode `0600`, gitignored) as a JSON object
   mapping `client_id` to `client_secret`, or pass the same object through

@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     command_timeout: int = 25
     scan_ttl_seconds: int = 6 * 3600
 
+    # Read-only source; never run magpie or write to its authentication store.
+    magpie_config_dir: Path = Path.home() / ".config" / "magpie"
+
     # Security: remote raw config bytes are parsed in memory and dropped after
     # sanitization; they are never written to disk.
     persist_raw_config: bool = False

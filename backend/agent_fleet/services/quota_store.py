@@ -97,6 +97,12 @@ def public_account(account: dict) -> dict:
         "last_refreshed_at": account.get("last_refreshed_at"),
         "quota": quota,
         "quota_summary": summary,
+        "credential_source": account.get("credential_source", "manual"),
+        **({"source_account_id": account.get("source_account_id")}
+           if account.get("credential_source") == "magpie" else {}),
+        "last_checked_at": account.get("last_checked_at"),
+        "next_query_at": account.get("next_query_at"),
+        "error_code": account.get("error_code"),
     }
 
 
@@ -174,6 +180,8 @@ async def add_account(provider: str, label: str | None, raw_credential: str) -> 
                 None,
             )
         if existing:
+            if existing.get("credential_source") == "magpie":
+                raise ValueError("This account is managed by magpie; query it or remove its link before importing credentials")
             if label and label.strip():
                 existing["label"] = label.strip()[:120]
             _apply_result(existing, result)
@@ -194,6 +202,11 @@ async def add_account(provider: str, label: str | None, raw_credential: str) -> 
 
 
 async def refresh_account(account_id: str) -> dict:
+    account = get_account(account_id)
+    if account and account.get("credential_source") == "magpie":
+        from agent_fleet.services.magpie_quota import query_account
+
+        return await query_account(account_id)
     with _STORE_LOCK:
         data = _read()
         account = next((a for a in data["accounts"] if a.get("id") == account_id), None)
@@ -229,6 +242,10 @@ async def refresh_account(account_id: str) -> dict:
         if account is None:
             raise KeyError(account_id)
         current_credential = account.get("credential")
+        if account.get("credential_source") == "magpie":
+            # An import can be linked while its old manual query is in flight.
+            # Never put the copied credentials back into a source-managed row.
+            return public_account(account)
         rotated_credential = current_credential != credential_snapshot
         _apply_result(account, result)
         if rotated_credential:

@@ -6,6 +6,7 @@ import {
 } from '../api'
 import AgentIcon, { agentLabel } from '../components/AgentIcon'
 import { QuotaCard } from '../components/QuotaPanel'
+import QuotaSourceSettings from '../components/QuotaSourceSettings'
 import { useI18n } from '../i18n'
 
 function minFraction(account: ImportedQuotaAccount): number | null {
@@ -51,6 +52,12 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
       })
       .catch(() => undefined)
   }, [refreshSignal])
+
+  // Read persisted snapshots only; opening this page never queries vendors.
+  useEffect(() => {
+    const timer = setInterval(load, 15000)
+    return () => clearInterval(timer)
+  }, [])
 
   const providerById = useMemo(
     () => Object.fromEntries(providers.map((p) => [p.id, p])),
@@ -227,6 +234,8 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
           </button>
         </div>
       </div>
+
+      <QuotaSourceSettings onChanged={load} />
 
       {showAdd ? (
         <div className="panel">
@@ -439,8 +448,8 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
       {accounts && accounts.length > 0 ? (
         <div className="muted small" style={{ lineHeight: 1.6 }}>
           {language === 'zh'
-            ? '凭据由后台安全保存，刷新时直接查询厂商在线额度。'
-            : 'Credentials are stored securely by the backend. Refresh queries vendor quotas directly.'}
+            ? 'magpie 关联账号只保存来源标识，每次查询读取当前认证；手动导入账号的凭据由后台保存。'
+            : 'Magpie links store only an account reference and read current authentication for each query. Manually imported credentials are stored by the backend.'}
         </div>
       ) : null}
     </div>

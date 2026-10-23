@@ -121,6 +121,7 @@ export function QuotaCard({
                 {displayName}
               </span>
               {plan ? <span className="tag">{plan}</span> : null}
+              {account.credential_source === 'magpie' ? <span className="tag">magpie</span> : null}
             </div>
             {showEmail && account.email ? (
               <span className="quota-card-email mono" title={account.email}>
@@ -131,11 +132,13 @@ export function QuotaCard({
         </div>
 
         <div className="quota-card-actions">
-          {account.status === 'error' ? (
+          {account.error_code === 'auth_required' ? (
+            <span className="tag bad">{language === 'zh' ? '需更新 magpie 登录' : 'Update magpie login'}</span>
+          ) : account.status === 'error' ? (
             <span className="tag bad">{t('quotas.statusError')}</span>
-          ) : (
+          ) : account.status === 'ok' ? (
             <span className="tag ok">{t('quotas.statusOk')}</span>
-          )}
+          ) : <span className="tag">{language === 'zh' ? '待查询' : 'Not queried'}</span>}
           {onRefresh ? (
             <button
               className="btn small"
@@ -161,9 +164,18 @@ export function QuotaCard({
       </div>
 
       <div className="quota-card-body">
-        {account.status === 'error' || !quota ? (
+        {account.status === 'error' && quota ? (
+          <div className="err small" style={{ marginBottom: 8 }}>
+            {account.error_code === 'auth_required'
+              ? language === 'zh' ? '请在 magpie 更新登录。下方保留上次成功采集的配额。' : 'Update the login in magpie. Showing the last successful quota below.'
+              : `${account.last_error || t('quotas.statusError')} ${language === 'zh' ? '下方为上次采集结果。' : 'Showing the previous snapshot below.'}`}
+          </div>
+        ) : null}
+        {!quota ? (
           <div className="err small" style={{ margin: 'auto 0' }}>
-            {account.last_error || t('quotas.noQuotaYet')}
+            {account.error_code === 'auth_required' && language === 'zh'
+              ? '请在 magpie 更新登录后重新查询配额。'
+              : account.last_error || t('quotas.noQuotaYet')}
           </div>
         ) : groups.length === 0 ? (
           <div className="muted small" style={{ margin: 'auto 0' }}>

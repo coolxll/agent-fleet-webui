@@ -224,6 +224,14 @@ export type QuotaEntry = {
   quota_summary: QuotaSummary | null
 }
 
+export type MagpieQuotaSource = {
+  available: boolean
+  error: string | null
+  accounts: { id: string; email: string | null; label: string; plan: string | null; linked_account_id: string | null }[]
+}
+
+export type QuotaCollectionSettings = { enabled: boolean; interval_seconds: number }
+
 export type QuotaProviderSummary = {
   agent: string
   name: string
@@ -256,6 +264,11 @@ export type ImportedQuotaAccount = {
   last_refreshed_at: string | null
   quota: QuotaSnapshot | null
   quota_summary: QuotaSummary | null
+  credential_source: 'manual' | 'magpie'
+  source_account_id?: string | null
+  last_checked_at: string | null
+  next_query_at: string | null
+  error_code: 'auth_required' | 'source_unavailable' | 'query_failed' | null
 }
 
 export type QuotasResponse = {
@@ -295,9 +308,9 @@ async function get<T>(path: string): Promise<T> {
   return (await res.json()) as T
 }
 
-async function post<T>(path: string, body?: unknown): Promise<T> {
+async function post<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
   const res = await fetch('/api' + path, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {})
   })
@@ -379,6 +392,12 @@ export const api = {
   },
   quotaProviders: () => get<{ providers: QuotaProviderInfo[] }>('/quota-providers'),
   quotaAccounts: () => get<{ accounts: ImportedQuotaAccount[] }>('/quota-accounts'),
+  magpieQuotaAccounts: () => get<MagpieQuotaSource>('/quota-sources/magpie'),
+  linkMagpieQuotaAccount: (source_account_id: string) =>
+    post<ImportedQuotaAccount>('/quota-sources/magpie/link', { source_account_id }),
+  quotaCollection: () => get<QuotaCollectionSettings>('/quota-collection'),
+  setQuotaCollection: (settings: QuotaCollectionSettings) =>
+    post<QuotaCollectionSettings>('/quota-collection', settings, 'PUT'),
   addQuotaAccount: (payload: { provider: string; credential: string; label?: string }) =>
     post<ImportedQuotaAccount>('/quota-accounts', payload),
   refreshQuotaAccount: (id: string) =>
