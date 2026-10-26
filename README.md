@@ -303,6 +303,29 @@ upgrade and coding-task execution actions use the target user's permissions.
 yet: the API prefix is hardcoded to `/api`, and raw config is never persisted
 regardless of the flag.
 
+## Trae credential upkeep
+
+The `trae` quota account holds a **manual, static** access token: `trae_quota.py`
+only reads quota and never renews a login, so the row turns red with
+`Trae login expired or was rejected` about two weeks after import (Trae CN
+access tokens live ~14 days).
+
+`trae2api-web` on `corp172-dev` renews the same account via refresh_token and
+writes the fresh token back to its auths file. `scripts/sync_trae_credential.py`
+mirrors that token into agent-fleet (upsert through `POST /api/quota-accounts`,
+which re-verifies the credential before saving):
+
+    # reads corp172-dev:<TRAE_AUTH_PATH> over ssh, updates the local account
+    .venv/bin/python scripts/sync_trae_credential.py
+
+Silent and exit 0 when there is nothing to do; exit 1 when the upstream token is
+already expired (trae2api renewal stalled), 2 on ssh/transport failure, 3 when
+agent-fleet rejects the credential. Runs every 6h via the Hermes cron job
+`Trae 凭据同步到 agent-fleet` (shim: `~/.hermes/scripts/trae_credential_sync.py`).
+
+Overrides: `TRAE_AUTH_SSH`, `TRAE_AUTH_PATH`, `AGENT_FLEET_API`,
+`TRAE_SYNC_STATE`, `TRAE_SYNC_MIN_HOURS`.
+
 ## Tests
 
     .venv/bin/python -m pytest tests/ -q
@@ -319,6 +342,7 @@ Run from the repo root, as shown above.
 
     backend/agent_fleet/   inventory, remotes (ssh/wsl/powershell), adapters, services, api
     web/src/               overview, matrix, inspector, compare
+    scripts/               maintenance jobs (Trae credential sync)
     tests/fixtures/        real-shaped agent configs including fake credentials
     docs/                  requirements, research, architecture, progress
     inventory.yaml         your fleet (kind hints + WSL distros)
