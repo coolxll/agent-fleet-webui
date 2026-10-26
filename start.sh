@@ -31,6 +31,7 @@ fail() { echo -e "${RED}ERROR:${NC} $1" >&2; exit 1; }
 HOST="127.0.0.1"
 PORT="8000"
 FRONTEND_PORT="5173"
+FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
 AUTO_FRONTEND_PORT=true
 DEV_MODE=false
 OPEN_BROWSER=false
@@ -52,6 +53,7 @@ Options:
   -h, --host <ip>             Host to bind backend server (default: 127.0.0.1)
   -p, --port <port>           Port for backend server (default: 8000)
   -fp, --frontend-port <port> Port for Vite dev server (dev mode only, default: 5173 or next free)
+  --frontend-host <host>      Interface the Vite dev server binds to (default: 0.0.0.0, i.e. LAN + Tailscale reachable)
   --help                      Show this help message
 
 Examples:
@@ -93,6 +95,10 @@ while [[ $# -gt 0 ]]; do
     -fp|--frontend-port)
       FRONTEND_PORT="$2"
       AUTO_FRONTEND_PORT=false
+      shift 2
+      ;;
+    --frontend-host)
+      FRONTEND_HOST="$2"
       shift 2
       ;;
     --help)
@@ -271,6 +277,23 @@ if [ "$DEV_MODE" = true ]; then
   info "Starting in DEVELOPMENT mode..."
   echo -e "  Backend API:     ${BOLD}http://$HOST:$PORT${NC} (auto-reload on)"
   echo -e "  Vite Dev Server: ${BOLD}${GREEN}http://localhost:$FRONTEND_PORT${NC}"
+  if [ "$FRONTEND_HOST" != "127.0.0.1" ] && [ "$FRONTEND_HOST" != "localhost" ]; then
+    ts_ip=""
+    if command -v tailscale >/dev/null 2>&1; then
+      ts_ip=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
+    fi
+    if [ -n "$ts_ip" ]; then
+      echo -e "  Tailscale:       ${BOLD}${GREEN}http://$ts_ip:$FRONTEND_PORT${NC}"
+    fi
+    if command -v ipconfig >/dev/null 2>&1; then
+      lan_ip=$(ipconfig getifaddr en0 2>/dev/null || true)
+    else
+      lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+    fi
+    if [ -n "${lan_ip:-}" ]; then
+      echo -e "  LAN:             ${BOLD}${GREEN}http://$lan_ip:$FRONTEND_PORT${NC}"
+    fi
+  fi
   echo ""
 
   trap cleanup EXIT INT TERM
@@ -281,7 +304,7 @@ if [ "$DEV_MODE" = true ]; then
   BG_PIDS="$! $BG_PIDS"
 
   # Start vite with configured ports
-  (cd "$WEB_DIR" && FRONTEND_PORT="$FRONTEND_PORT" BACKEND_PORT="$PORT" BACKEND_HOST="$HOST" npm run dev) &
+  (cd "$WEB_DIR" && FRONTEND_PORT="$FRONTEND_PORT" FRONTEND_HOST="$FRONTEND_HOST" BACKEND_PORT="$PORT" BACKEND_HOST="$HOST" npm run dev) &
   BG_PIDS="$! $BG_PIDS"
 
   if [ "$OPEN_BROWSER" = true ]; then
