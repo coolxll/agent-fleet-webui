@@ -27,11 +27,26 @@ ok()   { echo -e "${GREEN}✓${NC} $1"; }
 warn() { echo -e "${YELLOW}WARNING:${NC} $1"; }
 fail() { echo -e "${RED}ERROR:${NC} $1" >&2; exit 1; }
 
+# Frontend bind address (dev mode). Prefer the Tailscale interface so the UI is
+# reachable over the tailnet without being exposed to the LAN; fall back to
+# loopback when Tailscale is not installed or logged in.
+detect_frontend_host() {
+  local ts_ip=""
+  if command -v tailscale >/dev/null 2>&1; then
+    ts_ip=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
+  fi
+  if [ -n "$ts_ip" ]; then
+    printf '%s' "$ts_ip"
+  else
+    printf '127.0.0.1'
+  fi
+}
+
 # Default arguments
 HOST="127.0.0.1"
 PORT="8000"
 FRONTEND_PORT="5173"
-FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
+FRONTEND_HOST="${FRONTEND_HOST:-$(detect_frontend_host)}"
 AUTO_FRONTEND_PORT=true
 DEV_MODE=false
 OPEN_BROWSER=false
@@ -53,7 +68,8 @@ Options:
   -h, --host <ip>             Host to bind backend server (default: 127.0.0.1)
   -p, --port <port>           Port for backend server (default: 8000)
   -fp, --frontend-port <port> Port for Vite dev server (dev mode only, default: 5173 or next free)
-  --frontend-host <host>      Interface the Vite dev server binds to (default: 0.0.0.0, i.e. LAN + Tailscale reachable)
+  --frontend-host <host>      Interface the Vite dev server binds to (default: Tailscale IP,
+                              or 127.0.0.1 without Tailscale; use 0.0.0.0 for LAN too)
   --help                      Show this help message
 
 Examples:
@@ -277,23 +293,35 @@ if [ "$DEV_MODE" = true ]; then
   info "Starting in DEVELOPMENT mode..."
   echo -e "  Backend API:     ${BOLD}http://$HOST:$PORT${NC} (auto-reload on)"
   echo -e "  Vite Dev Server: ${BOLD}${GREEN}http://localhost:$FRONTEND_PORT${NC}"
-  if [ "$FRONTEND_HOST" != "127.0.0.1" ] && [ "$FRONTEND_HOST" != "localhost" ]; then
-    ts_ip=""
-    if command -v tailscale >/dev/null 2>&1; then
-      ts_ip=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
-    fi
-    if [ -n "$ts_ip" ]; then
-      echo -e "  Tailscale:       ${BOLD}${GREEN}http://$ts_ip:$FRONTEND_PORT${NC}"
-    fi
-    if command -v ipconfig >/dev/null 2>&1; then
-      lan_ip=$(ipconfig getifaddr en0 2>/dev/null || true)
-    else
-      lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
-    fi
-    if [ -n "${lan_ip:-}" ]; then
-      echo -e "  LAN:             ${BOLD}${GREEN}http://$lan_ip:$FRONTEND_PORT${NC}"
-    fi
-  fi
+  case "$FRONTEND_HOST" in
+    127.0.0.1|localhost)
+      ;;
+    0.0.0.0|::|"")
+      # All interfaces: the port is reachable from LAN and tailnet alike.
+      if command -v tailscale >/dev/null 2>&1; then
+        ts_ip=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
+        [ -n "$ts_ip" ] && echo -e "  Tailscale:       ${BOLD}${GREEN}http://$ts_ip:$FRONTEND_PORT${NC}"
+      fi
+      if command -v ipconfig >/dev/null 2>&1; then
+        lan_ip=$(ipconfig getifaddr en0 2>/dev/null || true)
+      else
+        lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+      fi
+      [ -n "${lan_ip:-}" ] && echo -e "  LAN:             ${BOLD}${YELLOW}http://$lan_ip:$FRONTEND_PORT${NC}"
+      ;;
+    *)
+      echo -e "  Network:         ${BOLD}${GREEN}http://$FRONTEND_HOST:$FRONTEND_PORT${NC}"
+      ts_ip=""
+      if command -v tailscale >/dev/null 2>&1; then
+        ts_ip=$(tailscale ip -4 2>/dev/null | head -n 1 || true)
+      fi
+      if [ -n "$ts_ip" ] && [ "$ts_ip" = "$FRONTEND_HOST" ]; then
+        ts_dns=$(tailscale status --json 2>/dev/null \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))' 2>/dev/null || true)
+        [ -n "$ts_dns" ] && echo -e "  MagicDNS:        ${BOLD}${GREEN}http://$ts_dns:$FRONTEND_PORT${NC}"
+      fi
+      ;;
+  esac
   echo ""
 
   trap cleanup EXIT INT TERM

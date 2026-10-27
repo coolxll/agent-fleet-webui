@@ -38,15 +38,18 @@ Common `./start.sh` options:
 * `--port <num>`: custom backend port (default: 8000).
 * `--host <ip>`: bind address (default: 127.0.0.1).
 * `--frontend-port <num>`: Vite dev server port (dev mode, default: 5173 or next free).
-* `--frontend-host <ip>`: Vite bind address (dev mode, default: `0.0.0.0`; use `127.0.0.1` to keep it local-only).
+* `--frontend-host <ip>`: Vite bind address (dev mode, default: the Tailscale IP, or `127.0.0.1` when Tailscale is absent; `0.0.0.0` also exposes it to the LAN).
 * `--build`: force rebuild the frontend bundle before serving.
 * `--open`: launch browser automatically once ready.
 * `--dev`: run full development mode with hot reload.
 
-In dev mode the Vite server binds all interfaces by default, so the UI is reachable
-from other machines without an SSH tunnel — e.g. `http://<tailscale-ip>:5173` or
-`http://<magicdns-name>:5173`. `/api` requests are proxied server-side, so the
-backend stays on `127.0.0.1` and is never exposed directly.
+In dev mode the Vite server binds the **Tailscale interface** by default, so the UI
+is reachable from the tailnet — `http://<tailscale-ip>:5173` or
+`http://<magicdns-name>:5173` — while staying off the LAN. Without Tailscale it
+falls back to `127.0.0.1`. `/api` requests are proxied server-side, so the backend
+stays on `127.0.0.1` and is never exposed directly.
+
+Note: the API has no authentication. Only bind `0.0.0.0` on networks you trust.
 
 ---
 
@@ -67,7 +70,7 @@ The backend and CLI import the `agent_fleet` package, so run them from
     # frontend development, or build it and open http://127.0.0.1:8000
     cd ../web
     npm install
-    npm run dev        # http://localhost:5173 (also on LAN/Tailscale; proxies /api to :8000)
+    npm run dev        # http://localhost:5173 local-only; set FRONTEND_HOST=<ip> to expose
     npm run build      # writes web/dist, served by the backend
 
 First run (from `backend/`):
