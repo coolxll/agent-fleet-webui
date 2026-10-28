@@ -7,11 +7,32 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-and-build:
     name: Backend Pytest & Frontend Build
     runs-on: [self-hosted, linux, corp172-dev]
     timeout-minutes: 15
+
+    env:
+      # Proxy settings for network requests on homelab runner
+      http_proxy: http://127.0.0.1:8118
+      https_proxy: http://127.0.0.1:8118
+      all_proxy: http://127.0.0.1:8118
+      HTTP_PROXY: http://127.0.0.1:8118
+      HTTPS_PROXY: http://127.0.0.1:8118
+      ALL_PROXY: http://127.0.0.1:8118
+      no_proxy: localhost,127.0.0.1,100.*,10.*
+      NO_PROXY: localhost,127.0.0.1,100.*,10.*
+      # Persistent runner cache optimization
+      UV_CACHE_DIR: /home/lynn/actions-runner-fleet/_work/.cache/uv
+      UV_LINK_MODE: copy
 
     steps:
       - name: Checkout Repository
