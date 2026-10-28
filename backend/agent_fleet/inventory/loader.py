@@ -270,7 +270,8 @@ def load_all(settings) -> list[DiscoveredHost]:
             known.wsl = known.wsl or h.wsl
             known.kind_hint = h.kind_hint if h.kind_hint != "auto" else known.kind_hint
 
-    for p in settings.inventory_paths:
+    paths = getattr(settings, "resolved_inventory_paths", settings.inventory_paths)
+    for p in paths:
         p = Path(p)
         if p.is_dir():
             add_many(discover_inventory_dir(p))
@@ -292,7 +293,7 @@ def load_all(settings) -> list[DiscoveredHost]:
     # inventory.yaml can still exclude hosts explicitly. Exclusions win over
     # every source.
     excluded: set[str] = set()
-    for p in settings.inventory_paths:
+    for p in paths:
         p = Path(p)
         if p.suffix.lower() in (".yaml", ".yml") and p.exists():
             excluded |= load_exclusions(p)
@@ -307,3 +308,88 @@ def _is_ansible_shape(path: Path) -> bool:
     except Exception:
         return False
     return isinstance(data, dict) and "all" in data
+
+
+VALID_KINDS = {"auto", "macos", "linux", "windows", "wsl"}
+
+
+def validate_inventory_yaml(text: str) -> tuple[bool, str | None, dict]:
+    """Validate inventory YAML string.
+
+    Returns (is_valid, error_message, summary_dict).
+    """
+    if not text.strip():
+        return False, "配置内容不能为空", {}
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        return False, f"YAML 语法解析错误: {exc}", {}
+
+    if not isinstance(data, dict):
+        return False, "YAML 根节点必须是一个字典对象", {}
+
+    if "hosts" not in data and "all" not in data:
+        return False, "配置必须包含 'hosts' 列表（项目格式）或 'all' 字典（Ansible 格式）", {}
+
+    if "hosts" in data:
+        hosts_data = data["hosts"]
+        if not isinstance(hosts_data, list):
+            return False, "'hosts' 属性必须是列表格式", {}
+
+        host_names = set()
+        total_wsl = 0
+        kinds_count = {}
+
+        for idx, entry in enumerate(hosts_data):
+            if isinstance(entry, str):
+                name = entry.strip()
+                kind = "auto"
+                wsl_list = []
+            elif isinstance(entry, dict):
+                name = str(entry.get("name") or "").strip()
+                if not name:
+                    return False, f"第 {idx + 1} 个主机缺少必填属性 'name'", {}
+                kind = str(entry.get("kind") or "auto").strip().lower()
+                if kind not in VALID_KINDS:
+                    return (
+                        False,
+                        f"主机 '{name}' 的 kind '{kind}' 无效，允许值: {', '.join(sorted(VALID_KINDS))}",
+                        {},
+                    )
+                wsl_list = entry.get("wsl") or []
+                if not isinstance(wsl_list, list):
+                    return False, f"主机 '{name}' 的 'wsl' 属性必须是列表", {}
+                for w_idx, w in enumerate(wsl_list):
+                    if isinstance(w, dict):
+                        if not w.get("distro"):
+                            return False, f"主机 '{name}' 的第 {w_idx + 1} 个 WSL 实例缺少 'distro' 属性", {}
+                    elif not isinstance(w, str):
+                        return False, f"主机 '{name}' 的第 {w_idx + 1} 个 WSL 实例必须是字符串或包含 distro 的对象", {}
+            else:
+                return False, f"第 {idx + 1} 个主机定义格式错误，必须是对象或主机名字符串", {}
+
+            if name in host_names:
+                return False, f"主机名称 '{name}' 重复定义", {}
+            host_names.add(name)
+            total_wsl += len(wsl_list)
+            kinds_count[kind] = kinds_count.get(kind, 0) + 1
+
+        summary = {
+            "type": "project-yaml",
+            "host_count": len(host_names),
+            "hosts": sorted(list(host_names)),
+            "wsl_count": total_wsl,
+            "kinds": kinds_count,
+        }
+        return True, None, summary
+
+    # Ansible format validation
+    all_dict = data.get("all")
+    if not isinstance(all_dict, dict):
+        return False, "Ansible 格式的 'all' 节点必须是字典对象", {}
+    summary = {
+        "type": "ansible-yaml",
+        "has_children": "children" in all_dict,
+        "has_hosts": "hosts" in all_dict,
+    }
+    return True, None, summary

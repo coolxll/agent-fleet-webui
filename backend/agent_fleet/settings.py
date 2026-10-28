@@ -21,6 +21,46 @@ class Settings(BaseSettings):
     ]
     workspace_root: Path = ROOT.parent
 
+    @property
+    def resolved_inventory_paths(self) -> list[Path]:
+        """Return inventory paths, auto-discovering inventory.yml if inventory.yaml doesn't exist."""
+        resolved: list[Path] = []
+        for p in self.inventory_paths:
+            path = Path(p)
+            if not path.is_absolute():
+                path = ROOT / path
+            if path.exists():
+                resolved.append(path)
+            elif path.name == "inventory.yaml":
+                alt = path.with_name("inventory.yml")
+                if alt.exists():
+                    resolved.append(alt)
+                else:
+                    resolved.append(path)
+            elif path.name == "inventory.yml":
+                alt = path.with_name("inventory.yaml")
+                if alt.exists():
+                    resolved.append(alt)
+                else:
+                    resolved.append(path)
+            else:
+                resolved.append(path)
+        return resolved
+
+    @property
+    def primary_inventory_path(self) -> Path:
+        """The main inventory file path for read/write in UI/CLI."""
+        resolved = self.resolved_inventory_paths
+        for p in resolved:
+            if p.exists() and p.suffix.lower() in (".yaml", ".yml"):
+                return p
+        if resolved:
+            return resolved[0]
+        yml = ROOT / "inventory.yml"
+        if yml.exists():
+            return yml
+        return ROOT / "inventory.yaml"
+
     # Scanning
     scan_concurrency: int = 4
     ssh_connect_timeout: int = 10
