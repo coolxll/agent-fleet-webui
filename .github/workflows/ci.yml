@@ -1,4 +1,4 @@
-name: Tests
+name: CI
 
 on:
   push:
@@ -20,13 +20,9 @@ jobs:
     runs-on: [self-hosted, Linux, X64, corp172-dev]
     timeout-minutes: 15
     env:
-      http_proxy: http://127.0.0.1:8118
-      https_proxy: http://127.0.0.1:8118
-      all_proxy: http://127.0.0.1:8118
       HTTP_PROXY: http://127.0.0.1:8118
       HTTPS_PROXY: http://127.0.0.1:8118
       ALL_PROXY: http://127.0.0.1:8118
-      no_proxy: "localhost,127.0.0.1,100.*,10.*"
       NO_PROXY: "localhost,127.0.0.1,100.*,10.*"
       UV_CACHE_DIR: /tmp/.uv-cache
       UV_LINK_MODE: copy
