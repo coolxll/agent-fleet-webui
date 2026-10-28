@@ -28,10 +28,10 @@ jobs:
       HTTP_PROXY: http://127.0.0.1:8118
       HTTPS_PROXY: http://127.0.0.1:8118
       ALL_PROXY: http://127.0.0.1:8118
-      no_proxy: localhost,127.0.0.1,100.*,10.*
-      NO_PROXY: localhost,127.0.0.1,100.*,10.*
+      no_proxy: "localhost,127.0.0.1,100.*,10.*"
+      NO_PROXY: "localhost,127.0.0.1,100.*,10.*"
       # Persistent runner cache optimization
-      UV_CACHE_DIR: /home/lynn/actions-runner-fleet/_work/.cache/uv
+      UV_CACHE_DIR: /tmp/.uv-cache
       UV_LINK_MODE: copy
 
     steps:
