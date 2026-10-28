@@ -7,6 +7,7 @@ import {
 import AgentIcon, { agentLabel } from '../components/AgentIcon'
 import { QuotaCard } from '../components/QuotaPanel'
 import QuotaSourceSettings from '../components/QuotaSourceSettings'
+import QuotaAuthSettingsModal from '../components/QuotaAuthSettingsModal'
 import { useI18n } from '../i18n'
 
 function minFraction(account: ImportedQuotaAccount): number | null {
@@ -20,6 +21,7 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
   const [providers, setProviders] = useState<QuotaProviderInfo[]>([])
   const [error, setError] = useState<string | null>(null)
   const [showAdd, setShowAdd] = useState(false)
+  const [authModalOpen, setAuthModalOpen] = useState(false)
   const [provider, setProvider] = useState('codex')
   const [label, setLabel] = useState('')
   const [credential, setCredential] = useState('')
@@ -222,6 +224,13 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
             {refreshProgress
               ? `${t('quotas.refreshing')} ${refreshProgress.done}/${refreshProgress.total}`
               : `↻ ${t('quotas.refreshAll')}`}
+          </button>
+          <button
+            className="btn small"
+            onClick={() => setAuthModalOpen(true)}
+            title={language === 'zh' ? '配置 Antigravity 等平台 Client Secret 认证信息' : 'Configure OAuth Client Secrets and credentials'}
+          >
+            ⚙️ {language === 'zh' ? '认证配置' : 'Auth Settings'}
           </button>
           <button
             className="btn primary small"
@@ -452,6 +461,12 @@ export default function QuotasView({ refreshSignal }: { refreshSignal?: number }
             : 'Magpie links store only an account reference and read current authentication for each query. Manually imported credentials are stored by the backend.'}
         </div>
       ) : null}
+
+      <QuotaAuthSettingsModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        onSaved={load}
+      />
     </div>
   )
 }

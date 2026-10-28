@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
+import tempfile
 
 from agent_fleet.services.quota_providers import QuotaProviderError, _decode_jwt_payload, _iso
 from agent_fleet.settings import get_settings
@@ -54,6 +55,100 @@ def _read_client_secrets() -> dict[str, str]:
 
 def client_secrets() -> dict[str, str]:
     return {cid: secret for cid, secret in _read_client_secrets().items() if cid in CLIENT_IDS}
+
+
+def mask_secret(secret: str) -> str:
+    """Mask a secret string for safe display, e.g. GOCSPX-abc...xyz."""
+    if not secret:
+        return ""
+    if len(secret) <= 8:
+        return "********"
+    return f"{secret[:6]}...{secret[-4:]}"
+
+
+def get_client_secrets_status() -> list[dict]:
+    """Get the status of all supported Antigravity client IDs without leaking raw secrets."""
+    env_raw = os.environ.get(CLIENT_SECRETS_ENV, "").strip()
+    env_secrets = {}
+    if env_raw:
+        try:
+            parsed = json.loads(env_raw)
+            if isinstance(parsed, dict):
+                env_secrets = {str(k): v for k, v in parsed.items() if isinstance(v, str)}
+        except Exception:
+            pass
+
+    file_secrets = {}
+    p = clients_file()
+    if p.is_file():
+        try:
+            parsed = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                file_secrets = {str(k): v for k, v in parsed.items() if isinstance(v, str)}
+        except Exception:
+            pass
+
+    out = []
+    ordered_cids = [DEFAULT_CLIENT] + sorted([c for c in CLIENT_IDS if c != DEFAULT_CLIENT])
+    for cid in ordered_cids:
+        if cid in env_secrets:
+            sec = env_secrets[cid]
+            source = "env"
+        elif cid in file_secrets:
+            sec = file_secrets[cid]
+            source = "file"
+        else:
+            sec = ""
+            source = "none"
+
+        configured = bool(sec)
+        out.append(
+            {
+                "client_id": cid,
+                "is_default": cid == DEFAULT_CLIENT,
+                "configured": configured,
+                "masked_secret": mask_secret(sec) if configured else None,
+                "source": source,
+            }
+        )
+    return out
+
+
+def save_client_secrets_file(new_secrets: dict[str, str]) -> list[dict]:
+    """Save client secrets to data/antigravity_clients.json safely."""
+    path = clients_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    current = {}
+    if path.is_file():
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(parsed, dict):
+                current = {str(k): str(v) for k, v in parsed.items() if v}
+        except Exception:
+            pass
+
+    for cid, sec in new_secrets.items():
+        if cid not in CLIENT_IDS:
+            raise ValueError(f"不受支持的 Client ID: {cid}")
+        sec_str = (sec or "").strip()
+        if sec_str:
+            current[cid] = sec_str
+        elif cid in current:
+            del current[cid]
+
+    fd, tmp = tempfile.mkstemp(prefix=".antigravity-clients-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(current, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+    return get_client_secrets_status()
 
 
 def _require_client_secret(client_id: str) -> str:

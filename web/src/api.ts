@@ -774,4 +774,39 @@ export async function saveInventoryRaw(content: string): Promise<InventorySaveRe
   return res.json()
 }
 
+export type AntigravityClientStatus = {
+  client_id: string
+  is_default: boolean
+  configured: boolean
+  masked_secret: string | null
+  source: 'env' | 'file' | 'none'
+}
+
+export type AntigravitySettingsResponse = {
+  ok: boolean
+  clients: AntigravityClientStatus[]
+}
+
+export async function getAntigravityQuotaSettings(): Promise<AntigravitySettingsResponse> {
+  const res = await fetch('/api/quota-settings/antigravity')
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function updateAntigravityQuotaSettings(
+  secrets: Record<string, string>
+): Promise<AntigravitySettingsResponse> {
+  const res = await fetch('/api/quota-settings/antigravity', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ secrets }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+
 
