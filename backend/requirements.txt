@@ -6,5 +6,6 @@ sqlalchemy>=2
 pyyaml
 pytest
 pytest-asyncio
+pytest-xdist
 httpx
 cryptography

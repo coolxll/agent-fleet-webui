@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -23,7 +24,8 @@ from agent_fleet.services.updates import (
 )
 from agent_fleet.services.scheduler import get_schedule
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
-from agent_fleet.settings import get_settings
+from agent_fleet.inventory.loader import validate_inventory_yaml
+from agent_fleet.settings import ROOT, get_settings
 
 router = APIRouter()
 
@@ -447,6 +449,10 @@ def delete_host(host_id: str):
     return {"ok": True, "deleted": label}
 
 
+class InventoryContentPayload(BaseModel):
+    content: str
+
+
 @router.post("/inventory/sync")
 def inventory_sync():
     settings = get_settings()
@@ -454,6 +460,86 @@ def inventory_sync():
     if settings.include_local_runtime:
         add_local_runtime(settings)
     return {"ok": True, **result}
+
+
+@router.get("/inventory/raw")
+def get_inventory_raw():
+    settings = get_settings()
+    path = settings.primary_inventory_path
+    exists = path.is_file()
+    content = path.read_text(encoding="utf-8", errors="replace") if exists else ""
+    example_path = ROOT / "examples" / "inventory.yaml"
+    example_content = (
+        example_path.read_text(encoding="utf-8", errors="replace") if example_path.is_file() else ""
+    )
+    rel_path = str(path.relative_to(ROOT) if path.is_relative_to(ROOT) else path)
+    return {
+        "ok": True,
+        "exists": exists,
+        "path": rel_path,
+        "content": content,
+        "example_content": example_content,
+    }
+
+
+@router.post("/inventory/validate")
+def validate_inventory_route(payload: InventoryContentPayload):
+    valid, error, summary = validate_inventory_yaml(payload.content)
+    return {
+        "ok": True,
+        "valid": valid,
+        "error": error,
+        "summary": summary,
+    }
+
+
+@router.post("/inventory/raw")
+def save_inventory_raw(payload: InventoryContentPayload):
+    settings = get_settings()
+    valid, error, summary = validate_inventory_yaml(payload.content)
+    if not valid:
+        raise HTTPException(status_code=400, detail=f"配置校验未通过: {error}")
+
+    target_path = settings.primary_inventory_path
+    # Security: check that target_path is either inside project ROOT or declared in settings.inventory_paths
+    if target_path.suffix.lower() not in (".yaml", ".yml"):
+        raise HTTPException(status_code=403, detail="仅允许写入 .yaml 或 .yml 配置文件")
+
+    is_allowed = False
+    try:
+        resolved_target = target_path.resolve()
+        resolved_root = ROOT.resolve()
+        if resolved_target.is_relative_to(resolved_root):
+            is_allowed = True
+    except (ValueError, Exception):
+        pass
+
+    # Also allow if explicitly declared in settings.inventory_paths (e.g. testing or custom location)
+    if not is_allowed:
+        for p in settings.inventory_paths:
+            try:
+                if Path(p).resolve() == target_path.resolve():
+                    is_allowed = True
+                    break
+            except Exception:
+                pass
+
+    if not is_allowed:
+        raise HTTPException(status_code=403, detail="非法写入路径：目标文件必须位于项目目录内或显式配置于 inventory_paths")
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(payload.content, encoding="utf-8")
+    sync_result = sync_inventory(settings)
+    if settings.include_local_runtime:
+        add_local_runtime(settings)
+
+    rel_path = str(target_path.relative_to(ROOT) if target_path.is_relative_to(ROOT) else target_path)
+    return {
+        "ok": True,
+        "path": rel_path,
+        "summary": summary,
+        "sync_result": sync_result,
+    }
 
 
 # --------------------------------------------------------------------------

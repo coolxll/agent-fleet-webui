@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Backend Pytest & Frontend Build
+    runs-on: [self-hosted, Linux, X64, corp172-dev]
+    timeout-minutes: 15
+    env:
+      HTTP_PROXY: http://127.0.0.1:8118
+      HTTPS_PROXY: http://127.0.0.1:8118
+      ALL_PROXY: http://127.0.0.1:8118
+      NO_PROXY: "localhost,127.0.0.1,100.*,10.*"
+      UV_CACHE_DIR: /tmp/.uv-cache
+      UV_LINK_MODE: copy
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Backend Environment (Python 3.13 via uv)
+        run: |
+          uv venv .venv --python 3.13
+          uv pip install -r backend/requirements.txt
+
+      - name: Run Backend Tests (Parallel via pytest-xdist)
+        run: |
+          export PYTHONPATH=backend
+          .venv/bin/python -m pytest tests/ -n auto --dist=loadscope -q
+
+      - name: Setup Frontend & Run Checks
+        run: |
+          cd web
+          npm install
+          npm run typecheck
+          npm run build

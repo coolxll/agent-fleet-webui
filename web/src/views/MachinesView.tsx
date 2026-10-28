@@ -6,6 +6,7 @@ import UpgradeModal, { UpgradeIcon, UpgradeTarget } from '../components/UpgradeM
 import { useI18n } from '../i18n'
 import { useUpgrades } from '../context/UpgradesContext'
 import { RuntimeDaemonsSummary } from './DaemonsView'
+import InventoryModal from '../components/InventoryModal'
 
 function ago(iso: string | null, t: any): string {
   if (!iso) return ''
@@ -49,6 +50,7 @@ export default function MachinesView({
   })
 
   const [upgradeTarget, setUpgradeTarget] = useState<UpgradeTarget | null>(null)
+  const [inventoryModalOpen, setInventoryModalOpen] = useState(false)
   const [rescanningHost, setRescanningHost] = useState<string | null>(null)
   const [copiedHost, setCopiedHost] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -351,10 +353,51 @@ export default function MachinesView({
               {language === 'zh' ? '待升级' : 'Behind'}
             </button>
           </div>
+
+          <button
+            type="button"
+            className="btn small"
+            onClick={() => setInventoryModalOpen(true)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
+            title={language === 'zh' ? '管理或编辑集群 inventory.yaml' : 'Manage or edit fleet inventory.yaml'}
+          >
+            <span>⚙️</span>
+            <span>{language === 'zh' ? '配置 Inventory' : 'Inventory'}</span>
+          </button>
         </div>
       </div>
 
-      {viewMode === 'workbench' ? (
+      {hosts.length === 0 ? (
+        <div
+          style={{
+            padding: '60px 20px',
+            textAlign: 'center',
+            backgroundColor: 'var(--card-bg, #161b22)',
+            border: '1px dashed #30363d',
+            borderRadius: 8,
+            marginTop: 20
+          }}
+        >
+          <div style={{ fontSize: 36, marginBottom: 12 }}>🖥️</div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: '#f0f6fc', marginBottom: 8 }}>
+            {language === 'zh' ? '尚未发现配置的集群机器' : 'No fleet machines configured yet'}
+          </div>
+          <div style={{ fontSize: 13, color: '#8b949e', maxWidth: 480, margin: '0 auto 20px' }}>
+            {language === 'zh'
+              ? 'Agent Fleet 通过声明式 YAML 文件管理您的多机集群。请配置 inventory.yaml 以发现并管理更多节点。'
+              : 'Agent Fleet manages your fleet via a declarative inventory YAML. Configure inventory.yaml to discover your machines.'}
+          </div>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => setInventoryModalOpen(true)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: '0 auto' }}
+          >
+            <span>⚙️</span>
+            <span>{language === 'zh' ? '立即配置 Inventory' : 'Configure Inventory Now'}</span>
+          </button>
+        </div>
+      ) : viewMode === 'workbench' ? (
         // Mode 1: Workbench Layout (Left Sidebar + Right Machine Control Plane)
         <div className="workbench-layout">
           {/* Left Machine Sidebar */}
@@ -929,6 +972,12 @@ export default function MachinesView({
           }}
         />
       )}
+
+      <InventoryModal
+        isOpen={inventoryModalOpen}
+        onClose={() => setInventoryModalOpen(false)}
+        onSaved={loadHosts}
+      />
     </div>
   )
 }

@@ -716,3 +716,62 @@ function withFallback(primary: string, fallback: string): string {
   return fallback ? `${primary} || ${fallback}` : primary
 }
 
+export type InventoryRawResponse = {
+  ok: boolean
+  exists: boolean
+  path: string
+  content: string
+  example_content: string
+}
+
+export type InventoryValidateResponse = {
+  ok: boolean
+  valid: boolean
+  error: string | null
+  summary: {
+    type?: string
+    host_count?: number
+    hosts?: string[]
+    wsl_count?: number
+    kinds?: Record<string, number>
+    [key: string]: any
+  }
+}
+
+export type InventorySaveResponse = {
+  ok: boolean
+  path: string
+  summary?: any
+  sync_result?: any
+}
+
+export async function getInventoryRaw(): Promise<InventoryRawResponse> {
+  const res = await fetch('/api/inventory/raw')
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function validateInventory(content: string): Promise<InventoryValidateResponse> {
+  const res = await fetch('/api/inventory/validate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return res.json()
+}
+
+export async function saveInventoryRaw(content: string): Promise<InventorySaveResponse> {
+  const res = await fetch('/api/inventory/raw', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+
