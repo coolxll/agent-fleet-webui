@@ -36,10 +36,10 @@ jobs:
           uv venv .venv --python 3.13
           uv pip install -r backend/requirements.txt
 
-      - name: Run Backend Tests
+      - name: Run Backend Tests (Parallel via pytest-xdist)
         run: |
           export PYTHONPATH=backend
-          .venv/bin/python -m pytest tests/ -v
+          .venv/bin/python -m pytest tests/ -n auto --dist=loadscope -q
 
       - name: Setup Frontend & Run Checks
         run: |
