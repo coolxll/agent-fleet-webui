@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from agent_fleet.services import magpie_quota
+from agent_fleet.services import magpie_quota, antigravity_quota
 
 router = APIRouter()
 
@@ -39,3 +39,25 @@ def collection_settings():
 @router.put("/quota-collection")
 def update_collection(body: CollectionSettings):
     return magpie_quota.update_collection(body.enabled, body.interval_seconds)
+
+
+class AntigravitySecretsUpdate(BaseModel):
+    secrets: dict[str, str]
+
+
+@router.get("/quota-settings/antigravity")
+def get_antigravity_settings():
+    return {
+        "ok": True,
+        "clients": antigravity_quota.get_client_secrets_status(),
+    }
+
+
+@router.post("/quota-settings/antigravity")
+def update_antigravity_settings(body: AntigravitySecretsUpdate):
+    try:
+        updated = antigravity_quota.save_client_secrets_file(body.secrets)
+        return {"ok": True, "clients": updated}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
