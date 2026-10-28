@@ -5,36 +5,37 @@
 set -euo pipefail
 
 REPO="coolxll/agent-fleet-webui"
-RUNNER_NAME="corp172-dev-fleet"
 REMOTE_HOST="corp172-dev"
-REMOTE_DIR="/home/lynn/actions-runner-fleet"
 
-echo "==> 1. 从 GitHub 仓库反注册并移除 Runner ($RUNNER_NAME)..."
-RUNNER_ID=$(gh api "/repos/$REPO/actions/runners" --jq ".runners[] | select(.name==\"$RUNNER_NAME\") | .id" 2>/dev/null || true)
+echo "==> 1. 从 GitHub 仓库反注册并移除相关 Fleet Runner..."
+RUNNER_IDS=$(gh api "/repos/$REPO/actions/runners" --jq '.runners[] | select(.name | test("corp172-dev-fleet")) | .id' 2>/dev/null || true)
 
-if [ -n "$RUNNER_ID" ]; then
-  gh api --method DELETE "/repos/$REPO/actions/runners/$RUNNER_ID" >/dev/null
-  echo "✓ GitHub Runner (ID: $RUNNER_ID) 已从仓库 $REPO 注销成功"
+if [ -n "$RUNNER_IDS" ]; then
+  for rid in $RUNNER_IDS; do
+    gh api --method DELETE "/repos/$REPO/actions/runners/$rid" >/dev/null || true
+    echo "✓ GitHub Runner (ID: $rid) 已从仓库 $REPO 注销成功"
+  done
 else
-  echo "ℹ GitHub 仓库中未找到名为 $RUNNER_NAME 的 runner，跳过 GitHub 端反注册"
+  echo "ℹ GitHub 仓库中未找到 Fleet 相关 runner，跳过 GitHub 端反注册"
 fi
 
 echo "==> 2. 清理 $REMOTE_HOST 上的运行进程与磁盘目录..."
 ssh -o BatchMode=yes "$REMOTE_HOST" "
   echo '   - 终止 tmux session 及相关进程...'
   tmux kill-session -t actions-runner-fleet 2>/dev/null || true
-  pkill -f '$REMOTE_DIR' 2>/dev/null || true
+  tmux kill-session -t actions-runner-fleet-2 2>/dev/null || true
+  pkill -f 'actions-runner-fleet' 2>/dev/null || true
   sleep 1
 
-  echo '   - 删除目录 $REMOTE_DIR...'
-  rm -rf '$REMOTE_DIR'
+  echo '   - 删除目录 /home/lynn/actions-runner-fleet*...'
+  rm -rf /home/lynn/actions-runner-fleet /home/lynn/actions-runner-fleet-2
   echo '✓ 远端清理完成'
 "
 
 echo "==> 3. 核验下线状态..."
-REMAINING=$(gh api "/repos/$REPO/actions/runners" --jq ".runners[] | select(.name==\"$RUNNER_NAME\") | .name" 2>/dev/null || true)
+REMAINING=$(gh api "/repos/$REPO/actions/runners" --jq '.runners[] | select(.name | test("corp172-dev-fleet")) | .name' 2>/dev/null || true)
 if [ -z "$REMAINING" ]; then
-  echo "✓ 验证通过：Runner 已彻底下线并清理完毕，无任何残留。"
+  echo "✓ 验证通过：所有 Fleet Runner 已彻底下线并清理完毕，无任何残留。"
 else
   echo "⚠️ 警告：GitHub 上仍可探测到 $REMAINING"
 fi
