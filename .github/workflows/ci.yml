@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    name: Backend Pytest & Frontend Build
+    runs-on: [self-hosted, linux, corp172-dev]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Backend Environment (Python 3.13 via uv)
+        run: |
+          uv venv .venv --python 3.13
+          uv pip install -r backend/requirements.txt
+
+      - name: Run Backend Tests
+        run: |
+          export PYTHONPATH=backend
+          .venv/bin/python -m pytest tests/ -v
+
+      - name: Setup Frontend & Run Checks
+        run: |
+          cd web
+          npm install
+          npm run typecheck
+          npm run build
