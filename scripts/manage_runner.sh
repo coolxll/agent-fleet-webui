@@ -468,7 +468,7 @@ cmd_start_slot() {
 
     # 清理并解压当前槽位目录与会话
     tmux kill-session -t \"$session_name\" 2>/dev/null || true
-    pkill -f \"$target_dir\" 2>/dev/null || true
+    pkill -f \"$target_dir/\" 2>/dev/null || true
     rm -rf \"$target_dir\"/*
     tar -zxf \"\$TARBALL\" -C \"$target_dir\"
 
@@ -585,8 +585,17 @@ cmd_stop_slot() {
     local gh_runners
     gh_runners=$(gh api "repos/$repo/actions/runners" 2>/dev/null || true)
     if [ -n "$gh_runners" ]; then
-      local candidate
-      candidate=$(echo "$gh_runners" | jq -c ".runners[] | select(.name == \"${host}-${safe_repo}-${slot}\" or .name == \"${host}-${safe_repo}\")" 2>/dev/null | head -n 1 || true)
+      local candidate=""
+      if [ -n "$runner_name" ]; then
+        candidate=$(echo "$gh_runners" | jq -c ".runners[] | select(.name == \"$runner_name\")" 2>/dev/null | head -n 1 || true)
+      else
+        local exact_name="${host}-${safe_repo}-${slot}"
+        candidate=$(echo "$gh_runners" | jq -c ".runners[] | select(.name == \"$exact_name\")" 2>/dev/null | head -n 1 || true)
+        if [ -z "$candidate" ] && [ "$slot" = "0" ]; then
+          local legacy_name="${host}-${safe_repo}"
+          candidate=$(echo "$gh_runners" | jq -c ".runners[] | select(.name == \"$legacy_name\")" 2>/dev/null | head -n 1 || true)
+        fi
+      fi
       if [ -n "$candidate" ]; then
         runner_name=$(echo "$candidate" | jq -r '.name')
         rid=$(echo "$candidate" | jq -r '.id')
@@ -622,7 +631,7 @@ cmd_stop_slot() {
 
   ssh "$host" "
     tmux kill-session -t \"$session_name\" 2>/dev/null || true
-    pkill -f \"$target_dir\" 2>/dev/null || true
+    pkill -f \"$target_dir/\" 2>/dev/null || true
     rm -rf \"$target_dir\"
   " 2>/dev/null || true
   echo "✓ 远端主机 [$host] 槽位 [$slot] 会话与目录已清理"

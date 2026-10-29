@@ -521,3 +521,239 @@ def test_cmd_start_and_stop_slot_semantics(mock_fleet_env):
     assert res_stop_idle.returncode == 0
     assert "GitHub 端反注册成功 (ID: 301)" in res_stop_idle.stdout
     assert "DELETE 301" in deleted_log.read_text(encoding="utf-8")
+
+
+def test_stop_non_zero_slot_ignores_legacy_even_if_first(mock_fleet_env):
+    """Issue #52: 停止非零槽位时必须精确匹配该槽位，即便 legacy 实例排在 API 返回列表首位。"""
+    env = mock_fleet_env["env"]
+    gh_runners_file = mock_fleet_env["gh_runners_file"]
+    deleted_log = mock_fleet_env["deleted_log"]
+    ssh_log = mock_fleet_env["ssh_log"]
+
+    # legacy (ID: 100) 排在首位，slot 1 (ID: 101) 排在后面
+    gh_runners_file.write_text(
+        json.dumps({
+            "total_count": 2,
+            "runners": [
+                {
+                    "id": 100,
+                    "name": "runner-node-01-org-test-repo",
+                    "status": "online",
+                    "busy": False,
+                    "os": "Linux",
+                    "labels": [{"id": 1, "name": "self-hosted"}],
+                },
+                {
+                    "id": 101,
+                    "name": "runner-node-01-org-test-repo-1",
+                    "status": "online",
+                    "busy": False,
+                    "os": "Linux",
+                    "labels": [{"id": 1, "name": "self-hosted"}],
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    # 停止槽位 1
+    res = run_bash_cmd(f"{SCRIPT_PATH} stop org/test-repo runner-node-01 1", env)
+    assert res.returncode == 0
+
+    # 验证 GitHub 注销仅针对 ID 101，绝不误杀 legacy (ID: 100)
+    del_content = deleted_log.read_text(encoding="utf-8")
+    assert "DELETE 101" in del_content
+    assert "DELETE 100" not in del_content, "停止 slot 1 严禁误删 legacy runner"
+
+    # 验证清理的远端会话与路径仅为 slot 1
+    ssh_content = ssh_log.read_text(encoding="utf-8")
+    assert 'tmux kill-session -t "runner-org-test-repo-1"' in ssh_content
+    assert 'pkill -f "/home/testuser/runners/org-test-repo-1/"' in ssh_content
+    assert 'rm -rf "/home/testuser/runners/org-test-repo-1"' in ssh_content
+
+
+def test_stop_non_zero_slot_when_absent_never_falls_back_to_legacy(mock_fleet_env):
+    """Issue #52: 停止未在线的非零槽位时，严禁回退并注销 legacy 实例。"""
+    env = mock_fleet_env["env"]
+    gh_runners_file = mock_fleet_env["gh_runners_file"]
+    deleted_log = mock_fleet_env["deleted_log"]
+    ssh_log = mock_fleet_env["ssh_log"]
+
+    # 仅存在 legacy runner (ID: 100)，无 slot 2
+    gh_runners_file.write_text(
+        json.dumps({
+            "total_count": 1,
+            "runners": [
+                {
+                    "id": 100,
+                    "name": "runner-node-01-org-test-repo",
+                    "status": "online",
+                    "busy": False,
+                    "os": "Linux",
+                    "labels": [{"id": 1, "name": "self-hosted"}],
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    # 停止槽位 2
+    res = run_bash_cmd(f"{SCRIPT_PATH} stop org/test-repo runner-node-01 2", env)
+    assert res.returncode == 0
+
+    # 绝不执行针对 ID 100 的 DELETE
+    del_content = deleted_log.read_text(encoding="utf-8")
+    assert "DELETE 100" not in del_content
+
+    # 远端清理操作只作用于 slot 2
+    ssh_content = ssh_log.read_text(encoding="utf-8")
+    assert 'tmux kill-session -t "runner-org-test-repo-2"' in ssh_content
+    assert 'pkill -f "/home/testuser/runners/org-test-repo-2/"' in ssh_content
+
+
+def test_stop_slot_0_prefers_exact_over_legacy(mock_fleet_env):
+    """Issue #52: 当 slot 0 与 legacy 同时存在时，停止槽位 0 优先精确注销 slot-0 实例。"""
+    env = mock_fleet_env["env"]
+    gh_runners_file = mock_fleet_env["gh_runners_file"]
+    deleted_log = mock_fleet_env["deleted_log"]
+    ssh_log = mock_fleet_env["ssh_log"]
+
+    gh_runners_file.write_text(
+        json.dumps({
+            "total_count": 2,
+            "runners": [
+                {
+                    "id": 100,
+                    "name": "runner-node-01-org-test-repo",
+                    "status": "online",
+                    "busy": False,
+                    "os": "Linux",
+                    "labels": [{"id": 1, "name": "self-hosted"}],
+                },
+                {
+                    "id": 200,
+                    "name": "runner-node-01-org-test-repo-0",
+                    "status": "online",
+                    "busy": False,
+                    "os": "Linux",
+                    "labels": [{"id": 1, "name": "self-hosted"}],
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    res = run_bash_cmd(f"{SCRIPT_PATH} stop org/test-repo runner-node-01 0", env)
+    assert res.returncode == 0
+
+    # 精确匹配 slot-0 (ID: 200)，不误删 legacy (ID: 100)
+    del_content = deleted_log.read_text(encoding="utf-8")
+    assert "DELETE 200" in del_content
+    assert "DELETE 100" not in del_content
+
+    ssh_content = ssh_log.read_text(encoding="utf-8")
+    assert 'tmux kill-session -t "runner-org-test-repo-0"' in ssh_content
+    assert 'pkill -f "/home/testuser/runners/org-test-repo-0/"' in ssh_content
+
+
+def test_stop_slot_0_falls_back_to_legacy_when_slot_0_absent(mock_fleet_env):
+    """Issue #52: 仅当 slot-0 不存在时，停止槽位 0 允许回退选中 legacy 实例。"""
+    env = mock_fleet_env["env"]
+    gh_runners_file = mock_fleet_env["gh_runners_file"]
+    deleted_log = mock_fleet_env["deleted_log"]
+    ssh_log = mock_fleet_env["ssh_log"]
+
+    gh_runners_file.write_text(
+        json.dumps({
+            "total_count": 1,
+            "runners": [
+                {
+                    "id": 100,
+                    "name": "runner-node-01-org-test-repo",
+                    "status": "online",
+                    "busy": False,
+                    "os": "Linux",
+                    "labels": [{"id": 1, "name": "self-hosted"}],
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    res = run_bash_cmd(f"{SCRIPT_PATH} stop org/test-repo runner-node-01 0", env)
+    assert res.returncode == 0
+
+    # 成功回退注销 legacy
+    del_content = deleted_log.read_text(encoding="utf-8")
+    assert "DELETE 100" in del_content
+
+    ssh_content = ssh_log.read_text(encoding="utf-8")
+    assert 'tmux kill-session -t "runner-org-test-repo"' in ssh_content
+    assert 'pkill -f "/home/testuser/runners/org-test-repo/"' in ssh_content
+
+
+def test_directory_path_termination_boundary_isolation(mock_fleet_env):
+    """Issue #53: 进程终止按完整目录路径边界隔离，避免 slot-1 杀死 slot-10/11，或 legacy 杀死带后缀槽位。"""
+    env = mock_fleet_env["env"]
+    ssh_log = mock_fleet_env["ssh_log"]
+
+    # 1. 停止 slot 1
+    res1 = run_bash_cmd(f"{SCRIPT_PATH} stop org/test-repo runner-node-01 1", env)
+    assert res1.returncode == 0
+    ssh_content1 = ssh_log.read_text(encoding="utf-8")
+
+    # 提取 pkill 模式
+    import re
+    m1 = re.search(r'pkill -f "([^"]+)"', ssh_content1)
+    assert m1 is not None, "必须包含 pkill 命令"
+    pattern1 = m1.group(1)
+    assert pattern1 == "/home/testuser/runners/org-test-repo-1/"
+
+    # 验证 regex 隔离边界
+    regex1 = re.compile(pattern1)
+    # 应匹配 slot 1 的进程
+    assert regex1.search("/home/testuser/runners/org-test-repo-1/run.sh")
+    assert regex1.search("/home/testuser/runners/org-test-repo-1/bin/Runner.Listener run")
+    # 绝对不得误伤 slot 10, slot 11
+    assert not regex1.search("/home/testuser/runners/org-test-repo-10/run.sh")
+    assert not regex1.search("/home/testuser/runners/org-test-repo-10/bin/Runner.Listener run")
+    assert not regex1.search("/home/testuser/runners/org-test-repo-11/run.sh")
+    assert not regex1.search("/home/testuser/runners/org-test-repo-11/bin/Runner.Listener run")
+
+    # 2. 停止 legacy (slot 0 回退)
+    gh_runners_file = mock_fleet_env["gh_runners_file"]
+    gh_runners_file.write_text(
+        json.dumps({
+            "total_count": 1,
+            "runners": [
+                {
+                    "id": 100,
+                    "name": "runner-node-01-org-test-repo",
+                    "status": "online",
+                    "busy": False,
+                    "os": "Linux",
+                    "labels": [{"id": 1, "name": "self-hosted"}],
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+    ssh_log.write_text("", encoding="utf-8")
+    res0 = run_bash_cmd(f"{SCRIPT_PATH} stop org/test-repo runner-node-01 0", env)
+    assert res0.returncode == 0
+    ssh_content0 = ssh_log.read_text(encoding="utf-8")
+
+    m0 = re.search(r'pkill -f "([^"]+)"', ssh_content0)
+    assert m0 is not None, "必须包含 pkill 命令"
+    pattern0 = m0.group(1)
+    assert pattern0 == "/home/testuser/runners/org-test-repo/"
+
+    regex0 = re.compile(pattern0)
+    # 应匹配 legacy 的进程
+    assert regex0.search("/home/testuser/runners/org-test-repo/run.sh")
+    assert regex0.search("/home/testuser/runners/org-test-repo/bin/Runner.Listener run")
+    # 绝对不得误伤带后缀的槽位: slot 0, slot 1, slot 10
+    assert not regex0.search("/home/testuser/runners/org-test-repo-0/run.sh")
+    assert not regex0.search("/home/testuser/runners/org-test-repo-0/bin/Runner.Listener run")
+    assert not regex0.search("/home/testuser/runners/org-test-repo-1/run.sh")
+    assert not regex0.search("/home/testuser/runners/org-test-repo-10/run.sh")
