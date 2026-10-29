@@ -77,7 +77,7 @@ def _cleanup_phantom_local_hosts(s, active_controller_name: str) -> int:
     return removed
 
 
-def sync_inventory(settings) -> dict:
+def sync_inventory(settings, force: bool = False) -> dict:
     """Upsert hosts/runtimes from all inventory sources. Non-destructive."""
     hosts = load_all(settings)
     controller_name = _find_controller_host_name(settings, hosts)
@@ -98,12 +98,22 @@ def sync_inventory(settings) -> dict:
                 s.add(row)
                 created_hosts += 1
             else:
-                row.hostname = h.hostname or row.hostname
-                row.group = h.group or row.group
-                if h.tags:
-                    merged = dict(row.tags or {})
-                    merged.update(h.tags)
-                    row.tags = merged
+                if force:
+                    row.hostname = h.hostname or row.hostname
+                    row.group = h.group or row.group
+                    if h.tags:
+                        merged = dict(row.tags or {})
+                        merged.update(h.tags)
+                        row.tags = merged
+                else:
+                    if not row.hostname and h.hostname:
+                        row.hostname = h.hostname
+                    if not row.group and h.group:
+                        row.group = h.group
+                    if h.tags:
+                        merged = dict(h.tags)
+                        merged.update(row.tags or {})
+                        row.tags = merged
                 updated += 1
             s.flush()
 
@@ -139,9 +149,14 @@ def sync_inventory(settings) -> dict:
             else:
                 if is_controller:
                     primary.transport = "local"
-                primary.ssh_host = h.hostname or primary.ssh_host
-                primary.ssh_port = h.port or primary.ssh_port
-                primary.collect_user = h.user or primary.collect_user
+                if force:
+                    primary.ssh_host = h.hostname or primary.ssh_host
+                    primary.ssh_port = h.port or primary.ssh_port
+                    primary.collect_user = h.user or primary.collect_user
+                else:
+                    primary.ssh_host = primary.ssh_host or h.hostname
+                    primary.ssh_port = primary.ssh_port or h.port
+                    primary.collect_user = primary.collect_user or h.user
                 # The transport hint decides how we reach the machine, so it is
                 # always applied. The kind hint is only a pre-scan guess: once a
                 # probe has observed the runtime, the observation wins.

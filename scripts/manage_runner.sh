@@ -27,13 +27,28 @@ py_query() {
 import sys, sqlite3, json
 from pathlib import Path
 
-db_path = Path("${AGENT_FLEET_DB_PATH:-$ROOT_DIR/data/fleet.db}")
-cfg = {"hosts": {}, "pools": {}}
+db_path_env="${AGENT_FLEET_DB_PATH:-}"
+runner_config_env="${RUNNER_FLEET_CONFIG:-}"
 
-if db_path.is_file():
+if db_path_env:
+    db_path = Path(db_path_env)
+elif not runner_config_env:
+    db_path = Path("$ROOT_DIR/data/fleet.db")
+else:
+    db_path = None
+
+cfg = {"hosts": {}, "pools": {}}
+sqlite_has_hosts = False
+
+if db_path and db_path.is_file():
     try:
         conn = sqlite3.connect(str(db_path))
         cur = conn.cursor()
+        cur.execute("SELECT count(*) FROM hosts")
+        total_hosts = cur.fetchone()[0]
+        if total_hosts > 0:
+            sqlite_has_hosts = True
+
         cur.execute("SELECT name, ssh_user, proxy, runner_labels, target_repos, runner_enabled, runner_max_concurrency, description FROM hosts WHERE enabled=1")
         for row in cur.fetchall():
             h_name, user, proxy, labels_raw, repos_raw, r_enabled, max_r, desc = row
@@ -61,18 +76,14 @@ if db_path.is_file():
     except Exception:
         pass
 
-# Fallback & Supplement: if CONFIG_FILE exists, merge any missing entries
-if Path("$CONFIG_FILE").is_file():
+# Fallback: only if SQLite does not exist or has 0 hosts, fallback to reading CONFIG_FILE
+if not sqlite_has_hosts and Path("$CONFIG_FILE").is_file():
     try:
         import yaml
         with open("$CONFIG_FILE", "r", encoding="utf-8") as f:
             y = yaml.safe_load(f) or {}
-            for k, v in (y.get("hosts", {}) or {}).items():
-                if k not in cfg["hosts"]:
-                    cfg["hosts"][k] = v
-            for k, v in (y.get("pools", {}) or {}).items():
-                if k not in cfg["pools"]:
-                    cfg["pools"][k] = v
+            cfg["hosts"] = y.get("hosts", {}) or {}
+            cfg["pools"] = y.get("pools", {}) or {}
     except Exception:
         pass
 
