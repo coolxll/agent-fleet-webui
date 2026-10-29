@@ -1,13 +1,13 @@
 # ==========================================
 # Stage 1: Build Frontend Assets
 # ==========================================
-FROM node:20-slim AS frontend-builder
+FROM node:22-slim AS frontend-builder
 
 WORKDIR /app/web
 
-# Install frontend dependencies (utilize layer caching)
+# Install frontend dependencies (utilize layer caching, deterministic install)
 COPY web/package.json web/package-lock.json* ./
-RUN npm ci || npm install
+RUN npm ci
 
 # Build frontend production bundle
 COPY web/ ./
@@ -36,15 +36,34 @@ COPY backend/ /app/backend/
 # Copy built frontend assets from frontend-builder stage
 COPY --from=frontend-builder /app/web/dist /app/web/dist
 
-# Copy default inventory template if present
-COPY inventory.yaml* /app/
+# Copy example templates and default inventory fallback (guarantees clean checkout builds)
+COPY examples/ /app/examples/
+COPY examples/inventory.yaml /app/inventory.yaml
+
+# Version and build metadata arguments
+ARG AGENT_FLEET_VERSION=0.2.0
+ARG AGENT_FLEET_COMMIT=dev
+ARG BUILD_TIME=""
 
 # Environment defaults
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/backend \
     AGENT_FLEET_HOST=0.0.0.0 \
     AGENT_FLEET_PORT=8000 \
-    AGENT_FLEET_DATA_DIR=/app/data
+    AGENT_FLEET_DATA_DIR=/app/data \
+    AGENT_FLEET_VERSION=${AGENT_FLEET_VERSION} \
+    AGENT_FLEET_COMMIT_SHA=${AGENT_FLEET_COMMIT} \
+    AGENT_FLEET_BUILD_TIME=${BUILD_TIME}
+
+# Populate version discovery metadata across runtime candidate paths
+RUN python -c "import json, os; \
+v = os.environ.get('AGENT_FLEET_VERSION') or '0.2.0'; \
+c = os.environ.get('AGENT_FLEET_COMMIT_SHA') or 'dev'; \
+bt = os.environ.get('AGENT_FLEET_BUILD_TIME') or ''; \
+rel = not v.endswith('-dev'); \
+data = {'version': v, 'commit': c, 'commit_short': c[:7] if c != 'dev' else 'dev', 'build_time': bt or None, 'is_release': rel}; \
+os.makedirs('/app/data', exist_ok=True); \
+[open(p, 'w', encoding='utf-8').write(json.dumps(data, indent=2) + '\n') for p in ['/app/backend/agent_fleet/version.json', '/app/version.json', '/app/data/version.json']]"
 
 # Expose WebUI and API service port
 EXPOSE 8000

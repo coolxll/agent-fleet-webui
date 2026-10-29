@@ -1,6 +1,11 @@
 services:
   agent-fleet:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        AGENT_FLEET_VERSION: 0.2.0-dev
+        AGENT_FLEET_COMMIT: dev
     container_name: agent-fleet-webui
     ports:
       - "8000:8000"

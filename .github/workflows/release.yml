@@ -22,21 +22,109 @@ permissions:
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.tag_name }}
   cancel-in-progress: false
 
 jobs:
+  # =========================================================================
+  # 0. Resolve & Validate Release Metadata Gate
+  # =========================================================================
+  resolve-metadata:
+    name: Resolve & Validate Release Metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      semver: ${{ steps.meta.outputs.semver }}
+      git_ref: ${{ steps.meta.outputs.git_ref }}
+      commit_sha: ${{ steps.meta.outputs.commit_sha }}
+      build_time: ${{ steps.meta.outputs.build_time }}
+      is_dry_run: ${{ steps.meta.outputs.is_dry_run }}
+
+    steps:
+      - name: Checkout Repository (Full History)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Tag, Commit Ref, and Validation
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+            if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
+              echo "::error::Tag name '${TAG}' does not match required format 'v[0-9]+.[0-9]+.[0-9]+*'"
+              exit 1
+            fi
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v0.2.0-dev"
+          fi
+
+          SEMVER="${TAG#v}"
+
+          # Resolve target git ref and commit SHA ensuring tag consistency
+          GIT_REF="${{ github.ref }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag_name }}" ]; then
+            if git rev-parse -q --verify "refs/tags/${TAG}^{commit}" >/dev/null 2>&1; then
+              TAG_COMMIT="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+              echo "Existing tag ${TAG} found at commit ${TAG_COMMIT}. Checking out exact tag ref."
+              GIT_REF="refs/tags/${TAG}"
+              COMMIT_SHA="${TAG_COMMIT}"
+            else
+              echo "Tag ${TAG} not yet present in repository; ensuring commit SHA matches current dispatch HEAD."
+              GIT_REF="${{ github.sha }}"
+              COMMIT_SHA="${{ github.sha }}"
+            fi
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            GIT_REF="${{ github.ref }}"
+            COMMIT_SHA="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          else
+            GIT_REF="${{ github.sha }}"
+            COMMIT_SHA="$(git rev-parse HEAD)"
+          fi
+
+          IS_DRY_RUN="false"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            IS_DRY_RUN="true"
+          elif [[ "${{ github.ref }}" != refs/tags/v* ]] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            IS_DRY_RUN="true"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -z "${{ inputs.tag_name }}" ]; then
+            IS_DRY_RUN="true"
+          fi
+
+          BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "semver=${SEMVER}" >> "$GITHUB_OUTPUT"
+          echo "git_ref=${GIT_REF}" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "build_time=${BUILD_TIME}" >> "$GITHUB_OUTPUT"
+          echo "is_dry_run=${IS_DRY_RUN}" >> "$GITHUB_OUTPUT"
+
+          echo "=== Release Metadata Resolved ==="
+          echo "Release Tag: ${TAG} (SemVer: ${SEMVER})"
+          echo "Git Ref:     ${GIT_REF}"
+          echo "Commit SHA:  ${COMMIT_SHA}"
+          echo "Build Time:  ${BUILD_TIME}"
+          echo "Dry Run:     ${IS_DRY_RUN}"
+
   # =========================================================================
   # 1. Quality & Pre-Release Test Gate
   # =========================================================================
   test-gate:
     name: Pre-release Test Gate
+    needs: [resolve-metadata]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-metadata.outputs.git_ref }}
+          fetch-depth: 0
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -80,45 +168,16 @@ jobs:
   # =========================================================================
   build-artifacts:
     name: Build & Package Release Artifacts
-    needs: [test-gate]
+    needs: [resolve-metadata, test-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    outputs:
-      release_tag: ${{ steps.meta.outputs.release_tag }}
-      semver: ${{ steps.meta.outputs.semver }}
-      is_dry_run: ${{ steps.meta.outputs.is_dry_run }}
 
     steps:
       - name: Checkout Repository (Full History)
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.resolve-metadata.outputs.git_ref }}
           fetch-depth: 0
-
-      - name: Resolve Release Tag & Mode
-        id: meta
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag_name }}" ]; then
-            TAG="${{ inputs.tag_name }}"
-          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            TAG="${{ github.ref_name }}"
-          else
-            TAG="v0.2.0-dev"
-          fi
-
-          SEMVER="${TAG#v}"
-
-          IS_DRY_RUN="false"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
-            IS_DRY_RUN="true"
-          elif [[ "${{ github.ref }}" != refs/tags/v* ]]; then
-            IS_DRY_RUN="true"
-          fi
-
-          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "semver=${SEMVER}" >> "$GITHUB_OUTPUT"
-          echo "is_dry_run=${IS_DRY_RUN}" >> "$GITHUB_OUTPUT"
-
-          echo "Selected Release Tag: ${TAG} (SemVer: ${SEMVER}), Dry Run: ${IS_DRY_RUN}"
 
       - name: Setup Node.js 22 & Cache npm
         uses: actions/setup-node@v4
@@ -140,14 +199,17 @@ jobs:
           uv pip install -r backend/requirements.txt
 
       - name: Execute Release Build Script
+        env:
+          AGENT_FLEET_COMMIT_SHA: ${{ needs.resolve-metadata.outputs.commit_sha }}
+          AGENT_FLEET_BUILD_TIME: ${{ needs.resolve-metadata.outputs.build_time }}
         run: |
           chmod +x scripts/build_release.sh
-          ./scripts/build_release.sh "${{ steps.meta.outputs.release_tag }}" --output-dir dist
+          ./scripts/build_release.sh "${{ needs.resolve-metadata.outputs.release_tag }}" --output-dir dist
 
       - name: Upload Distributable Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: release-dist-${{ steps.meta.outputs.release_tag }}
+          name: release-dist-${{ needs.resolve-metadata.outputs.release_tag }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14
@@ -157,13 +219,16 @@ jobs:
   # =========================================================================
   docker-image:
     name: Build & Publish Container Image
-    needs: [test-gate, build-artifacts]
+    needs: [resolve-metadata, test-gate, build-artifacts]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-metadata.outputs.git_ref }}
+          fetch-depth: 0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -172,7 +237,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry (GHCR)
-        if: ${{ needs.build-artifacts.outputs.is_dry_run == 'false' }}
+        if: ${{ needs.resolve-metadata.outputs.is_dry_run == 'false' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -185,27 +250,98 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=raw,value=${{ needs.build-artifacts.outputs.release_tag }}
-            type=raw,value=${{ needs.build-artifacts.outputs.semver }}
-            type=raw,value=latest,enable=${{ needs.build-artifacts.outputs.is_dry_run == 'false' }}
+            type=raw,value=${{ needs.resolve-metadata.outputs.release_tag }}
+            type=raw,value=${{ needs.resolve-metadata.outputs.semver }}
+            type=raw,value=latest,enable=${{ needs.resolve-metadata.outputs.is_dry_run == 'false' }}
 
-      - name: Build & Push Docker Image
+      - name: Build Local Test Image for Smoke Testing
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ needs.build-artifacts.outputs.is_dry_run == 'false' }}
+          load: true
+          tags: agent-fleet-smoke:test
+          build-args: |
+            AGENT_FLEET_VERSION=${{ needs.resolve-metadata.outputs.semver }}
+            AGENT_FLEET_COMMIT=${{ needs.resolve-metadata.outputs.commit_sha }}
+            BUILD_TIME=${{ needs.resolve-metadata.outputs.build_time }}
+          cache-from: type=gha
+
+      - name: Smoke Test Built Container
+        run: |
+          docker run -d --name smoke-test -p 8000:8000 agent-fleet-smoke:test
+          for i in $(seq 1 30); do
+            if curl -s -f http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+              echo "Container responded after $i seconds."
+              break
+            fi
+            sleep 1
+          done
+          python3 -c "
+          import json, sys, urllib.request
+          try:
+              with urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5) as r:
+                  assert r.status == 200, f'Health status: {r.status}'
+                  h = json.loads(r.read().decode())
+                  assert h.get('ok') is True, f'Health ok != True: {h}'
+                  assert h.get('service') == 'agent-fleet', f'Health service != agent-fleet: {h}'
+                  print('✓ Health check passed:', h)
+              with urllib.request.urlopen('http://127.0.0.1:8000/api/system/version', timeout=5) as r:
+                  assert r.status == 200, f'Version status: {r.status}'
+                  v = json.loads(r.read().decode())
+                  assert v.get('version') == '${{ needs.resolve-metadata.outputs.semver }}', f'Version mismatch: {v}'
+                  assert 'commit' in v, f'Missing commit in: {v}'
+                  assert 'commit_short' in v, f'Missing commit_short in: {v}'
+                  assert 'is_release' in v, f'Missing is_release in: {v}'
+                  print('✓ Version check passed:', v)
+          except Exception as e:
+              print(f'Smoke test assertion failed: {e}', file=sys.stderr)
+              sys.exit(1)
+          "
+
+      - name: Cleanup Smoke Test Container
+        if: always()
+        run: |
+          docker stop smoke-test || true
+          docker rm smoke-test || true
+
+      - name: Build & Push Multi-Arch Docker Image
+        if: ${{ needs.resolve-metadata.outputs.is_dry_run == 'false' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
           tags: ${{ steps.docker_meta.outputs.tags }}
           labels: ${{ steps.docker_meta.outputs.labels }}
+          build-args: |
+            AGENT_FLEET_VERSION=${{ needs.resolve-metadata.outputs.semver }}
+            AGENT_FLEET_COMMIT=${{ needs.resolve-metadata.outputs.commit_sha }}
+            BUILD_TIME=${{ needs.resolve-metadata.outputs.build_time }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Verify Multi-Arch Build (Dry Run)
+        if: ${{ needs.resolve-metadata.outputs.is_dry_run == 'true' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            AGENT_FLEET_VERSION=${{ needs.resolve-metadata.outputs.semver }}
+            AGENT_FLEET_COMMIT=${{ needs.resolve-metadata.outputs.commit_sha }}
+            BUILD_TIME=${{ needs.resolve-metadata.outputs.build_time }}
+          cache-from: type=gha
 
   # =========================================================================
   # 4. Publish GitHub Release with Release Notes & Assets
   # =========================================================================
   publish-release:
     name: Publish GitHub Release
-    needs: [build-artifacts, docker-image]
+    needs: [resolve-metadata, build-artifacts, docker-image]
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -213,20 +349,42 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.resolve-metadata.outputs.git_ref }}
           fetch-depth: 0
 
       - name: Download Staged Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: release-dist-${{ needs.build-artifacts.outputs.release_tag }}
+          name: release-dist-${{ needs.resolve-metadata.outputs.release_tag }}
           path: dist
 
       - name: Generate Release Notes Draft Template
         id: notes
         run: |
-          TAG="${{ needs.build-artifacts.outputs.release_tag }}"
-          SEMVER="${{ needs.build-artifacts.outputs.semver }}"
+          TAG="${{ needs.resolve-metadata.outputs.release_tag }}"
+          SEMVER="${{ needs.resolve-metadata.outputs.semver }}"
           REPO="${{ github.repository }}"
+
+          # Derive schema version from codebase AST
+          SCHEMA_VERSION=$(python3 -c "
+          import ast
+          schema_ver = 1
+          try:
+              tree = ast.parse(open('backend/agent_fleet/db.py', encoding='utf-8').read())
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Assign):
+                      for target in node.targets:
+                          if isinstance(target, ast.Name) and target.id == 'MIGRATIONS':
+                              if isinstance(node.value, ast.List):
+                                  vers = [elt.elts[0].value for elt in node.value.elts if isinstance(elt, ast.Tuple) and hasattr(elt.elts[0], 'value')]
+                                  if vers:
+                                      schema_ver = max(vers)
+          except Exception:
+              pass
+          print(schema_ver)
+          " 2>/dev/null || echo "1")
+
+          echo "Derived schema version: ${SCHEMA_VERSION}"
 
           cat << 'EOF' > release_notes.md
           ## 📦 What's Changed
@@ -247,8 +405,8 @@ jobs:
           - None in this release.
 
           ### 🔄 Database & Migration Notes
-          - Current Schema Version: **1**
-          - Database schema migrations run automatically on startup via SQLite \`PRAGMA user_version = 1\`.
+          - Current Schema Version: **${SCHEMA_VERSION}**
+          - Database schema migrations run automatically on startup via SQLite \`PRAGMA user_version = ${SCHEMA_VERSION}\`.
           - **Pre-upgrade Backup**: Before updating existing deployments, always create a point-in-time verified backup:
             \`\`\`bash
             python -m agent_fleet.cli backup
@@ -293,11 +451,12 @@ jobs:
           cat release_notes.md
 
       - name: Publish GitHub Release
-        if: ${{ needs.build-artifacts.outputs.is_dry_run == 'false' }}
+        if: ${{ needs.resolve-metadata.outputs.is_dry_run == 'false' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.build-artifacts.outputs.release_tag }}
-          name: Agent Fleet Explorer ${{ needs.build-artifacts.outputs.release_tag }}
+          tag_name: ${{ needs.resolve-metadata.outputs.release_tag }}
+          target_commitish: ${{ needs.resolve-metadata.outputs.commit_sha }}
+          name: Agent Fleet Explorer ${{ needs.resolve-metadata.outputs.release_tag }}
           body_path: release_notes.md
           files: |
             dist/agent-fleet-*.tar.gz
@@ -307,10 +466,11 @@ jobs:
           prerelease: false
 
       - name: Dry Run Summary
-        if: ${{ needs.build-artifacts.outputs.is_dry_run == 'true' }}
+        if: ${{ needs.resolve-metadata.outputs.is_dry_run == 'true' }}
         run: |
           echo "=== DRY RUN RELEASE BUILD COMPLETED ==="
-          echo "Tag: ${{ needs.build-artifacts.outputs.release_tag }}"
+          echo "Tag: ${{ needs.resolve-metadata.outputs.release_tag }}"
+          echo "Commit: ${{ needs.resolve-metadata.outputs.commit_sha }}"
           echo "Artifacts generated in dist/:"
           ls -la dist/
           echo "SHA256 Checksums:"

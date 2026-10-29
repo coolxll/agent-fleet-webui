@@ -139,15 +139,35 @@ info "Starting Agent Fleet release build for tag: ${BOLD}${RELEASE_TAG}${NC} (se
 # -----------------------------------------------------------------------------
 # 1. Discover Git Commit and Build Timestamp
 # -----------------------------------------------------------------------------
-COMMIT_SHA="dev"
-COMMIT_SHORT="dev"
-if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo "dev")"
-  COMMIT_SHORT="$(git rev-parse --short=7 HEAD 2>/dev/null || echo "dev")"
+COMMIT_SHA="${AGENT_FLEET_COMMIT_SHA:-${AGENT_FLEET_COMMIT:-}}"
+if [ -z "$COMMIT_SHA" ]; then
+  if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    COMMIT_SHA="$(git rev-parse HEAD 2>/dev/null || echo "dev")"
+  else
+    COMMIT_SHA="dev"
+  fi
 fi
-BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-info "Git Commit: ${COMMIT_SHA} (${COMMIT_SHORT}), Build Time: ${BUILD_TIME}"
+if [ "$COMMIT_SHA" = "dev" ]; then
+  COMMIT_SHORT="dev"
+else
+  COMMIT_SHORT="${COMMIT_SHA:0:7}"
+fi
+
+if [ -n "${AGENT_FLEET_BUILD_TIME:-}" ]; then
+  BUILD_TIME="$AGENT_FLEET_BUILD_TIME"
+elif [ -n "${BUILD_TIME:-}" ]; then
+  BUILD_TIME="$BUILD_TIME"
+else
+  BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+fi
+
+IS_RELEASE=true
+if [[ "$SEMVER" == *"-dev"* ]]; then
+  IS_RELEASE=false
+fi
+
+info "Git Commit: ${COMMIT_SHA} (${COMMIT_SHORT}), Build Time: ${BUILD_TIME}, Is Release: ${IS_RELEASE}"
 
 # -----------------------------------------------------------------------------
 # 2. Generate backend/agent_fleet/version.json
@@ -161,11 +181,11 @@ cat <<EOF > "$VERSION_FILE"
   "commit": "${COMMIT_SHA}",
   "commit_short": "${COMMIT_SHORT}",
   "build_time": "${BUILD_TIME}",
-  "is_release": true
+  "is_release": ${IS_RELEASE}
 }
 EOF
 
-ok "Created version.json with release flag"
+ok "Created version.json with release flag (${IS_RELEASE})"
 
 # -----------------------------------------------------------------------------
 # 3. Build Frontend Assets (web/dist)
@@ -228,8 +248,9 @@ rsync -a \
   --exclude '.DS_Store' \
   "$REPO_ROOT/backend/" "${TARGET_DIR}/backend/"
 
-# Ensure version.json is in target package
+# Ensure version.json is in target package and candidate search paths
 cp "$VERSION_FILE" "${TARGET_DIR}/backend/agent_fleet/version.json"
+cp "$VERSION_FILE" "${TARGET_DIR}/version.json"
 
 # Copy web/dist
 cp -R "$REPO_ROOT/web/dist" "${TARGET_DIR}/web/dist"
@@ -240,6 +261,18 @@ for f in start.sh dev.sh Dockerfile docker-compose.yml .dockerignore .env.exampl
     cp -R "$REPO_ROOT/$f" "${TARGET_DIR}/"
   fi
 done
+
+# Copy examples directory
+if [ -d "$REPO_ROOT/examples" ]; then
+  mkdir -p "${TARGET_DIR}/examples"
+  cp -R "$REPO_ROOT/examples"/* "${TARGET_DIR}/examples/" 2>/dev/null || true
+fi
+
+# Ensure default inventory.yaml exists in release root
+if [ ! -f "${TARGET_DIR}/inventory.yaml" ] && [ -f "$REPO_ROOT/examples/inventory.yaml" ]; then
+  cp "$REPO_ROOT/examples/inventory.yaml" "${TARGET_DIR}/inventory.yaml"
+  ok "Copied examples/inventory.yaml as fallback inventory.yaml"
+fi
 
 # Copy scripts directory (management utilities)
 if [ -d "$REPO_ROOT/scripts" ]; then
@@ -312,9 +345,11 @@ else
   tar -xzf "$TAR_FILE" -C "$VERIFY_DIR"
 
   UNPACKED_ROOT="${VERIFY_DIR}/${PKG_NAME}"
-  [ -f "${UNPACKED_ROOT}/backend/agent_fleet/version.json" ] || fail "Verification failed: version.json missing in archive"
+  [ -f "${UNPACKED_ROOT}/backend/agent_fleet/version.json" ] || fail "Verification failed: backend/agent_fleet/version.json missing in archive"
+  [ -f "${UNPACKED_ROOT}/version.json" ] || fail "Verification failed: version.json missing in archive"
   [ -f "${UNPACKED_ROOT}/web/dist/index.html" ] || fail "Verification failed: web/dist/index.html missing in archive"
   [ -f "${UNPACKED_ROOT}/backend/requirements.txt" ] || fail "Verification failed: backend/requirements.txt missing"
+  [ -f "${UNPACKED_ROOT}/examples/inventory.yaml" ] || fail "Verification failed: examples/inventory.yaml missing in archive"
 
   # Test Python runtime discovery
   PYTHON_EXEC="python3"
@@ -328,7 +363,8 @@ from agent_fleet.version import get_version_info
 
 info = get_version_info()
 print('Standalone package version info:', info)
-assert info['is_release'] is True, f'Expected is_release=True, got {info[\"is_release\"]}'
+expected_is_release = not '${SEMVER}'.endswith('-dev')
+assert info['is_release'] is expected_is_release, f'Expected is_release={expected_is_release}, got {info[\"is_release\"]}'
 assert info['version'] in ('${SEMVER}', '${RELEASE_TAG}'), f'Version mismatch: {info[\"version\"]} vs ${SEMVER}'
 assert info['commit'] == '${COMMIT_SHA}', f'Commit mismatch: {info[\"commit\"]} vs ${COMMIT_SHA}'
 print('✓ Standalone metadata verification confirmed.')
