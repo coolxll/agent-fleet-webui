@@ -21,8 +21,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Backend Pytest & Frontend Build
+  backend:
+    name: Backend Pytest (434 tests)
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
     env:
@@ -47,9 +47,38 @@ jobs:
           export PYTHONPATH=backend
           .venv/bin/python -m pytest tests/ -n auto --dist=loadscope -q
 
-      - name: Setup Frontend & Run Checks
+  frontend:
+    name: Frontend Typecheck & Build
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 15
+    env:
+      HTTP_PROXY: http://127.0.0.1:8118
+      HTTPS_PROXY: http://127.0.0.1:8118
+      ALL_PROXY: http://127.0.0.1:8118
+      NO_PROXY: "localhost,127.0.0.1,100.*,10.*"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20 & Cache npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: Install Frontend Dependencies
         run: |
           cd web
-          npm install
+          npm ci || npm install
+
+      - name: Run Frontend Typecheck
+        run: |
+          cd web
           npm run typecheck
+
+      - name: Build Frontend Assets
+        run: |
+          cd web
           npm run build
