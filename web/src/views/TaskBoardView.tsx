@@ -103,6 +103,9 @@ export default function TaskBoardView({
   const [draft, setDraft] = useState<TaskDraft | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [copiedSession, setCopiedSession] = useState(false)
+  const [confirmRetryOpen, setConfirmRetryOpen] = useState(false)
+  const [retrying, setRetrying] = useState(false)
 
   // 1. Fetch GitHub Board
   const reloadGitHub = useCallback(async () => {
@@ -184,6 +187,72 @@ export default function TaskBoardView({
       project_path: task.project_path,
     })
     setError('')
+    setConfirmRetryOpen(false)
+    setCopiedSession(false)
+  }
+
+  const handleCopySessionId = async (sessionId: string) => {
+    if (!sessionId) return
+    try {
+      await navigator.clipboard.writeText(sessionId)
+      setCopiedSession(true)
+      setTimeout(() => setCopiedSession(false), 2000)
+      setToast?.(zh ? 'Session ID 已复制到剪贴板' : 'Session ID copied to clipboard')
+    } catch {
+      setToast?.(sessionId)
+    }
+  }
+
+  const handleResetToTodo = async (taskId: string) => {
+    await run(async () => {
+      await taskApi.update(taskId, { status: 'todo' })
+      if (draft) setDraft({ ...draft, status: 'todo' })
+    }, zh ? '任务已重置为待办' : 'Task reset to To Do')
+  }
+
+  const handleExecuteRetry = async (
+    taskId: string,
+    runtimeId?: string | null,
+    agentId?: string | null,
+    projectPath?: string | null,
+    resumeSessionId?: string | null
+  ) => {
+    setRetrying(true)
+    setError('')
+    try {
+      const targetAgent = (agentId === 'claude' ? 'claude' : 'codex') as 'claude' | 'codex'
+      if (runtimeId && projectPath) {
+        const preview = await taskApi.preview(taskId, {
+          runtime_id: runtimeId,
+          agent_id: targetAgent,
+          project_path: projectPath,
+          notes: zh ? '从中断/阻塞状态恢复执行' : 'Resumed from interrupted/blocked state',
+          session_mode: resumeSessionId ? 'auto' : 'new',
+        })
+        await taskApi.handoff(
+          taskId,
+          {
+            runtime_id: runtimeId,
+            agent_id: targetAgent,
+            project_path: projectPath,
+            notes: zh ? '从中断/阻塞状态恢复执行' : 'Resumed from interrupted/blocked state',
+            session_mode: resumeSessionId ? 'auto' : 'new',
+          },
+          preview.preview_hash
+        )
+        setToast?.(zh ? '已成功重新派发任务执行' : 'Successfully re-dispatched task execution')
+      } else {
+        await taskApi.update(taskId, { status: 'in_progress' })
+        if (draft) setDraft({ ...draft, status: 'in_progress' })
+        setToast?.(zh ? '任务状态已更新为进行中' : 'Task updated to in progress')
+      }
+      setConfirmRetryOpen(false)
+      await reloadLocal()
+    } catch (err: any) {
+      setError(String(err.message || err))
+    } finally {
+      setRetrying(false)
+    }
   }
 
   const handleCreateGitHubIssue = async (e: React.FormEvent) => {
@@ -943,6 +1012,428 @@ export default function TaskBoardView({
                 {error}
               </div>
             )}
+
+            {/* 恢复指引面板：当任务处于 interrupted, blocked, failed 或 waiting 状态时高亮展示 */}
+            {(() => {
+              if (!selected) return null
+              const latestStage = selected.stages?.[selected.stages.length - 1]
+              const recoveryInfo = selected.recovery_info
+              const isRecoverable = Boolean(
+                ['interrupted', 'blocked', 'failed', 'waiting'].includes(selected.status) ||
+                ['interrupted', 'blocked', 'failed'].includes(latestStage?.status || '') ||
+                recoveryInfo?.is_recovery_needed
+              )
+              if (!isRecoverable) return null
+
+              const reasonCat =
+                recoveryInfo?.reason_category ||
+                (latestStage?.status === 'blocked' || selected.status === 'waiting'
+                  ? 'interactive_blocked'
+                  : (latestStage?.error || '').toLowerCase().includes('fleet restarted')
+                  ? 'controller_restarted'
+                  : (latestStage?.error || '').toLowerCase().includes('connection')
+                  ? 'ssh_disconnected'
+                  : 'process_failed')
+
+              const execPhase = recoveryInfo?.execution_phase || latestStage?.status || selected.status || 'unknown'
+              const reasonMessage =
+                recoveryInfo?.reason_message ||
+                latestStage?.error ||
+                latestStage?.output ||
+                (zh ? '无详细错误原因' : 'No failure details available')
+
+              const targetHost = recoveryInfo?.target_host || latestStage?.host_name || ''
+              const workingDir =
+                recoveryInfo?.working_directory ||
+                latestStage?.project_path ||
+                selected.project_path ||
+                ''
+              const lastUpdated =
+                recoveryInfo?.last_updated_at || latestStage?.updated_at || selected.updated_at
+              const nativeSessionId =
+                recoveryInfo?.native_session_id ?? latestStage?.native_session_id
+              const hasNativeSession = Boolean(
+                nativeSessionId &&
+                nativeSessionId.trim() &&
+                nativeSessionId.toLowerCase() !== 'none' &&
+                nativeSessionId.toLowerCase() !== 'null'
+              )
+              const linkedSessionId = recoveryInfo?.session_id ?? latestStage?.session_id
+              const herdrPane = recoveryInfo?.herdr_pane
+              const paseoLoc = recoveryInfo?.paseo_location
+              const isProcessActive = Boolean(
+                recoveryInfo?.is_process_active || latestStage?.active_task_id
+              )
+              const safeToRetry = Boolean(
+                recoveryInfo ? recoveryInfo.safe_to_retry : !latestStage?.active_task_id
+              )
+
+              const getReasonLabel = (cat: string) => {
+                switch (cat) {
+                  case 'ssh_disconnected':
+                    return zh ? '🔌 SSH 连接中断' : '🔌 SSH Disconnected'
+                  case 'controller_restarted':
+                    return zh ? '🔄 控制器重启' : '🔄 Controller Restarted'
+                  case 'interactive_blocked':
+                    return zh ? '⏸️ 交互阻塞 / 等待用户' : '⏸️ Interactive Blocked'
+                  case 'process_failed':
+                    return zh ? '❌ 进程异常退出' : '❌ Process Failed'
+                  default:
+                    return zh ? '⚠️ 异常待恢复' : '⚠️ Interrupted'
+                }
+              }
+
+              return (
+                <div
+                  className="task-recovery-panel"
+                  style={{
+                    marginBottom: 18,
+                    padding: '16px 18px',
+                    borderRadius: 10,
+                    background:
+                      reasonCat === 'interactive_blocked'
+                        ? 'rgba(234, 179, 8, 0.09)'
+                        : reasonCat === 'ssh_disconnected'
+                        ? 'rgba(59, 130, 246, 0.09)'
+                        : reasonCat === 'controller_restarted'
+                        ? 'rgba(168, 85, 247, 0.09)'
+                        : 'rgba(239, 68, 68, 0.09)',
+                    border:
+                      reasonCat === 'interactive_blocked'
+                        ? '1px solid rgba(234, 179, 8, 0.4)'
+                        : reasonCat === 'ssh_disconnected'
+                        ? '1px solid rgba(59, 130, 246, 0.4)'
+                        : reasonCat === 'controller_restarted'
+                        ? '1px solid rgba(168, 85, 247, 0.4)'
+                        : '1px solid rgba(239, 68, 68, 0.4)',
+                  }}
+                >
+                  {/* Header */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: 12,
+                      flexWrap: 'wrap',
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 16 }}>🛠️</span>
+                      <strong style={{ fontSize: 14 }}>
+                        {zh ? '任务恢复指引面板' : 'Task Recovery Guidance Panel'}
+                      </strong>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <span
+                        className="tag"
+                        style={{
+                          fontSize: 11,
+                          padding: '2px 8px',
+                          borderRadius: 4,
+                          fontWeight: 600,
+                          background:
+                            reasonCat === 'interactive_blocked'
+                              ? '#eab30825'
+                              : reasonCat === 'ssh_disconnected'
+                              ? '#3b82f625'
+                              : reasonCat === 'controller_restarted'
+                              ? '#a855f725'
+                              : '#ef444425',
+                          color:
+                            reasonCat === 'interactive_blocked'
+                              ? '#facc15'
+                              : reasonCat === 'ssh_disconnected'
+                              ? '#60a5fa'
+                              : reasonCat === 'controller_restarted'
+                              ? '#c084fc'
+                              : '#f87171',
+                        }}
+                      >
+                        {getReasonLabel(reasonCat)}
+                      </span>
+                      <span className="tag" style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4 }}>
+                        {zh ? `阶段: ${execPhase}` : `Phase: ${execPhase}`}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Failure / Block Reason Box */}
+                  <div
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 6,
+                      background: 'rgba(0, 0, 0, 0.25)',
+                      marginBottom: 12,
+                      fontSize: 12,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    <div style={{ color: 'var(--muted, #8793a8)', fontSize: 11, marginBottom: 4 }}>
+                      {zh ? '阻断 / 中断原因:' : 'Failure / Block Reason:'}
+                    </div>
+                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace' }}>
+                      {reasonMessage}
+                    </div>
+                  </div>
+
+                  {/* Meta Attributes Grid */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                      gap: 10,
+                      fontSize: 12,
+                      marginBottom: 14,
+                    }}
+                  >
+                    <div style={{ padding: '8px 10px', background: 'rgba(0,0,0,0.15)', borderRadius: 6 }}>
+                      <span className="muted" style={{ display: 'block', fontSize: 11, marginBottom: 2 }}>
+                        {zh ? '🖥️ 目标主机 / Runtime' : '🖥️ Target Host / Runtime'}
+                      </span>
+                      <strong className="mono">{targetHost || (zh ? '未关联' : 'None')}</strong>
+                    </div>
+                    <div style={{ padding: '8px 10px', background: 'rgba(0,0,0,0.15)', borderRadius: 6 }}>
+                      <span className="muted" style={{ display: 'block', fontSize: 11, marginBottom: 2 }}>
+                        {zh ? '📁 工作目录' : '📁 Working Directory'}
+                      </span>
+                      <span className="mono" title={workingDir} style={{ wordBreak: 'break-all' }}>
+                        {workingDir || (zh ? '未配置' : 'None')}
+                      </span>
+                    </div>
+                    <div style={{ padding: '8px 10px', background: 'rgba(0,0,0,0.15)', borderRadius: 6 }}>
+                      <span className="muted" style={{ display: 'block', fontSize: 11, marginBottom: 2 }}>
+                        {zh ? '🕒 最后更新时间' : '🕒 Last Updated'}
+                      </span>
+                      <span>{lastUpdated ? new Date(lastUpdated).toLocaleString() : '-'}</span>
+                    </div>
+                  </div>
+
+                  {/* Native Session Locator */}
+                  <div
+                    style={{
+                      padding: '10px 12px',
+                      background: 'rgba(0,0,0,0.2)',
+                      borderRadius: 8,
+                      marginBottom: 14,
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span style={{ fontWeight: 600, fontSize: 12 }}>
+                        {zh ? '🔍 原生会话定位 (Native Session Locator)' : '🔍 Native Session Locator'}
+                      </span>
+                    </div>
+
+                    {hasNativeSession ? (
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 10,
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span className="muted" style={{ fontSize: 11 }}>Session ID:</span>
+                          <code
+                            style={{
+                              background: '#0004',
+                              padding: '2px 6px',
+                              borderRadius: 4,
+                              fontSize: 12,
+                              color: '#58a6ff',
+                            }}
+                          >
+                            {nativeSessionId}
+                          </code>
+                          {herdrPane && (
+                            <span className="tag" style={{ fontSize: 10 }}>
+                              Herdr: {herdrPane.pane_id || herdrPane.workspace_id}
+                            </span>
+                          )}
+                          {paseoLoc && (
+                            <span className="tag" style={{ fontSize: 10 }}>
+                              Paseo: {paseoLoc.endpoint || paseoLoc.session_id}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button
+                            type="button"
+                            className="btn small"
+                            onClick={() => handleCopySessionId(nativeSessionId!)}
+                            style={{ fontSize: 11, padding: '4px 10px' }}
+                          >
+                            {copiedSession ? (zh ? '✓ 已复制' : '✓ Copied') : (zh ? '📋 复制 Session ID' : '📋 Copy ID')}
+                          </button>
+                          {linkedSessionId && (
+                            <button
+                              type="button"
+                              className="btn small"
+                              onClick={() => {
+                                window.location.hash = '#sessions'
+                                setDraft(null)
+                              }}
+                              style={{ fontSize: 11, padding: '4px 10px' }}
+                              title={zh ? '前往会话视图查看完整会话' : 'Go to sessions view'}
+                            >
+                              {zh ? '👁️ 查看会话' : '👁️ View Session'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          color: '#fbbf24',
+                          fontSize: 12,
+                          lineHeight: 1.5,
+                          padding: '6px 0',
+                        }}
+                      >
+                        {zh
+                          ? '⚠️ 原生会话已终止或不可定位，历史上下文已脱离。请先核实目标工作区无遗留孤儿进程，确认工作区空闲后方可重新发起交接或重试。'
+                          : '⚠️ Native session was terminated or unlocatable. Please confirm workspace has no orphaned processes before re-dispatching.'}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Safety Check Status */}
+                  <div style={{ marginBottom: 14 }}>
+                    {isProcessActive ? (
+                      <div
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: 6,
+                          background: '#ef444418',
+                          border: '1px solid #ef444440',
+                          color: '#f87171',
+                          fontSize: 12,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                        }}
+                      >
+                        <span>🚫</span>
+                        <span>
+                          {zh
+                            ? `工作区冲突警报: 目标工作区当前有活跃执行进程（${recoveryInfo?.safety_check?.active_task_id || '当前任务'}）。为防止并发执行与冲突，禁止重复派发。`
+                            : `Workspace Conflict: An active execution is running on this workspace. Duplicate dispatch is disabled.`}
+                        </span>
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: '#4ade80',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                        }}
+                      >
+                        <span>✅</span>
+                        <span>
+                          {zh
+                            ? '工作区安全核查: 目标工作区处于空闲状态，无运行中冲突进程。'
+                            : 'Workspace Safety: Target workspace is clear with no conflicting executions.'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Concurrency Guard & Explicit Confirmation before Re-running */}
+                  {safeToRetry && !isProcessActive && (
+                    <div
+                      style={{
+                        paddingTop: 10,
+                        borderTop: '1px solid rgba(255,255,255,0.08)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: 10,
+                      }}
+                    >
+                      {!confirmRetryOpen ? (
+                        <button
+                          type="button"
+                          className="btn small primary"
+                          disabled={busy || retrying}
+                          onClick={() => setConfirmRetryOpen(true)}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                        >
+                          <span>🔄</span>
+                          <span>
+                            {hasNativeSession
+                              ? (zh ? '恢复任务执行' : 'Resume Task')
+                              : (zh ? '重新发起派发 / 重试' : 'Retry / Re-dispatch')}
+                          </span>
+                        </button>
+                      ) : (
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 10,
+                            background: 'rgba(0,0,0,0.3)',
+                            padding: '8px 12px',
+                            borderRadius: 6,
+                            border: '1px dashed #eab30880',
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          <span style={{ fontSize: 12, color: '#facc15' }}>
+                            {zh
+                              ? '⚠️ 确认目标工作区无冲突进程，继续重新派发？'
+                              : '⚠️ Confirm workspace is clear and proceed with re-dispatch?'}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn small primary"
+                            disabled={busy || retrying}
+                            onClick={() =>
+                              handleExecuteRetry(
+                                selected.id,
+                                recoveryInfo?.runtime_id || latestStage?.runtime_id,
+                                recoveryInfo?.agent_id || latestStage?.agent_id,
+                                workingDir,
+                                hasNativeSession ? nativeSessionId : null
+                              )
+                            }
+                            style={{ fontSize: 11 }}
+                          >
+                            {retrying
+                              ? (zh ? '派发中...' : 'Dispatching...')
+                              : (zh ? '✓ 确认重新执行' : '✓ Confirm & Re-run')}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn small"
+                            disabled={busy || retrying}
+                            onClick={() => setConfirmRetryOpen(false)}
+                            style={{ fontSize: 11 }}
+                          >
+                            {zh ? '取消' : 'Cancel'}
+                          </button>
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        className="btn small"
+                        disabled={busy || retrying}
+                        onClick={() => handleResetToTodo(selected.id)}
+                        title={zh ? '将任务状态重置为待办' : 'Reset task status to To Do'}
+                      >
+                        {zh ? '重置为待办' : 'Reset to Todo'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
             <form
               onSubmit={(event) => {
                 event.preventDefault()
@@ -999,6 +1490,37 @@ export default function TaskBoardView({
                 {zh ? '保存任务' : 'Save Task'}
               </button>
             </form>
+
+            {/* 阶段历史与执行记录 */}
+            {selected && selected.stages && selected.stages.length > 0 && (
+              <div style={{ marginTop: 20, borderTop: '1px solid var(--border, #2b3546)', paddingTop: 14 }}>
+                <details>
+                  <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--muted, #8793a8)', marginBottom: 10 }}>
+                    {zh ? `📋 查看历史执行阶段 (${selected.stages.length})` : `📋 View Execution Stages (${selected.stages.length})`}
+                  </summary>
+                  <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {selected.stages.map((stage) => (
+                      <div key={stage.id} className="task-stage" style={{ padding: '8px 10px', margin: 0 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+                          <strong>{stage.host_name} · {stage.agent_id}</strong>
+                          <span className="muted">{getExecutionLabel(stage.status, t, zh)} · {new Date(stage.updated_at).toLocaleString()}</span>
+                        </div>
+                        {stage.native_session_id && (
+                          <div style={{ fontSize: 11, color: 'var(--muted, #8793a8)' }}>
+                            Session: <code className="mono">{stage.native_session_id}</code>
+                          </div>
+                        )}
+                        {stage.error && (
+                          <div style={{ color: '#f87171', fontSize: 11, marginTop: 4, fontFamily: 'monospace' }}>
+                            {stage.error}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </div>
+            )}
           </section>
         </div>
       )}

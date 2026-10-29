@@ -12,6 +12,8 @@ from sqlalchemy.exc import IntegrityError
 from agent_fleet.db import session_scope
 from agent_fleet.models import Runtime, Session, AgentInstallation, iso_utc, utcnow
 from agent_fleet.task_models import FleetTask, TaskStage
+from agent_fleet.herdr_models import HerdrObservation
+from agent_fleet.paseo_models import PaseoObservation
 from agent_fleet.services.scanner import build_runner, to_ref
 from agent_fleet.services.session_service import get_session_transcript, mask_sensitive_text
 from agent_fleet.services.task_agent_bridge import BRIDGE
@@ -137,15 +139,250 @@ def _stages(db, task_id):
 
 def stage_dict(stage):
     return {key: getattr(stage, key) for key in (
-        'id', 'task_id', 'runtime_id', 'session_id', 'source_session_id', 'host_name',
+        'id', 'task_id', 'active_task_id', 'runtime_id', 'session_id', 'source_session_id', 'host_name',
         'agent_id', 'native_session_id', 'project_path', 'kind', 'status', 'output', 'error',
     )} | {'created_at': iso_utc(stage.created_at), 'updated_at': iso_utc(stage.updated_at)}
 
 
+def _categorize_failure(stage: TaskStage | None, task: FleetTask) -> str:
+    """Categorize the root cause of an interrupted, blocked, or failed task stage.
+
+    Categories:
+    - 'controller_restarted': Controller restarted while task was marked running.
+    - 'interactive_blocked': Agent is paused waiting for user input/permission.
+    - 'ssh_disconnected': SSH transport dropped mid-run.
+    - 'process_failed': Remote command exited with non-zero code or generic failure.
+    """
+    err = ((stage.error if stage else '') or '').lower()
+    out = ((stage.output if stage else '') or '').lower()
+    status = ((stage.status if stage else '') or task.status or '').lower()
+
+    if any(k in err for k in ('fleet restarted', 'controller restarted', 'controller_restarted')):
+        return 'controller_restarted'
+
+    if status == 'blocked' or task.status == 'waiting' or 'blocked' in err:
+        return 'interactive_blocked'
+
+    if any(k in err or k in out for k in (
+        'waiting for user', 'waiting for input', 'permission', 'user confirmation',
+        'interactive', 'awaiting confirmation', 'approval needed', 'input needed'
+    )):
+        return 'interactive_blocked'
+
+    ssh_keywords = (
+        'ssh', 'disconnected', 'connection ended', 'connection cleanup',
+        'connection failed', 'broken pipe', 'connection reset', 'connection lost',
+        'transport dropped', 'transport error', 'agent connection or protocol failed',
+        'cannot inspect target directory', 'network error'
+    )
+    if any(k in err for k in ssh_keywords):
+        return 'ssh_disconnected'
+
+    return 'process_failed'
+
+
+def _determine_execution_phase(stage: TaskStage | None, task: FleetTask) -> str:
+    if not stage:
+        return 'idle'
+    status = (stage.status or '').lower()
+    if status == 'blocked':
+        return 'interactive'
+    if status == 'starting':
+        return 'startup'
+    if status == 'running':
+        return 'executing'
+    if status == 'interrupted':
+        return 'aborted'
+    if status == 'failed':
+        return 'failed'
+    if stage.started_at:
+        return 'execution'
+    return status or 'unknown'
+
+
+def _find_session_locators(db, stage: TaskStage | None) -> dict:
+    native_session_id = (stage.native_session_id or '').strip() if stage and stage.native_session_id else None
+    if native_session_id and native_session_id.lower() in ('none', 'null', ''):
+        native_session_id = None
+
+    herdr_pane = None
+    paseo_location = None
+
+    if stage and stage.runtime_id:
+        try:
+            obs = db.get(HerdrObservation, stage.runtime_id)
+            if obs:
+                for sess in (obs.sessions or []):
+                    if isinstance(sess, dict):
+                        ext_id = sess.get('external_id')
+                        if (native_session_id and ext_id == native_session_id) or (
+                            stage.project_path and sess.get('cwd') == stage.project_path
+                        ):
+                            herdr_pane = {
+                                'pane_id': ext_id,
+                                'workspace_id': sess.get('workspace_id'),
+                                'provider': sess.get('provider'),
+                                'title': sess.get('title') or sess.get('name'),
+                            }
+                            break
+                if not herdr_pane and obs.workspaces:
+                    for ws in obs.workspaces:
+                        if isinstance(ws, dict) and ws.get('path') == stage.project_path:
+                            herdr_pane = {
+                                'workspace_id': ws.get('workspace_id'),
+                                'name': ws.get('name'),
+                                'path': ws.get('path'),
+                            }
+                            break
+        except Exception:
+            pass
+
+        try:
+            p_obs = db.get(PaseoObservation, stage.runtime_id)
+            if p_obs:
+                endpoint = (p_obs.facts or {}).get('listen') or (p_obs.facts or {}).get('endpoint')
+                for p_sess in (p_obs.sessions or []):
+                    if isinstance(p_sess, dict):
+                        p_id = p_sess.get('external_id') or p_sess.get('id')
+                        if (native_session_id and p_id == native_session_id) or (
+                            stage.project_path and p_sess.get('cwd') == stage.project_path
+                        ):
+                            paseo_location = {
+                                'endpoint': endpoint,
+                                'session_id': p_id,
+                                'name': p_sess.get('name'),
+                                'status': p_sess.get('status'),
+                            }
+                            break
+                if not paseo_location and endpoint:
+                    paseo_location = {'endpoint': endpoint}
+        except Exception:
+            pass
+
+    return {
+        'native_session_id': native_session_id,
+        'has_native_session': bool(native_session_id),
+        'session_id': stage.session_id if stage else None,
+        'herdr_pane': herdr_pane,
+        'paseo_location': paseo_location,
+    }
+
+
+def _check_workspace_safety(db, task: FleetTask, stage: TaskStage | None) -> dict:
+    """Verify whether a process is still active on the target workspace.
+
+    Prevents duplicate parallel executions and concurrency conflicts.
+    """
+    active_in_task = db.scalar(
+        select(TaskStage).where(TaskStage.task_id == task.id, TaskStage.active_task_id.is_not(None))
+    )
+    is_job_running = bool(stage and stage.id in _jobs and not _jobs[stage.id].done())
+    if active_in_task or is_job_running:
+        return {
+            'is_active': True,
+            'safe_to_retry': False,
+            'active_task_id': task.id,
+            'active_stage_id': active_in_task.id if active_in_task else (stage.id if stage else None),
+            'message': 'Task has an active execution currently running.',
+        }
+
+    project_path = (stage.project_path if stage else None) or task.project_path
+    runtime_id = stage.runtime_id if stage else None
+    if runtime_id and project_path:
+        conflict = db.scalar(
+            select(TaskStage).where(
+                TaskStage.runtime_id == runtime_id,
+                TaskStage.project_path == project_path,
+                TaskStage.active_task_id.is_not(None),
+                TaskStage.task_id != task.id,
+            )
+        )
+        if conflict:
+            return {
+                'is_active': True,
+                'safe_to_retry': False,
+                'active_task_id': conflict.task_id,
+                'active_stage_id': conflict.id,
+                'message': f'Workspace conflict: task {conflict.task_id} is actively executing in this workspace.',
+            }
+
+    return {
+        'is_active': False,
+        'safe_to_retry': True,
+        'active_task_id': None,
+        'active_stage_id': None,
+        'message': 'Workspace is clear and idle. Safe to resume or retry.',
+    }
+
+
+def _compute_task_recovery_info(db, task_id: str, task: FleetTask | None = None, stages: list[TaskStage] | None = None) -> dict:
+    task = task or _task(db, task_id)
+    stages = stages if stages is not None else _stages(db, task_id)
+    latest = stages[-1] if stages else None
+
+    reason_cat = _categorize_failure(latest, task)
+    phase = _determine_execution_phase(latest, task)
+    locators = _find_session_locators(db, latest)
+    safety = _check_workspace_safety(db, task, latest)
+
+    project_path = (latest.project_path if latest else None) or task.project_path or ''
+    target_host = (latest.host_name if latest else None) or ''
+    runtime_id = latest.runtime_id if latest else None
+    agent_id = latest.agent_id if latest else None
+    last_updated_at = iso_utc(latest.updated_at if latest else task.updated_at)
+    error_message = latest.error if latest else None
+
+    is_recovery_needed = bool(
+        task.status in ('interrupted', 'blocked', 'failed', 'waiting')
+        or (latest is not None and latest.status in ('interrupted', 'blocked', 'failed'))
+    )
+
+    can_resume = bool(latest and locators['has_native_session'] and safety['safe_to_retry'])
+    can_retry = bool(safety['safe_to_retry'])
+
+    return {
+        'task_id': task.id,
+        'task_title': task.title,
+        'task_status': task.status,
+        'stage_id': latest.id if latest else None,
+        'stage_status': latest.status if latest else None,
+        'target_host': target_host,
+        'runtime_id': runtime_id,
+        'agent_id': agent_id,
+        'project_path': project_path,
+        'working_directory': project_path,
+        'last_updated_at': last_updated_at,
+        'execution_phase': phase,
+        'reason_category': reason_cat,
+        'reason_message': error_message or (latest.output if latest else '') or '',
+        'native_session_id': locators['native_session_id'],
+        'session_id': locators['session_id'],
+        'herdr_pane': locators['herdr_pane'],
+        'paseo_location': locators['paseo_location'],
+        'session_locator': locators,
+        'safety_check': safety,
+        'is_process_active': safety['is_active'],
+        'safe_to_retry': safety['safe_to_retry'],
+        'can_resume': can_resume,
+        'can_retry': can_retry,
+        'is_recovery_needed': is_recovery_needed,
+    }
+
+
+def get_task_recovery_info(task_id: str, db=None) -> dict:
+    """Retrieve recovery metadata and workspace safety checks for a task."""
+    if db is None:
+        with session_scope() as s:
+            return _compute_task_recovery_info(s, task_id)
+    return _compute_task_recovery_info(db, task_id)
+
+
 def task_dict(db, task):
+    stages = _stages(db, task.id)
     return {key: getattr(task, key) for key in ('id', 'title', 'goal', 'status', 'project_path')} | {
         'created_at': iso_utc(task.created_at), 'updated_at': iso_utc(task.updated_at),
-        'stages': [stage_dict(stage) for stage in _stages(db, task.id)],
+        'stages': [stage_dict(stage) for stage in stages],
+        'recovery_info': _compute_task_recovery_info(db, task.id, task=task, stages=stages),
     }
 
 

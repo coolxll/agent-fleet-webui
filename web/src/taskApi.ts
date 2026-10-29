@@ -2,14 +2,62 @@ import { authFetch } from './api'
 
 export type TaskStatus = 'todo' | 'in_progress' | 'waiting' | 'review' | 'done'
 export type TaskStage = {
-  id: string; task_id: string; runtime_id: string | null; session_id: string | null
+  id: string; task_id: string; active_task_id?: string | null; runtime_id: string | null; session_id: string | null
   source_session_id: string | null; host_name: string; agent_id: string
   native_session_id: string | null; project_path: string; kind: string; status: string
   output: string; error: string | null; created_at: string; updated_at: string
 }
+
+export type TaskRecoveryReasonCategory =
+  | 'ssh_disconnected'
+  | 'controller_restarted'
+  | 'interactive_blocked'
+  | 'process_failed'
+
+export type TaskRecoveryInfo = {
+  task_id: string
+  task_title: string
+  task_status: string
+  stage_id: string | null
+  stage_status: string | null
+  target_host: string
+  runtime_id: string | null
+  agent_id: string | null
+  project_path: string
+  working_directory: string
+  last_updated_at: string
+  execution_phase: string
+  reason_category: TaskRecoveryReasonCategory
+  reason_message: string
+  native_session_id: string | null
+  session_id: string | null
+  herdr_pane: Record<string, any> | null
+  paseo_location: Record<string, any> | null
+  session_locator: {
+    native_session_id: string | null
+    has_native_session: boolean
+    session_id: string | null
+    herdr_pane: Record<string, any> | null
+    paseo_location: Record<string, any> | null
+  }
+  safety_check: {
+    is_active: boolean
+    safe_to_retry: boolean
+    active_task_id: string | null
+    active_stage_id: string | null
+    message: string
+  }
+  is_process_active: boolean
+  safe_to_retry: boolean
+  can_resume: boolean
+  can_retry: boolean
+  is_recovery_needed?: boolean
+}
+
 export type FleetTask = {
   id: string; title: string; goal: string; status: TaskStatus; project_path: string
   created_at: string; updated_at: string; stages: TaskStage[]
+  recovery_info?: TaskRecoveryInfo | null
 }
 export type TaskDraft = Pick<FleetTask, 'title' | 'goal' | 'project_path' | 'status'>
 export type HandoffDraft = {
@@ -105,6 +153,14 @@ export const taskApi = {
   preview: (id: string, draft: HandoffDraft) => request<HandoffPreview>('/' + id + '/handoff/preview', 'POST', draft),
   handoff: (id: string, draft: HandoffDraft, hash: string) => request<FleetTask>('/' + id + '/handoff', 'POST', { ...draft, preview_hash: hash }),
   cancel: (id: string) => request<FleetTask>('/' + id + '/cancel', 'POST'),
+  getRecoveryInfo: async (id: string): Promise<TaskRecoveryInfo | null> => {
+    try {
+      return await request<TaskRecoveryInfo>('/' + id + '/recovery')
+    } catch {
+      const task = await request<FleetTask>('/' + id)
+      return task.recovery_info ?? null
+    }
+  },
 
   // GitHub Board APIs
   getGitHubBoard: (repo?: string) =>
