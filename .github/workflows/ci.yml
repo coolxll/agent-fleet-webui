@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend Pytest (434 tests)
+    name: Backend Pytest & Onboarding E2E
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -44,6 +44,11 @@ jobs:
         run: |
           export PYTHONPATH=backend
           uv run pytest tests/ -n auto --dist=loadscope -q
+
+      - name: Run Onboarding E2E Verification
+        run: |
+          export PYTHONPATH=backend
+          uv run pytest tests/test_onboarding_e2e.py -v
 
   frontend:
     name: Frontend Typecheck & Build
