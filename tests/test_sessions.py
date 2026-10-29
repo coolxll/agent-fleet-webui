@@ -664,6 +664,137 @@ def test_detect_codex_project_from_rollout(tmp_path):
     assert name_empty != "codex-workspace"
 
 
+def test_mask_sensitive_data_nested():
+    data = {
+        "command": "curl -H 'Authorization: Bearer secret_token_12345678901234567890' https://api.openai.com",
+        "env": {
+            "API_KEY": "sk-proj-1234567890abcdef1234567890",
+            "PORT": 8080,
+            "DEBUG": False,
+        },
+        "headers": [
+            "Content-Type: application/json",
+            "X-Auth-Token: ghp_1234567890abcdef1234567890",
+        ],
+        "meta": None,
+    }
+    masked, count = session_service.mask_sensitive_data(data)
+    assert count >= 3
+    # Check tokens are masked
+    assert "secret_token_12345678901234567890" not in str(masked)
+    assert "sk-proj-1234567890abcdef1234567890" not in str(masked)
+    assert "ghp_1234567890abcdef1234567890" not in str(masked)
+    assert "***MASKED***" in str(masked)
+    # Check regular values preserved
+    assert masked["env"]["PORT"] == 8080
+    assert masked["env"]["DEBUG"] is False
+    assert masked["headers"][0] == "Content-Type: application/json"
+
+
+def test_sanitize_tool_call_and_turn():
+    turn = {
+        "role": "assistant",
+        "content": "Running command to fetch data with ghp_1234567890abcdef1234567890",
+        "thinking": "Need to hide my sk-ant-api03-abcdef1234567890abcdef here",
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "name": "bash",
+                "input": {"cmd": "export GITHUB_TOKEN=ghp_abcdef12345678901234567890 && git push"},
+                "output": "Error: Unauthorized for bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdef1234567890",
+            },
+            {
+                "id": "call_2",
+                "name": "read_file",
+                "input": {"path": "/var/log/app.log", "safe": True},
+                "output": "status: 200 ok",
+            },
+        ],
+    }
+
+    sanitized, masked_count = session_service.sanitize_turn(turn)
+    assert masked_count >= 4
+    assert "ghp_1234567890abcdef1234567890" not in sanitized["content"]
+    assert "sk-ant-api03-abcdef1234567890abcdef" not in sanitized["thinking"]
+    tc1 = sanitized["tool_calls"][0]
+    assert "ghp_abcdef12345678901234567890" not in tc1["input"]["cmd"]
+    assert "***MASKED***" in tc1["input"]["cmd"]
+    assert "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdef1234567890" not in tc1["output"]
+    assert "***MASKED***" in tc1["output"]
+
+    # Non-sensitive tool params preserved
+    tc2 = sanitized["tool_calls"][1]
+    assert tc2["input"]["path"] == "/var/log/app.log"
+    assert tc2["input"]["safe"] is True
+    assert tc2["output"] == "status: 200 ok"
+
+
+@pytest.mark.asyncio
+async def test_cached_transcript_sanitized_on_read(fleet_db):
+    from agent_fleet.db import session_scope
+
+    session_id = "test-cached-transcript-sanitize"
+    with session_scope() as s:
+        host = models.Host(name="dummy-host", hostname="127.0.0.1")
+        s.add(host)
+        s.flush()
+        rt = models.Runtime(host_id=host.id, key="native", kind="linux", transport="local")
+        s.add(rt)
+        s.flush()
+        sess = models.Session(
+            id=session_id,
+            runtime_id=rt.id,
+            agent_id="claude",
+            session_key="sess-key-1",
+            title="Test Session",
+        )
+        s.add(sess)
+        s.flush()
+
+        # Insert legacy/cached transcript that contains an unmasked secret in tool_calls
+        unmasked_turn = {
+            "role": "assistant",
+            "content": "normal content",
+            "tool_calls": [
+                {
+                    "name": "bash",
+                    "input": {"cmd": "curl -H 'Authorization: Bearer raw_leak_secret_12345678901234567890'"},
+                    "output": "sk-ant-api03-rawleak12345678901234567890",
+                }
+            ],
+        }
+        tr = models.SessionTranscript(
+            id=models.new_id(),
+            session_id=session_id,
+            turns=[unmasked_turn],
+            has_secrets_masked=False,
+            masked_count=0,
+            cached_at=models.utcnow(),
+        )
+        s.add(tr)
+        s.flush()
+
+        # Read via get_session_transcript
+        res = await session_service.get_session_transcript(s, session_id)
+        assert res["cached"] is True
+        assert res["has_secrets_masked"] is True
+        assert res["masked_count"] >= 2
+
+        # Check returned turns are sanitized
+        res_tc = res["turns"][0]["tool_calls"][0]
+        assert "raw_leak_secret_12345678901234567890" not in str(res_tc)
+        assert "sk-ant-api03-rawleak12345678901234567890" not in str(res_tc)
+        assert "***MASKED***" in str(res_tc)
+
+        # Check database in-place migration
+        s.expire_all()
+        db_tr = s.query(models.SessionTranscript).filter_by(session_id=session_id).one()
+        assert db_tr.has_secrets_masked is True
+        assert db_tr.masked_count >= 2
+        assert "raw_leak_secret_12345678901234567890" not in str(db_tr.turns)
+
+
+
 
 
 
