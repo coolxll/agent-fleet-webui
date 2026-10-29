@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agent_fleet.services import task_service as service
+from agent_fleet.services import github_board_service
 
 router = APIRouter(prefix='/tasks', tags=['tasks'])
 TaskStatus = Literal['todo', 'in_progress', 'waiting', 'review', 'done']
@@ -116,3 +117,44 @@ async def handoff(task_id: str, body: HandoffStart):
 @router.post('/{task_id}/cancel')
 async def cancel(task_id: str):
     return await invoke_async(service.cancel_execution, task_id)
+
+
+# --------------------------------------------------------------------------
+# GitHub-driven pipeline board endpoints
+# --------------------------------------------------------------------------
+
+
+class GitHubIssueCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    body: str = Field(default="")
+    labels: list[str] | None = None
+    repo: str | None = None
+
+
+@router.get('/github/board')
+def get_github_pipeline_board(repo: str | None = None):
+    try:
+        return github_board_service.fetch_github_board(repo=repo)
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to fetch GitHub board: {exc}") from exc
+
+
+@router.post('/github/issues', status_code=201)
+def create_github_issue_route(payload: GitHubIssueCreate):
+    try:
+        return github_board_service.create_github_issue(
+            title=payload.title,
+            body=payload.body,
+            labels=payload.labels,
+            repo=payload.repo,
+        )
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to create GitHub issue: {exc}") from exc
+
+
+@router.post('/github/actions/{run_id}/rerun')
+def rerun_github_action_route(run_id: str, repo: str | None = None):
+    try:
+        return github_board_service.rerun_workflow_run(run_id=run_id, repo=repo)
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to rerun GitHub action: {exc}") from exc
