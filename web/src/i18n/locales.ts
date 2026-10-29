@@ -430,7 +430,27 @@ export const translations = {
     'tasks.exec.completed': 'Completed',
     'tasks.exec.failed': 'Failed',
     'tasks.exec.interrupted': 'Interrupted',
-    'tasks.exec.blocked': 'Needs Input / Blocked'
+    'tasks.exec.blocked': 'Needs Input / Blocked',
+
+    // Auth & Security
+    'auth.title': 'API Secret / Access Token',
+    'auth.desc': 'If AGENT_FLEET_API_SECRET is configured on the backend, set your matching secret here to authorize WebUI operations.',
+    'auth.placeholder': 'Enter API Secret token...',
+    'auth.save': 'Save Token',
+    'auth.clear': 'Clear Token',
+    'auth.test': 'Test Connection',
+    'auth.testing': 'Testing...',
+    'auth.show': 'Show',
+    'auth.hide': 'Hide',
+    'auth.saved': 'API token saved successfully.',
+    'auth.cleared': 'API token cleared.',
+    'auth.valid': 'API token verified successfully.',
+    'auth.invalid': 'Invalid API token. Access denied (401).',
+    'auth.notRequired': 'Backend has no API secret configured (open mode).',
+    'auth.requiredNotice': 'Backend API access control is active. A valid API secret is required to perform operations.',
+    'auth.statusConfigured': 'Token configured',
+    'auth.statusNone': 'No token configured',
+    'auth.switchTabHint': 'Configure in Data & Preferences'
   },
   zh: {
     // Navigation & header
@@ -861,7 +881,27 @@ export const translations = {
     'tasks.exec.completed': '本轮已结束',
     'tasks.exec.failed': '执行失败',
     'tasks.exec.interrupted': '执行已中断',
-    'tasks.exec.blocked': '需要处理权限或输入'
+    'tasks.exec.blocked': '需要处理权限或输入',
+
+    // Auth & Security
+    'auth.title': 'API 访问凭证 (Secret / Token)',
+    'auth.desc': '若后端配置了 AGENT_FLEET_API_SECRET，请在此填入匹配的密钥以授权 WebUI 操作与数据读写。',
+    'auth.placeholder': '请输入 API 访问凭证 / Secret...',
+    'auth.save': '保存凭证',
+    'auth.clear': '清除凭证',
+    'auth.test': '验证凭证',
+    'auth.testing': '正在验证...',
+    'auth.show': '显示',
+    'auth.hide': '隐藏',
+    'auth.saved': 'API 访问凭证已保存。',
+    'auth.cleared': 'API 访问凭证已清除。',
+    'auth.valid': 'API 凭证验证通过，通信正常。',
+    'auth.invalid': 'API 凭证无效或未通过验证 (401 Unauthorized)。',
+    'auth.notRequired': '后端未开启 API 鉴权（开放访问模式）。',
+    'auth.requiredNotice': '后端已开启 API 安全鉴权，需配置有效凭据以执行操作与读取数据。',
+    'auth.statusConfigured': '已配置凭证',
+    'auth.statusNone': '未配置凭证',
+    'auth.switchTabHint': '前往「数据与偏好」进行配置'
   }
 } as const
 

@@ -1,3 +1,5 @@
+import { authFetch } from './api'
+
 export type PaseoSession = {
   source: 'paseo'
   runtime_id: string
@@ -94,7 +96,7 @@ export type DaemonsResponse = {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch('/api' + path, init)
+  const res = await authFetch('/api' + path, init)
   if (!res.ok) throw new Error(`Daemon request failed (${res.status})`)
   return res.json()
 }

@@ -1,3 +1,5 @@
+import { authFetch } from './api'
+
 export type TaskStatus = 'todo' | 'in_progress' | 'waiting' | 'review' | 'done'
 export type TaskStage = {
   id: string; task_id: string; runtime_id: string | null; session_id: string | null
@@ -86,7 +88,7 @@ export type GitHubBoardResponse = {
 }
 
 async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const response = await fetch('/api/tasks' + path, {
+  const response = await authFetch('/api/tasks' + path, {
     method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body)
   })

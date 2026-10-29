@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type Overview, type Runtime } from '../api'
+import {
+  api,
+  type Overview,
+  type Runtime,
+  getApiToken,
+  setApiToken,
+  clearApiToken,
+  verifyApiToken,
+  AUTH_REQUIRED_EVENT,
+} from '../api'
 import { useI18n } from '../i18n'
 import InventoryManager from './InventoryManager'
 
@@ -20,24 +29,53 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
   const [exporting, setExporting] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [authRequired, setAuthRequired] = useState(false)
+
+  // API Token credentials state
+  const [tokenInput, setTokenInput] = useState(() => getApiToken())
+  const [showToken, setShowToken] = useState(false)
+  const [tokenTesting, setTokenTesting] = useState(false)
+  const [tokenStatusMsg, setTokenStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+
+  useEffect(() => {
+    const handleAuthReq = () => {
+      setAuthRequired(true)
+    }
+    window.addEventListener(AUTH_REQUIRED_EVENT, handleAuthReq)
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, handleAuthReq)
+  }, [])
 
   const loadData = useCallback(async () => {
     try {
       const [rRes, ovRes, schRes] = await Promise.all([
-        api.runtimes(false, true),
+        api.runtimes(false, true).catch((e: any) => {
+          const errMsg = String(e.message || e)
+          if (errMsg.includes('401') || errMsg.toLowerCase().includes('unauthorized')) {
+            setAuthRequired(true)
+          }
+          throw e
+        }),
         api.overview().catch(() => null),
-        fetch('/api/schedule').then((r) => r.json()).catch(() => null)
+        api.getSchedule().catch(() => null)
       ])
       setRuntimes(rRes.runtimes)
       if (ovRes) setOverview(ovRes)
       if (schRes) setSchedule(schRes)
+      setAuthRequired(false)
+      setError(null)
     } catch (e: any) {
-      setError(String(e.message || e))
+      const errMsg = String(e.message || e)
+      if (errMsg.includes('401') || errMsg.toLowerCase().includes('unauthorized')) {
+        setAuthRequired(true)
+      }
+      setError(errMsg)
     }
   }, [])
 
   useEffect(() => {
     if (isOpen) {
+      setTokenInput(getApiToken())
+      setTokenStatusMsg(null)
       loadData()
       setMsg(null)
       setError(null)
@@ -69,12 +107,8 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
 
   const handleSaveSchedule = async (patch: any) => {
     try {
-      const res = await fetch('/api/schedule', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch)
-      })
-      setSchedule(await res.json())
+      const data = await api.updateSchedule(patch)
+      setSchedule(data)
       setMsg(t('schedule.title') + ': ' + t('common.completed'))
     } catch (e: any) {
       setError(String(e.message || e))
@@ -84,8 +118,7 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
   const handleExportJson = async () => {
     setExporting(true)
     try {
-      const res = await fetch('/api/export')
-      const data = await res.json()
+      const data = await api.exportData()
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -104,6 +137,76 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
       setError(String(e.message || e))
     } finally {
       setExporting(false)
+    }
+  }
+
+  const handleSaveToken = async () => {
+    const trimmed = tokenInput.trim()
+    setApiToken(trimmed)
+    setTokenInput(trimmed)
+    setTokenStatusMsg(null)
+    setMsg(t('auth.saved'))
+    try {
+      const res = await verifyApiToken(trimmed)
+      if (res.valid) {
+        setTokenStatusMsg({
+          type: 'ok',
+          text: res.authRequired ? t('auth.valid') : t('auth.notRequired')
+        })
+        setAuthRequired(false)
+        setError(null)
+        await loadData()
+        onDataChanged?.()
+      } else {
+        setTokenStatusMsg({
+          type: 'err',
+          text: t('auth.invalid') + (res.message ? ` (${res.message})` : '')
+        })
+      }
+    } catch (err: any) {
+      setTokenStatusMsg({ type: 'err', text: String(err.message || err) })
+    }
+  }
+
+  const handleTestToken = async () => {
+    setTokenTesting(true)
+    setTokenStatusMsg(null)
+    try {
+      const res = await verifyApiToken(tokenInput.trim())
+      if (res.valid) {
+        setTokenStatusMsg({
+          type: 'ok',
+          text: res.authRequired ? t('auth.valid') : t('auth.notRequired')
+        })
+        if (getApiToken() === tokenInput.trim()) {
+          setAuthRequired(false)
+          setError(null)
+          await loadData()
+          onDataChanged?.()
+        }
+      } else {
+        setTokenStatusMsg({
+          type: 'err',
+          text: t('auth.invalid') + (res.message ? ` (${res.message})` : '')
+        })
+      }
+    } catch (err: any) {
+      setTokenStatusMsg({ type: 'err', text: String(err.message || err) })
+    } finally {
+      setTokenTesting(false)
+    }
+  }
+
+  const handleClearToken = async () => {
+    clearApiToken()
+    setTokenInput('')
+    setTokenStatusMsg({ type: 'ok', text: t('auth.cleared') })
+    setMsg(t('auth.cleared'))
+    try {
+      await loadData()
+      onDataChanged?.()
+    } catch {
+      // If auth is required, loadData will fail and set authRequired flag
     }
   }
 
@@ -157,12 +260,39 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
         </div>
 
         <div className="modal-body" style={{ flex: 1, overflowY: 'auto' }}>
+          {authRequired && (
+            <div
+              className="err"
+              style={{
+                marginBottom: 12,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>🔒</span>
+                <span>{t('auth.requiredNotice')}</span>
+              </div>
+              {activeTab !== 'data' && (
+                <button
+                  className="btn small primary"
+                  onClick={() => setActiveTab('data')}
+                  style={{ fontSize: 11, padding: '2px 8px' }}
+                >
+                  {t('auth.switchTabHint')} →
+                </button>
+              )}
+            </div>
+          )}
           {msg && (
             <div className="tag ok" style={{ display: 'block', padding: '6px 10px', marginBottom: 12 }}>
               {msg}
             </div>
           )}
-          {error && <div className="err" style={{ marginBottom: 12 }}>{error}</div>}
+          {error && !authRequired && <div className="err" style={{ marginBottom: 12 }}>{error}</div>}
 
           {activeTab === 'inventory' && (
             <div>
@@ -304,7 +434,101 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
 
           {activeTab === 'data' && (
             <div>
+              {/* API Access Token Section */}
               <div className="settings-sub-panel">
+                <div
+                  className="settings-sub-title"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                >
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span>🔒</span>
+                    <span>{t('auth.title')}</span>
+                  </span>
+                  <span
+                    className={'tag ' + (getApiToken() ? 'ok' : 'unknown')}
+                    style={{ fontSize: 11, fontWeight: 500 }}
+                  >
+                    {getApiToken() ? t('auth.statusConfigured') : t('auth.statusNone')}
+                  </span>
+                </div>
+                <p className="muted small" style={{ margin: '6px 0 12px', lineHeight: 1.5 }}>
+                  {t('auth.desc')}
+                </p>
+
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                  <div style={{ position: 'relative', flex: 1, minWidth: 240 }}>
+                    <input
+                      type={showToken ? 'text' : 'password'}
+                      value={tokenInput}
+                      onChange={(e) => setTokenInput(e.target.value)}
+                      placeholder={t('auth.placeholder')}
+                      style={{
+                        width: '100%',
+                        paddingRight: 64,
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn small"
+                      onClick={() => setShowToken(!showToken)}
+                      style={{
+                        position: 'absolute',
+                        right: 4,
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        padding: '2px 8px',
+                        fontSize: 11,
+                        height: 24,
+                      }}
+                      title={showToken ? t('auth.hide') : t('auth.show')}
+                    >
+                      {showToken ? t('auth.hide') : t('auth.show')}
+                    </button>
+                  </div>
+
+                  <button
+                    className="btn primary small"
+                    onClick={handleSaveToken}
+                    title={t('auth.save')}
+                  >
+                    💾 {t('auth.save')}
+                  </button>
+
+                  <button
+                    className="btn small"
+                    onClick={handleTestToken}
+                    disabled={tokenTesting}
+                    title={t('auth.test')}
+                  >
+                    {tokenTesting ? t('auth.testing') : `🔍 ${t('auth.test')}`}
+                  </button>
+
+                  {getApiToken() && (
+                    <button
+                      className="btn small"
+                      onClick={handleClearToken}
+                      title={t('auth.clear')}
+                      style={{ color: 'var(--err, #f85149)' }}
+                    >
+                      ✕ {t('auth.clear')}
+                    </button>
+                  )}
+                </div>
+
+                {tokenStatusMsg && (
+                  <div
+                    className={tokenStatusMsg.type === 'ok' ? 'tag ok' : 'err'}
+                    style={{ display: 'block', padding: '6px 10px', marginTop: 8 }}
+                  >
+                    {tokenStatusMsg.text}
+                  </div>
+                )}
+              </div>
+
+              <div className="settings-sub-panel" style={{ marginTop: 14 }}>
                 <div className="settings-sub-title">
                   {language === 'zh' ? '数据导出' : 'Data Export'}
                 </div>

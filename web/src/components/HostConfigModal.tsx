@@ -5,6 +5,7 @@ import {
   createInventoryHost,
   updateInventoryHost,
   testHostSSH,
+  authFetch,
 } from '../api'
 import { useI18n } from '../i18n'
 
@@ -142,7 +143,7 @@ export default function HostConfigModal({
     setCopyingKey(true)
     setKeyHint(null)
     try {
-      const res = await fetch('/api/inventory/controller-ssh-key')
+      const res = await authFetch('/api/inventory/controller-ssh-key')
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`)
       }

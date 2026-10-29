@@ -302,14 +302,173 @@ export type ScanRun = {
   tasks: ScanTask[]
 }
 
+export const TOKEN_STORAGE_KEY = 'agent_fleet_api_token'
+export const AUTH_REQUIRED_EVENT = 'agent_fleet_auth_required'
+
+let inMemoryToken: string = ''
+try {
+  inMemoryToken =
+    (typeof localStorage !== 'undefined' ? localStorage.getItem(TOKEN_STORAGE_KEY) : '') || ''
+} catch {
+  // LocalStorage might be disabled in certain restricted environments
+}
+
+export function getApiToken(): string {
+  if (inMemoryToken) return inMemoryToken
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const stored = localStorage.getItem(TOKEN_STORAGE_KEY)
+      if (stored) {
+        inMemoryToken = stored
+        return stored
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return ''
+}
+
+export function setApiToken(token: string): void {
+  inMemoryToken = token.trim()
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (inMemoryToken) {
+        localStorage.setItem(TOKEN_STORAGE_KEY, inMemoryToken)
+      } else {
+        localStorage.removeItem(TOKEN_STORAGE_KEY)
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function clearApiToken(): void {
+  setApiToken('')
+}
+
+export async function authFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<Response> {
+  const token = getApiToken()
+  const headers = new Headers(init?.headers)
+
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  const response = await fetch(input, {
+    ...init,
+    headers,
+  })
+
+  if (response.status === 401) {
+    if (typeof window !== 'undefined' && window.dispatchEvent) {
+      window.dispatchEvent(
+        new CustomEvent(AUTH_REQUIRED_EVENT, {
+          detail: {
+            status: 401,
+            url: typeof input === 'string' ? input : (input as any)?.url || String(input),
+            message: 'Unauthorized: invalid or missing API secret',
+          },
+        })
+      )
+    }
+  }
+
+  return response
+}
+
+export const fetchWithAuth = authFetch
+
+export type TokenCheckResult = {
+  valid: boolean
+  authRequired: boolean
+  message?: string
+}
+
+export async function verifyApiToken(tokenToTest?: string): Promise<TokenCheckResult> {
+  const token = (tokenToTest !== undefined ? tokenToTest : getApiToken()).trim()
+  const headers = new Headers({ 'Content-Type': 'application/json' })
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  try {
+    // 1. Probe /api/settings to inspect backend auth requirement
+    const settingsRes = await fetch('/api/settings', { headers })
+    if (settingsRes.status === 401) {
+      // In strict mode (allow_anonymous_readonly=False), 401 means auth is required and secret is invalid
+      return {
+        valid: false,
+        authRequired: true,
+        message: 'Unauthorized: invalid or missing API secret (Strict mode)',
+      }
+    }
+
+    if (settingsRes.ok) {
+      const data = await settingsRes.json().catch(() => ({}))
+      const authRequired = Boolean(data.auth_required)
+
+      if (!authRequired) {
+        return {
+          valid: true,
+          authRequired: false,
+          message: 'Backend does not require authentication (open mode)',
+        }
+      }
+
+      // Backend auth is enabled; test against lightweight route to check token validity
+      const testRes = await fetch('/api/inventory/validate', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ content: '' }),
+      })
+
+      if (testRes.status === 401) {
+        return {
+          valid: false,
+          authRequired: true,
+          message: 'Unauthorized: invalid API secret',
+        }
+      }
+
+      if (testRes.ok) {
+        return {
+          valid: true,
+          authRequired: true,
+          message: 'API secret verified successfully',
+        }
+      }
+    }
+  } catch (err: any) {
+    return {
+      valid: false,
+      authRequired: true,
+      message: err.message || 'Connection failed',
+    }
+  }
+
+  return {
+    valid: false,
+    authRequired: true,
+    message: 'Verification failed',
+  }
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch('/api' + path)
-  if (!res.ok) throw new Error('GET ' + path + ' failed: ' + res.status)
+  const res = await authFetch('/api' + path)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'GET ' + path + ' failed: ' + res.status)
+  }
   return (await res.json()) as T
 }
 
 async function post<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
-  const res = await fetch('/api' + path, {
+  const res = await authFetch('/api' + path, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {})
@@ -322,7 +481,7 @@ async function post<T>(path: string, body?: unknown, method = 'POST'): Promise<T
 }
 
 async function del<T>(path: string): Promise<T> {
-  const res = await fetch('/api' + path, { method: 'DELETE' })
+  const res = await authFetch('/api' + path, { method: 'DELETE' })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'DELETE ' + path + ' failed: ' + res.status)
@@ -554,11 +713,7 @@ export const api = {
   syncInventory: () => post<{ ok: boolean; hosts_seen?: number }>('/inventory/sync'),
   setHostEnabled: (id: string, enabled: boolean) =>
     post<{ ok: boolean; host?: string }>('/hosts/' + id + '/enabled', { enabled }),
-  deleteRuntime: (id: string) =>
-    fetch('/api/runtimes/' + id, { method: 'DELETE' }).then(async (r) => {
-      if (!r.ok) throw new Error((await r.text()) || 'delete failed')
-      return (await r.json()) as { ok: boolean; deleted: string }
-    }),
+  deleteRuntime: (id: string) => del<{ ok: boolean; deleted: string }>('/runtimes/' + id),
   upgradeInstallation: (instId: string) =>
     post<UpgradeTask>('/installations/' + instId + '/upgrade'),
   upgradeRuntimeAgent: (runtimeId: string, agentId: string) =>
@@ -608,7 +763,13 @@ export const api = {
   toggleSessionPin: (sessionId: string) =>
     post<{ ok: boolean; session_id: string; is_pinned: boolean }>('/sessions/' + sessionId + '/pin'),
   getSessionResumeCommand: (sessionId: string) =>
-    get<{ session_id: string; resume_command: string }>('/sessions/' + sessionId + '/resume-command')
+    get<{ session_id: string; resume_command: string }>('/sessions/' + sessionId + '/resume-command'),
+  getSchedule: () => get<any>('/schedule'),
+  updateSchedule: (patch: any) => post<any>('/schedule', patch, 'PUT'),
+  exportData: () => get<any>('/export'),
+  getControllerSSHKey: () =>
+    get<{ found: boolean; public_key?: string }>('/inventory/controller-ssh-key'),
+  verifyToken: (token?: string) => verifyApiToken(token)
 }
 
 export type SessionSummary = {
@@ -746,13 +907,13 @@ export type InventorySaveResponse = {
 }
 
 export async function getInventoryRaw(): Promise<InventoryRawResponse> {
-  const res = await fetch('/api/inventory/raw')
+  const res = await authFetch('/api/inventory/raw')
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
 
 export async function validateInventory(content: string): Promise<InventoryValidateResponse> {
-  const res = await fetch('/api/inventory/validate', {
+  const res = await authFetch('/api/inventory/validate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
@@ -762,7 +923,7 @@ export async function validateInventory(content: string): Promise<InventoryValid
 }
 
 export async function saveInventoryRaw(content: string): Promise<InventorySaveResponse> {
-  const res = await fetch('/api/inventory/raw', {
+  const res = await authFetch('/api/inventory/raw', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ content }),
@@ -788,7 +949,7 @@ export type AntigravitySettingsResponse = {
 }
 
 export async function getAntigravityQuotaSettings(): Promise<AntigravitySettingsResponse> {
-  const res = await fetch('/api/quota-settings/antigravity')
+  const res = await authFetch('/api/quota-settings/antigravity')
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
@@ -796,7 +957,7 @@ export async function getAntigravityQuotaSettings(): Promise<AntigravitySettings
 export async function updateAntigravityQuotaSettings(
   secrets: Record<string, string>
 ): Promise<AntigravitySettingsResponse> {
-  const res = await fetch('/api/quota-settings/antigravity', {
+  const res = await authFetch('/api/quota-settings/antigravity', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ secrets }),
@@ -872,21 +1033,21 @@ export type SSHTestResult = {
 }
 
 export async function listInventoryHosts(): Promise<InventoryHost[]> {
-  const res = await fetch('/api/inventory/hosts')
+  const res = await authFetch('/api/inventory/hosts')
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const data = await res.json()
   return data.hosts || []
 }
 
 export async function getInventoryHost(idOrName: string): Promise<InventoryHost> {
-  const res = await fetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}`)
+  const res = await authFetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const data = await res.json()
   return data.host
 }
 
 export async function createInventoryHost(payload: InventoryHostPayload): Promise<InventoryHost> {
-  const res = await fetch('/api/inventory/hosts', {
+  const res = await authFetch('/api/inventory/hosts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -903,7 +1064,7 @@ export async function updateInventoryHost(
   idOrName: string,
   payload: InventoryHostPayload
 ): Promise<InventoryHost> {
-  const res = await fetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}`, {
+  const res = await authFetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -917,7 +1078,7 @@ export async function updateInventoryHost(
 }
 
 export async function deleteInventoryHost(idOrName: string): Promise<boolean> {
-  const res = await fetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}`, {
+  const res = await authFetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}`, {
     method: 'DELETE',
   })
   if (!res.ok) {
@@ -928,7 +1089,7 @@ export async function deleteInventoryHost(idOrName: string): Promise<boolean> {
 }
 
 export async function testHostSSH(idOrName: string): Promise<SSHTestResult> {
-  const res = await fetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}/test-ssh`, {
+  const res = await authFetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}/test-ssh`, {
     method: 'POST',
   })
   if (!res.ok) {
@@ -939,14 +1100,14 @@ export async function testHostSSH(idOrName: string): Promise<SSHTestResult> {
 }
 
 export async function exportInventoryYaml(): Promise<string> {
-  const res = await fetch('/api/inventory/export-yaml')
+  const res = await authFetch('/api/inventory/export-yaml')
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const data = await res.json()
   return data.content || ''
 }
 
 export async function seedInventoryFromLegacy(): Promise<{ created: number; updated: number }> {
-  const res = await fetch('/api/inventory/seed', {
+  const res = await authFetch('/api/inventory/seed', {
     method: 'POST',
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
