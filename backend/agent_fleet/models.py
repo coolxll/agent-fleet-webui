@@ -64,7 +64,7 @@ class Host(Base):
     ssh_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     ssh_user: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    # 出站代理配置 (HTTP / SOCKS5, 例如 http://127.0.0.1:8118 或 socks5://100.93.132.98:1080)
+    # 出站代理配置 (HTTP / SOCKS5, 例如 http://127.0.0.1:8118 或 socks5://100.64.0.1:1080)
     proxy: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # GitHub Actions Runner Fleet 纳管属性

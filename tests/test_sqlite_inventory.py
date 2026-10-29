@@ -14,11 +14,11 @@ def test_seed_from_legacy_files(fleet_db):
     assert len(hosts) > 0
 
     host_names = [h["name"] for h in hosts]
-    assert "corp172-dev" in host_names
+    assert "runner-node-01" in host_names
 
-    corp = sqlite_inventory.get_host("corp172-dev")
+    corp = sqlite_inventory.get_host("runner-node-01")
     assert corp is not None
-    assert corp["ssh_user"] == "lynn"
+    assert corp["ssh_user"] == "devuser"
     assert "8118" in corp.get("proxy", "")
     assert corp["runner_enabled"] is True
 
@@ -118,11 +118,11 @@ def test_inventory_hosts_api(client):
     # 4. Update via API
     res = client.put(
         f"/api/inventory/hosts/{test_api_host}",
-        json={"proxy": "socks5://100.93.132.98:1080", "runner_max_concurrency": 6},
+        json={"proxy": "socks5://100.64.0.1:1080", "runner_max_concurrency": 6},
     )
     assert res.status_code == 200
     updated = res.json()["host"]
-    assert updated["proxy"] == "socks5://100.93.132.98:1080"
+    assert updated["proxy"] == "socks5://100.64.0.1:1080"
     assert updated["runner_max_concurrency"] == 6
 
     # 5. Export via API

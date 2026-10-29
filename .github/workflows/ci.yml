@@ -23,7 +23,7 @@ concurrency:
 jobs:
   test:
     name: Backend Pytest & Frontend Build
-    runs-on: [self-hosted, Linux, X64, corp172-dev]
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 15
     env:
       HTTP_PROXY: http://127.0.0.1:8118

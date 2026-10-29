@@ -19,16 +19,16 @@ def test_runner_fleet_yaml_structure():
     assert "pools" in data, "缺少 pools 运行矩阵定义"
 
     hosts = data["hosts"]
-    assert "corp172-dev" in hosts, "缺少 corp172-dev 主机"
-    assert "x13" in hosts, "缺少 x13 主机"
+    assert "runner-node-01" in hosts, "缺少 runner-node-01 主机"
+    assert "runner-node-02" in hosts, "缺少 runner-node-02 主机"
 
-    corp = hosts["corp172-dev"]
-    assert corp["user"] == "lynn"
+    corp = hosts["runner-node-01"]
+    assert corp["user"] == "devuser"
     assert "8118" in corp.get("proxy", "")
     assert isinstance(corp.get("labels"), list)
 
-    x13 = hosts["x13"]
-    assert x13["user"] == "lynns"
+    x13 = hosts["runner-node-02"]
+    assert x13["user"] == "devuser"
     assert "1080" in x13.get("proxy", "")
 
     pools = data["pools"]

@@ -71,8 +71,8 @@ def test_generate_resume_command():
     cmd_local = session_service.generate_resume_command(s, "local-controller", "local")
     assert cmd_local == "cd '/home/dev/repo' && claude --resume test-1234"
 
-    cmd_remote = session_service.generate_resume_command(s, "corp172-dev", "ssh")
-    assert cmd_remote == 'ssh -t corp172-dev "cd \'/home/dev/repo\' && claude --resume test-1234"'
+    cmd_remote = session_service.generate_resume_command(s, "linux-srv-01", "ssh")
+    assert cmd_remote == 'ssh -t linux-srv-01 "cd \'/home/dev/repo\' && claude --resume test-1234"'
 
     s_codex = models.Session(
         agent_id="codex",

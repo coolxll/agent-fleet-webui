@@ -278,7 +278,7 @@ erDiagram
 ### 3.1 `hosts` (主机资产与配置唯一真理源)
 - **定位**：物理机或虚拟宿主机（Node）。在 Phase 1 之后成为系统的单一真理源（Single Source of Truth），取代传统的 `inventory.yaml` 与 `runner_fleet.yaml`。
 - **关键属性**：
-  - `name`: 唯一业务标识（如 `corp172-dev`, `x13`）；
+  - `name`: 唯一业务标识（如 `linux-srv-01`, `win-workstation-01`）；
   - `ssh_host`, `ssh_port`, `ssh_user`: 统一 SSH 连接端点凭据，由 Controller 原生安全调用；
   - `proxy`: 出站统一代理（HTTP/SOCKS5，如 `http://127.0.0.1:8118`），确保本节点上的 Runner 与探针纯出站访问，外部 0 端口暴露；
   - `runner_enabled`, `runner_max_concurrency`, `runner_labels`, `target_repos`: GitHub Actions Runner 编排池属性，定义本节点并发能力与订阅仓库矩阵；

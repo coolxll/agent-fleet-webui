@@ -239,7 +239,7 @@ servers and unsupported CLI schemas are shown as explicit statuses.
 The fleet supports declarative, multi-machine self-hosted runner orchestration driven by `config/runner_fleet.yaml` and `scripts/manage_runner.sh`:
 
 * **Outbound-only Security (Zero Inbound Port Exposure)**: Runners poll GitHub via HTTPS/WSS; machines need no public IPs and expose no open ports.
-* **Shared Proxy Egress**: Centralizes proxy routing (e.g. `corp172-dev` Tailscale SOCKS5 `100.93.132.98:1080` or LAN HTTP `10.8.1.172:8118`) across all runner nodes.
+* **Shared Proxy Egress**: Centralizes proxy routing (e.g. `runner-node-01` Tailscale SOCKS5 `100.64.0.1:1080` or LAN HTTP `192.168.1.100:8118`) across all runner nodes.
 * **Commands**:
   * `./scripts/manage_runner.sh overview`: Global cross-repository & cross-host status matrix.
   * `./scripts/manage_runner.sh sync`: Declaratively reconcile runners to match desired state.
@@ -332,12 +332,12 @@ only reads quota and never renews a login, so the row turns red with
 `Trae login expired or was rejected` about two weeks after import (Trae CN
 access tokens live ~14 days).
 
-`trae2api-web` on `corp172-dev` renews the same account via refresh_token and
+`trae2api-web` on `runner-node-01` renews the same account via refresh_token and
 writes the fresh token back to its auths file. `scripts/sync_trae_credential.py`
 mirrors that token into agent-fleet (upsert through `POST /api/quota-accounts`,
 which re-verifies the credential before saving):
 
-    # reads corp172-dev:<TRAE_AUTH_PATH> over ssh, updates the local account
+    # reads runner-node-01:<TRAE_AUTH_PATH> over ssh, updates the local account
     .venv/bin/python scripts/sync_trae_credential.py
 
 Silent and exit 0 when there is nothing to do; exit 1 when the upstream token is

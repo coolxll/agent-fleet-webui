@@ -62,7 +62,7 @@ Two traps found on real hosts and handled:
 Chosen: **native OpenSSH**, one script per runtime streamed to `sh -s`.
 
 Reasons: the user's `~/.ssh/config` (ProxyJump, per-host ports, Tailscale
-names, ssh-agent identities, JumpHosts such as `pve -> r9kp-win`) keeps
+names, ssh-agent identities, JumpHosts such as `bastion -> internal-node`) keeps
 working untouched; no new credentials or key handling in this project; it
 matches "use existing SSH credentials for already authorized machines".
 

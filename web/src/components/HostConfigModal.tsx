@@ -175,7 +175,7 @@ export default function HostConfigModal({
                   <input
                     type="text"
                     className="input full"
-                    placeholder="corp172-dev"
+                    placeholder="linux-srv-01"
                     value={name}
                     disabled={isEditing}
                     onChange={(e) => setName(e.target.value)}
@@ -210,7 +210,7 @@ export default function HostConfigModal({
                   <input
                     type="text"
                     className="input full"
-                    placeholder="192.168.1.100 或 corp172-dev"
+                    placeholder="192.168.1.100 或 linux-srv-01"
                     value={sshHost}
                     onChange={(e) => setSshHost(e.target.value)}
                   />
@@ -253,7 +253,7 @@ export default function HostConfigModal({
               <input
                 type="text"
                 className="input full mono"
-                placeholder="http://127.0.0.1:8118 或 socks5://100.93.132.98:1080"
+                placeholder="http://127.0.0.1:8118 或 socks5://100.64.0.1:1080"
                 value={proxy}
                 onChange={(e) => setProxy(e.target.value)}
               />

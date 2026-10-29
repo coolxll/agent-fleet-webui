@@ -6,9 +6,8 @@ access token and never renews it (see services/trae_quota.py — it only reads
 quota). Trae CN access tokens live ~14 days, so the row silently goes red with
 "Trae login expired or was rejected" a fortnight after import.
 
-trae2api-web on corp172-dev keeps renewing the same account (uid
-3349565851308393 / tenant 7o2d894p7dr0o4) via refresh_token and writes the
-fresh token back to its auths file. This script copies that token over.
+trae2api-web on a remote host keeps renewing the account via refresh_token
+and writes the fresh token back to its auths file. This script copies that token over.
 
 Cron-friendly contract:
   * prints nothing and exits 0 when there is nothing to do
@@ -34,10 +33,10 @@ import urllib.error
 import urllib.request
 from typing import Any, NoReturn
 
-HOST = os.environ.get("TRAE_AUTH_SSH", "corp172-dev")
+HOST = os.environ.get("TRAE_AUTH_SSH", "trae-host")
 AUTH_PATH = os.environ.get(
     "TRAE_AUTH_PATH",
-    "/home/lynn/workspace/homelab-secrets/trae2api-web/data/auths/trae-3349565851308393.json",
+    "/data/trae2api-web/data/auths/trae-default.json",
 )
 API = os.environ.get("AGENT_FLEET_API", "http://127.0.0.1:8000").rstrip("/")
 STATE = pathlib.Path(

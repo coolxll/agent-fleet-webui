@@ -1,13 +1,13 @@
-Host la-tri
-    HostName 38.244.63.166
+Host vps-srv-02
+    HostName 203.0.113.1
     User root
     Port 22
-Host racknerd rn
-    HostName 100.85.194.78
-    User coolxll
+Host vps-srv-03 vps-alias
+    HostName 100.64.0.20
+    User testuser
 Host wildcard-*
     HostName 10.0.0.1
-Host ddrk
-    HostName 69.12.72.30
-    User lynn
+Host vps-srv-04
+    HostName 198.51.100.2
+    User testuser
     Port 22222
