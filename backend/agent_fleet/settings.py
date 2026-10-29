@@ -86,6 +86,56 @@ class Settings(BaseSettings):
 
     api_prefix: str = "/api"
 
+    # Access Control & Security
+    api_secret: str | None = None
+    allow_anonymous_readonly: bool = True
+
+    @property
+    def is_auth_enabled(self) -> bool:
+        return bool(self.api_secret and self.api_secret.strip())
+
+    def safe_dict(self) -> dict:
+        """Return public settings dictionary without sensitive secrets."""
+        fields = [
+            "db_path",
+            "inventory_paths",
+            "auto_seed_legacy",
+            "workspace_root",
+            "scan_concurrency",
+            "ssh_connect_timeout",
+            "command_timeout",
+            "scan_ttl_seconds",
+            "discover_wsl",
+            "include_local_runtime",
+            "local_host_label",
+            "api_prefix",
+            "allow_anonymous_readonly",
+        ]
+        data = {}
+        for f in fields:
+            val = getattr(self, f, None)
+            if isinstance(val, Path):
+                data[f] = str(val)
+            elif isinstance(val, list):
+                data[f] = [str(x) if isinstance(x, Path) else x for x in val]
+            else:
+                data[f] = val
+        data["auth_required"] = self.is_auth_enabled
+        return data
+
+    def __repr__(self) -> str:
+        attrs = []
+        for k in type(self).model_fields:
+            if k == "api_secret":
+                val = "'***'" if self.api_secret else "None"
+            else:
+                val = repr(getattr(self, k))
+            attrs.append(f"{k}={val}")
+        return f"Settings({', '.join(attrs)})"
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
     def ensure_dirs(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
