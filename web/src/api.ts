@@ -808,5 +808,151 @@ export async function updateAntigravityQuotaSettings(
   return res.json()
 }
 
+// --------------------------------------------------------------------------
+// SQLite-backed Inventory & Runner Fleet APIs
+// --------------------------------------------------------------------------
+
+export type InventoryHostRuntime = {
+  id: string
+  key: string
+  kind: string
+  transport: string
+  enabled: boolean
+  reachable: boolean | null
+  last_seen_at: string | null
+}
+
+export type InventoryHost = {
+  id: string
+  name: string
+  hostname: string
+  description?: string
+  inventory_source?: string
+  group?: string
+  tags?: Record<string, any>
+  ssh_host?: string
+  ssh_port?: number
+  ssh_user?: string
+  proxy?: string
+  runner_enabled: boolean
+  runner_max_concurrency: number
+  runner_labels: string[]
+  target_repos: string[]
+  enabled: boolean
+  created_at?: string
+  updated_at?: string
+  runtimes?: InventoryHostRuntime[]
+  runtimes_count?: number
+}
+
+export type InventoryHostPayload = {
+  name?: string
+  hostname?: string
+  description?: string
+  group?: string
+  tags?: Record<string, any>
+  ssh_host?: string
+  ssh_port?: number
+  ssh_user?: string
+  proxy?: string
+  runner_enabled?: boolean
+  runner_max_concurrency?: number
+  runner_labels?: string[]
+  target_repos?: string[]
+  enabled?: boolean
+}
+
+export type SSHTestResult = {
+  ok: boolean
+  host: string
+  ssh_target: string
+  latency_ms?: number
+  banner?: string
+  error?: string
+}
+
+export async function listInventoryHosts(): Promise<InventoryHost[]> {
+  const res = await fetch('/api/inventory/hosts')
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = await res.json()
+  return data.hosts || []
+}
+
+export async function getInventoryHost(idOrName: string): Promise<InventoryHost> {
+  const res = await fetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}`)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = await res.json()
+  return data.host
+}
+
+export async function createInventoryHost(payload: InventoryHostPayload): Promise<InventoryHost> {
+  const res = await fetch('/api/inventory/hosts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || `HTTP ${res.status}`)
+  }
+  const data = await res.json()
+  return data.host
+}
+
+export async function updateInventoryHost(
+  idOrName: string,
+  payload: InventoryHostPayload
+): Promise<InventoryHost> {
+  const res = await fetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || `HTTP ${res.status}`)
+  }
+  const data = await res.json()
+  return data.host
+}
+
+export async function deleteInventoryHost(idOrName: string): Promise<boolean> {
+  const res = await fetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || `HTTP ${res.status}`)
+  }
+  return true
+}
+
+export async function testHostSSH(idOrName: string): Promise<SSHTestResult> {
+  const res = await fetch(`/api/inventory/hosts/${encodeURIComponent(idOrName)}/test-ssh`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function exportInventoryYaml(): Promise<string> {
+  const res = await fetch('/api/inventory/export-yaml')
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = await res.json()
+  return data.content || ''
+}
+
+export async function seedInventoryFromLegacy(): Promise<{ created: number; updated: number }> {
+  const res = await fetch('/api/inventory/seed', {
+    method: 'POST',
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = await res.json()
+  return data.migration || { created: 0, updated: 0 }
+}
+
 
 
