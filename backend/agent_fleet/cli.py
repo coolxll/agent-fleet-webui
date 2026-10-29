@@ -4,6 +4,7 @@
   python -m agent_fleet.cli runtimes
   python -m agent_fleet.cli probe <runtime-id-or-host>
   python -m agent_fleet.cli scan [--runtime ID] [--all]
+  python -m agent_fleet.cli backup [--output-dir DIR] [--filename NAME] [--overwrite]
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from pathlib import Path
 import sys
 
 from sqlalchemy import select
@@ -18,6 +20,7 @@ from sqlalchemy import select
 from agent_fleet import models
 from agent_fleet.db import create_all, init_engine, session_scope
 from agent_fleet.services import persist
+from agent_fleet.services.backup_service import create_backup
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
 from agent_fleet.services.scanner import scan_runtime, to_ref
 from agent_fleet.settings import get_settings
@@ -137,6 +140,21 @@ def cmd_scan(settings, args):
         print(json.dumps(_result_json(res), indent=2, default=str))
 
 
+def cmd_backup(settings, args):
+    try:
+        meta = create_backup(
+            src_path=settings.db_path,
+            output_dir=Path(args.output_dir) if args.output_dir else None,
+            filename=args.filename,
+            overwrite=args.overwrite,
+            settings=settings,
+        )
+        print(json.dumps(meta, indent=2))
+    except (FileExistsError, FileNotFoundError, PermissionError, RuntimeError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        raise SystemExit(1)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="agent-fleet")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -154,8 +172,17 @@ def main(argv=None):
     sc.add_argument("--host")
     sc.set_defaults(fn=cmd_scan)
 
+    bk = sub.add_parser("backup", help="Create consistent SQLite backup with integrity check")
+    bk.add_argument("--output-dir", default=None, help="Output directory for backup (default: data/backups/)")
+    bk.add_argument("--filename", default=None, help="Custom filename for the backup (default: fleet_backup_YYYYMMDD_HHMMSS.db)")
+    bk.add_argument("--overwrite", action="store_true", help="Overwrite existing backup files")
+    bk.set_defaults(fn=cmd_backup)
+
     args = p.parse_args(argv)
-    settings = _setup()
+    if args.cmd == "backup":
+        settings = get_settings()
+    else:
+        settings = _setup()
     args.fn(settings, args)
 
 
