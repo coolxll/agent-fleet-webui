@@ -62,7 +62,10 @@ def test_recovery_ssh_disconnected_scenario(fleet_db, tmp_path):
     assert info["session_locator"]["has_native_session"] is True
     assert info["safety_check"]["is_active"] is False
     assert info["safety_check"]["safe_to_retry"] is True
-    assert info["can_resume"] is True
+    assert info["safety_check"]["local_state_clear"] is True
+    assert info["safety_check"]["remote_state_unknown"] is False
+    assert info["can_resume"] is False
+    assert info["resume_mode"] == "new_session"
 
 
 def test_recovery_controller_restarted_scenario(fleet_db, tmp_path):
@@ -88,7 +91,14 @@ def test_recovery_controller_restarted_scenario(fleet_db, tmp_path):
     assert "Fleet restarted" in info["reason_message"]
     assert info["execution_phase"] == "aborted"
     assert info["safety_check"]["is_active"] is False
-    assert info["safety_check"]["safe_to_retry"] is True
+    assert info["safety_check"]["local_state_clear"] is True
+    assert info["safety_check"]["remote_state_verified"] is False
+    assert info["safety_check"]["remote_state_unknown"] is True
+    assert info["safety_check"]["safe_to_retry"] is False
+    assert info["safe_to_retry"] is False
+    assert info["can_resume"] is False
+    assert info["resume_mode"] == "new_session"
+    assert "unknown" in info["safety_check"]["message"].lower()
 
 
 def test_recovery_interactive_blocked_scenario(fleet_db, tmp_path):
@@ -268,8 +278,71 @@ def test_native_session_present_vs_absent(fleet_db, tmp_path):
     info_present = service.get_task_recovery_info(task_id)
     assert info_present["native_session_id"] == "herdr-pane-abc"
     assert info_present["session_locator"]["has_native_session"] is True
-    assert info_present["can_resume"] is True
+    # Non-resumable failed stage does not falsely set can_resume=True
+    assert info_present["can_resume"] is False
+    assert info_present["resume_mode"] == "new_session"
     assert info_present["herdr_pane"]["pane_id"] == "herdr-pane-abc"
     assert info_present["herdr_pane"]["workspace_id"] == "ws-1"
     assert info_present["paseo_location"]["endpoint"] == "127.0.0.1:6767"
     assert info_present["paseo_location"]["session_id"] == "herdr-pane-abc"
+
+    # Stage with completed status, healthy output and no error becomes resumable
+    with session_scope() as db:
+        s = db.get(TaskStage, stage.id)
+        s.status = "completed"
+        s.error = None
+        s.output = "Successfully performed initial refactoring turn"
+        db.flush()
+
+    info_resumable = service.get_task_recovery_info(task_id)
+    assert info_resumable["can_resume"] is True
+    assert info_resumable["resume_mode"] == "resume_native_session"
+    assert info_resumable["resume_session_id"] == "herdr-pane-abc"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_workspace_dispatch_rejected(fleet_db, tmp_path):
+    task1_id, runtime_id, host_name = _setup_task(tmp_path, status="in_progress")
+    with session_scope() as db:
+        task2 = FleetTask(
+            title="Second Task on same workspace",
+            goal="Try concurrent execution",
+            project_path=str(tmp_path),
+            status="todo",
+        )
+        db.add(task2)
+        db.flush()
+        task2_id = task2.id
+
+        # Task 1 currently executing on (runtime_id, tmp_path)
+        stage1 = TaskStage(
+            task_id=task1_id,
+            active_task_id=task1_id,
+            runtime_id=runtime_id,
+            host_name=host_name,
+            agent_id="codex",
+            project_path=str(tmp_path),
+            status="running",
+        )
+        db.add(stage1)
+        db.flush()
+
+    draft = {
+        "runtime_id": runtime_id,
+        "agent_id": "codex",
+        "project_path": str(tmp_path),
+        "notes": "Testing conflict rejection",
+        "session_mode": "new",
+    }
+
+    # 1. preview_handoff on task 2 should reject due to locked workspace
+    with pytest.raises(service.TaskError) as exc_info:
+        await service.preview_handoff(task2_id, draft)
+    assert exc_info.value.status == 409
+    assert f"Workspace is already locked by active execution in task {task1_id}" in str(exc_info.value)
+
+    # 2. start_handoff on task 2 should also reject
+    with pytest.raises(service.TaskError) as exc_info2:
+        await service.start_handoff(task2_id, {**draft, "preview_hash": "dummy"})
+    assert exc_info2.value.status == 409
+    assert f"Workspace is already locked by active execution in task {task1_id}" in str(exc_info2.value)

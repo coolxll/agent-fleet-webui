@@ -220,7 +220,15 @@ export default function TaskBoardView({
     setRetrying(true)
     setError('')
     try {
-      const targetAgent = (agentId === 'claude' ? 'claude' : 'codex') as 'claude' | 'codex'
+      const supportedAgents = ['claude', 'codex']
+      if (!agentId || !supportedAgents.includes(agentId)) {
+        throw new Error(
+          zh
+            ? `不支持或未知的 Agent 类型: ${agentId || '未指定'}`
+            : `Unsupported or unknown agent type: ${agentId || 'unspecified'}`
+        )
+      }
+      const targetAgent = agentId as 'claude' | 'codex'
       if (runtimeId && projectPath) {
         const preview = await taskApi.preview(taskId, {
           runtime_id: runtimeId,
@@ -1067,6 +1075,11 @@ export default function TaskBoardView({
               const safeToRetry = Boolean(
                 recoveryInfo ? recoveryInfo.safe_to_retry : !latestStage?.active_task_id
               )
+              const remoteStateUnknown = Boolean(
+                (recoveryInfo?.safety_check as any)?.remote_state_unknown ??
+                (recoveryInfo as any)?.remote_state_unknown
+              )
+              const canResume = Boolean(recoveryInfo?.can_resume)
 
               const getReasonLabel = (cat: string) => {
                 switch (cat) {
@@ -1323,6 +1336,27 @@ export default function TaskBoardView({
                             : `Workspace Conflict: An active execution is running on this workspace. Duplicate dispatch is disabled.`}
                         </span>
                       </div>
+                    ) : remoteStateUnknown ? (
+                      <div
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: 6,
+                          background: '#eab30818',
+                          border: '1px solid #eab30840',
+                          color: '#facc15',
+                          fontSize: 12,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                        }}
+                      >
+                        <span>⚠️</span>
+                        <span>
+                          {zh
+                            ? '工作区状态未知: 控制器重启后尚未验证远端进程状态。重新派发前请确认远端进程已安全终止。'
+                            : 'Workspace state unknown: Remote process status has not been verified after controller restart.'}
+                        </span>
+                      </div>
                     ) : (
                       <div
                         style={{
@@ -1344,7 +1378,7 @@ export default function TaskBoardView({
                   </div>
 
                   {/* Concurrency Guard & Explicit Confirmation before Re-running */}
-                  {safeToRetry && !isProcessActive && (
+                  {(safeToRetry || remoteStateUnknown) && !isProcessActive && (
                     <div
                       style={{
                         paddingTop: 10,
@@ -1366,9 +1400,9 @@ export default function TaskBoardView({
                         >
                           <span>🔄</span>
                           <span>
-                            {hasNativeSession
-                              ? (zh ? '恢复任务执行' : 'Resume Task')
-                              : (zh ? '重新发起派发 / 重试' : 'Retry / Re-dispatch')}
+                            {canResume
+                              ? (zh ? '恢复原生会话' : 'Resume Native Session')
+                              : (zh ? '在工作区启动新会话' : 'Start New Session in Workspace')}
                           </span>
                         </button>
                       ) : (
@@ -1385,9 +1419,13 @@ export default function TaskBoardView({
                           }}
                         >
                           <span style={{ fontSize: 12, color: '#facc15' }}>
-                            {zh
-                              ? '⚠️ 确认目标工作区无冲突进程，继续重新派发？'
-                              : '⚠️ Confirm workspace is clear and proceed with re-dispatch?'}
+                            {remoteStateUnknown
+                              ? (zh
+                                  ? '⚠️ 控制器重启后远端状态未知。确认派发？(Remote state is unknown after controller restart. Confirm dispatch?)'
+                                  : '⚠️ Remote state is unknown after controller restart. Confirm dispatch?')
+                              : (zh
+                                  ? '⚠️ 确认目标工作区无冲突进程，继续重新派发？'
+                                  : '⚠️ Confirm workspace is clear and proceed with re-dispatch?')}
                           </span>
                           <button
                             type="button"
@@ -1399,7 +1437,7 @@ export default function TaskBoardView({
                                 recoveryInfo?.runtime_id || latestStage?.runtime_id,
                                 recoveryInfo?.agent_id || latestStage?.agent_id,
                                 workingDir,
-                                hasNativeSession ? nativeSessionId : null
+                                canResume ? nativeSessionId : null
                               )
                             }
                             style={{ fontSize: 11 }}

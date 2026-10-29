@@ -24,6 +24,7 @@ ACTIVE = ('starting', 'running')
 OUTPUT_LIMIT = 60000
 CONTEXT_LIMIT = 64000
 _jobs: dict[str, asyncio.Task] = {}
+_dispatch_lock = asyncio.Lock()
 
 
 class TaskError(ValueError):
@@ -272,6 +273,7 @@ def _check_workspace_safety(db, task: FleetTask, stage: TaskStage | None) -> dic
     """Verify whether a process is still active on the target workspace.
 
     Prevents duplicate parallel executions and concurrency conflicts.
+    Distinguishes local_state_clear, remote_state_verified, and remote_state_unknown.
     """
     active_in_task = db.scalar(
         select(TaskStage).where(TaskStage.task_id == task.id, TaskStage.active_task_id.is_not(None))
@@ -281,6 +283,9 @@ def _check_workspace_safety(db, task: FleetTask, stage: TaskStage | None) -> dic
         return {
             'is_active': True,
             'safe_to_retry': False,
+            'local_state_clear': False,
+            'remote_state_verified': False,
+            'remote_state_unknown': False,
             'active_task_id': task.id,
             'active_stage_id': active_in_task.id if active_in_task else (stage.id if stage else None),
             'message': 'Task has an active execution currently running.',
@@ -301,14 +306,39 @@ def _check_workspace_safety(db, task: FleetTask, stage: TaskStage | None) -> dic
             return {
                 'is_active': True,
                 'safe_to_retry': False,
+                'local_state_clear': False,
+                'remote_state_verified': False,
+                'remote_state_unknown': False,
                 'active_task_id': conflict.task_id,
                 'active_stage_id': conflict.id,
                 'message': f'Workspace conflict: task {conflict.task_id} is actively executing in this workspace.',
             }
 
+    err = ((stage.error if stage else '') or '').lower()
+    is_controller_restarted = (
+        _categorize_failure(stage, task) == 'controller_restarted'
+        or (stage is not None and stage.status == 'interrupted' and any(
+            k in err for k in ('fleet restarted', 'controller restarted', 'controller_restarted')
+        ))
+    )
+    if is_controller_restarted:
+        return {
+            'is_active': False,
+            'safe_to_retry': False,
+            'local_state_clear': True,
+            'remote_state_verified': False,
+            'remote_state_unknown': True,
+            'active_task_id': None,
+            'active_stage_id': None,
+            'message': 'Local state is clear, but remote process status is unknown after controller restart. Explicit confirmation required before dispatch.',
+        }
+
     return {
         'is_active': False,
         'safe_to_retry': True,
+        'local_state_clear': True,
+        'remote_state_verified': True,
+        'remote_state_unknown': False,
         'active_task_id': None,
         'active_stage_id': None,
         'message': 'Workspace is clear and idle. Safe to resume or retry.',
@@ -337,7 +367,9 @@ def _compute_task_recovery_info(db, task_id: str, task: FleetTask | None = None,
         or (latest is not None and latest.status in ('interrupted', 'blocked', 'failed'))
     )
 
-    can_resume = bool(latest and locators['has_native_session'] and safety['safe_to_retry'])
+    can_resume = bool(latest and _is_stage_resumable(latest, db) and safety['safe_to_retry'])
+    resume_mode = "resume_native_session" if can_resume else "new_session"
+    resume_session_id = locators['native_session_id'] if can_resume else None
     can_retry = bool(safety['safe_to_retry'])
 
     return {
@@ -363,7 +395,12 @@ def _compute_task_recovery_info(db, task_id: str, task: FleetTask | None = None,
         'safety_check': safety,
         'is_process_active': safety['is_active'],
         'safe_to_retry': safety['safe_to_retry'],
+        'local_state_clear': safety['local_state_clear'],
+        'remote_state_verified': safety['remote_state_verified'],
+        'remote_state_unknown': safety['remote_state_unknown'],
         'can_resume': can_resume,
+        'resume_mode': resume_mode,
+        'resume_session_id': resume_session_id,
         'can_retry': can_retry,
         'is_recovery_needed': is_recovery_needed,
     }
@@ -462,6 +499,16 @@ async def preview_handoff(task_id, data):
         if any(stage.active_task_id for stage in stages):
             raise TaskError('This task already has an active execution', 409)
         ref, executable = _target(db, data)
+        conflict = db.scalar(
+            select(TaskStage).where(
+                TaskStage.runtime_id == ref.id,
+                TaskStage.project_path == data['project_path'],
+                TaskStage.active_task_id.is_not(None),
+                TaskStage.task_id != task_id,
+            )
+        )
+        if conflict:
+            raise TaskError(f'Workspace is already locked by active execution in task {conflict.task_id}', 409)
         source_id = data.get('source_session_id')
         if source_id and not any(stage.session_id == source_id for stage in stages):
             raise TaskError('Source session must first be linked to this task')
@@ -545,33 +592,47 @@ async def start_handoff(task_id, data):
     preview = await preview_handoff(task_id, data)
     if preview['preview_hash'] != data.get('preview_hash'):
         raise TaskError('Task context or target Git state changed. Preview the handoff again.', 409)
-    with session_scope() as db:
-        task = _task(db, task_id)
-        ref, executable = _target(db, data)
-        stage = TaskStage(
-            task_id=task_id,
-            active_task_id=task_id,
-            runtime_id=ref.id,
-            source_session_id=preview['source_session_id'],
-            host_name=ref.host_name,
-            agent_id=data['agent_id'],
-            project_path=data['project_path'],
-            prompt=preview['prompt'],
-            native_session_id=preview.get('resume_session_id'),
-        )
-        resolve_stage_session(db, stage)
-        db.add(stage)
-        task.updated_at = utcnow()
-        try:
-            db.flush()
-        except IntegrityError:
-            raise TaskError('This task already has an active execution', 409)
-        stage_id = stage.id
-    job = asyncio.create_task(_execute(stage_id, ref, executable, data['agent_id'], data['project_path'], preview['prompt'], preview['resume_session_id']))
-    _jobs[stage_id] = job
-    job.add_done_callback(lambda _: _jobs.pop(stage_id, None))
-    # Return starting, not "started". A protocol acknowledgement updates it later.
-    return get_task(task_id)
+    async with _dispatch_lock:
+        with session_scope() as db:
+            task = _task(db, task_id)
+            stages = _stages(db, task_id)
+            if any(stage.active_task_id for stage in stages):
+                raise TaskError('This task already has an active execution', 409)
+            ref, executable = _target(db, data)
+            conflict = db.scalar(
+                select(TaskStage).where(
+                    TaskStage.runtime_id == ref.id,
+                    TaskStage.project_path == data['project_path'],
+                    TaskStage.active_task_id.is_not(None),
+                    TaskStage.task_id != task_id,
+                )
+            )
+            if conflict:
+                raise TaskError(f'Workspace is already locked by active execution in task {conflict.task_id}', 409)
+            stage = TaskStage(
+                task_id=task_id,
+                active_task_id=task_id,
+                runtime_id=ref.id,
+                source_session_id=preview['source_session_id'],
+                host_name=ref.host_name,
+                agent_id=data['agent_id'],
+                project_path=data['project_path'],
+                prompt=preview['prompt'],
+                native_session_id=preview.get('resume_session_id'),
+            )
+            resolve_stage_session(db, stage)
+            db.add(stage)
+            task.updated_at = utcnow()
+            try:
+                db.flush()
+            except IntegrityError:
+                raise TaskError('This task already has an active execution', 409)
+            stage_id = stage.id
+        job = asyncio.create_task(_execute(stage_id, ref, executable, data['agent_id'], data['project_path'], preview['prompt'], preview['resume_session_id']))
+        _jobs[stage_id] = job
+        job.add_done_callback(lambda _: _jobs.pop(stage_id, None))
+        # Return starting, not "started". A protocol acknowledgement updates it later.
+        return get_task(task_id)
 
 
 def _update_stage(stage_id, **values):
