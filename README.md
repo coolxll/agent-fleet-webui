@@ -361,6 +361,14 @@ export, quota authentication settings, runner fleet management, plus the HTTP AP
 
 Run from the repo root, as shown above.
 
+## Architecture & Domain Models
+
+Detailed architecture, entity relationship modeling, and design contracts:
+* **[System Architecture](docs/architecture.md)**: Process model, remote probe execution protocol, and failure isolation.
+* **[Domain Models & E-R Diagram](docs/domain-models.md)**: Complete Mermaid E-R entity model covering all 11 SQLite tables, data dictionary, lifecycle state machines, and five extensibility contracts.
+* **[Runner Fleet Operations Guide](docs/runner-fleet-guide.md)**: Multi-host GitHub Actions runner orchestration, proxy sharing, and pool reconciliation.
+* **[Documentation Hub](docs/README.md)**: Full index of research, requirements, and specifications.
+
 ## Repo layout
 
     backend/agent_fleet/   inventory, remotes (ssh/wsl/powershell), adapters, services, api
@@ -368,7 +376,7 @@ Run from the repo root, as shown above.
     config/                declarative configuration (runner_fleet.yaml)
     scripts/               maintenance & fleet tools (manage_runner.sh, sync_trae_credential.py)
     tests/fixtures/        real-shaped agent configs including fake credentials
-    docs/                  architecture, research, requirements, runner-fleet-guide
+    docs/                  architecture, domain-models, requirements, runner-fleet-guide
     inventory.yaml         your fleet (kind hints + WSL distros)
 
 ## Adding an agent

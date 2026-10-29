@@ -72,12 +72,28 @@ sources: an unreadable one does not lower the configuration `resolution`.
 Every adapter result passes through one central `scrub_config()` before it can
 be stored, so a future adapter cannot leak by forgetting to sanitize.
 
-## Data model (SQLite)
+## Data model & Domain Architecture (SQLite)
 
-    hosts 1---n runtimes 1---n agent_installations 1---n config_sources
-                                    1---1 agent_configurations
-    scan_runs 1---n scan_tasks      snapshots (history, kept indefinitely)
-    app_state (schedule state, key/value)
+> Detailed E-R diagram, entity dictionary, and extensibility contracts are documented in [domain-models.md](domain-models.md).
+
+The database (`data/fleet.db`) acts as the single source of truth for:
+- **Managed hosts & runner fleets** (`hosts` 1---n `runtimes`);
+- **Agent detection & sanitized configurations** (`agent_installations`, `config_sources`, `agent_configurations`);
+- **Interactive sessions & sanitized transcripts** (`sessions` 1---1 `session_transcripts`);
+- **Workflow tasks & multi-agent execution stages** (`fleet_tasks` 1---n `task_stages`);
+- **Daemon observers** (`herdr_observations`, `paseo_observations`);
+- **Scan history & snapshots** (`scan_runs` 1---n `scan_tasks`, `snapshots`).
+
+```
+hosts 1---n runtimes 1---n agent_installations 1---n config_sources
+               |              1---1 agent_configurations
+               +---n sessions 1---1 session_transcripts
+               +---n snapshots (history, kept indefinitely)
+               +---1 herdr_observations / paseo_observations
+fleet_tasks 1---n task_stages (concurrency mutex & cross-agent handoffs)
+scan_runs 1---n scan_tasks
+app_state (schedule & runtime metadata key/value)
+```
 
 **Identity of an install is (host, runtime, user, agent).** A Windows machine
 has a `native` runtime plus one runtime per WSL distro; each has its own home

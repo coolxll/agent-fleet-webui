@@ -8,6 +8,7 @@
 
 ### 1. 系统架构与设计
 - **[architecture.md](architecture.md)**：系统分层架构设计、数据流向模型、探针通信协议与状态机定义。
+- **[domain-models.md](domain-models.md)**：系统领域建模与完整 Mermaid E-R 实体关系图、实体字典及五大可扩展性设计契约。
 - **[requirements.md](requirements.md)**：各平台（macOS、Linux、Windows、WSL）与主流 Agent 的原始探测规范与验收要求。
 - **[research.md](research.md)**：各 Agent（Claude Code, Codex, OpenCode, Pi, Hermes 等）配置文件路径、发现规则与版本管理机制调研。
 
