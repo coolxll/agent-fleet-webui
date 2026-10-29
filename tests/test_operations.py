@@ -9,6 +9,7 @@ Tests:
 6. API routes GET /api/operations and GET /api/operations/{op_id}
 """
 
+import asyncio
 import pytest
 from datetime import datetime, timezone
 from agent_fleet import models
@@ -256,3 +257,269 @@ def test_api_routes(client, fleet_db):
     # Test 404 for unknown operation
     resp_404 = client.get("/api/operations/op-nonexistent")
     assert resp_404.status_code == 404
+
+
+def test_fsm_terminal_state_non_regression(fleet_db):
+    """Enforce that terminal states (succeeded, failed) cannot regress to running/accepted."""
+    # Succeeded cannot regress
+    op = operation_service.record_operation(
+        operation_type="agent_upgrade",
+        target_type="runtime",
+        target_id="rt-fsm-1",
+        status="running",
+    )
+    succeeded = operation_service.update_operation_status(
+        op["id"],
+        status="succeeded",
+        verification_evidence={"version": "1.2.0"},
+    )
+    assert succeeded["status"] == "succeeded"
+
+    # Attempting to regress succeeded -> running with strict=False is safely ignored
+    regressed = operation_service.update_operation_status(op["id"], status="running")
+    assert regressed["status"] == "succeeded"
+
+    # Details can still be updated idempotently while in terminal status
+    updated_details = operation_service.update_operation_status(
+        op["id"], status="succeeded", details={"extra_note": "verified"}
+    )
+    assert updated_details["status"] == "succeeded"
+    assert updated_details["details"]["extra_note"] == "verified"
+
+    # Attempting to regress succeeded -> running with strict=True raises ValueError
+    with pytest.raises(ValueError, match="Invalid operation status transition"):
+        operation_service.update_operation_status(op["id"], status="running", strict=True)
+
+    # Attempting to regress succeeded -> accepted with strict=True raises ValueError
+    with pytest.raises(ValueError, match="Invalid operation status transition"):
+        operation_service.update_operation_status(op["id"], status="accepted", strict=True)
+
+    # Failed cannot regress
+    op_fail = operation_service.record_operation(
+        operation_type="agent_upgrade",
+        target_type="runtime",
+        target_id="rt-fsm-2",
+        status="running",
+    )
+    failed = operation_service.update_operation_status(
+        op_fail["id"],
+        status="failed",
+        error="Upgrade script timed out",
+    )
+    assert failed["status"] == "failed"
+
+    # Regress failed -> running with strict=False ignored
+    regressed_fail = operation_service.update_operation_status(op_fail["id"], status="running")
+    assert regressed_fail["status"] == "failed"
+
+    # Regress failed -> running with strict=True raises ValueError
+    with pytest.raises(ValueError, match="Invalid operation status transition"):
+        operation_service.update_operation_status(op_fail["id"], status="running", strict=True)
+
+    # Unknown can transition to succeeded or failed with verification
+    op_unknown = operation_service.record_operation(
+        operation_type="agent_upgrade",
+        target_type="runtime",
+        target_id="rt-fsm-3",
+        status="running",
+    )
+    operation_service.update_operation_status(op_unknown["id"], status="unknown")
+    assert operation_service.get_operation(op_unknown["id"])["status"] == "unknown"
+
+    # unknown cannot regress to running
+    with pytest.raises(ValueError, match="Invalid operation status transition"):
+        operation_service.update_operation_status(op_unknown["id"], status="running", strict=True)
+
+    # unknown -> succeeded with evidence is valid
+    recovered = operation_service.update_operation_status(
+        op_unknown["id"],
+        status="succeeded",
+        verification_evidence={"verified_after_reconcile": True},
+    )
+    assert recovered["status"] == "succeeded"
+
+
+def test_reconcile_orphaned_operations(fleet_db):
+    """Test reconciling orphaned running and accepted operations on controller restart."""
+    op1 = operation_service.record_operation(
+        operation_type="agent_upgrade", target_type="runtime", target_id="rt-rec-1", status="accepted"
+    )
+    op2 = operation_service.record_operation(
+        operation_type="agent_upgrade", target_type="runtime", target_id="rt-rec-2", status="running"
+    )
+    op3 = operation_service.record_operation(
+        operation_type="runner_start",
+        target_type="runner",
+        target_id="run-rec-3",
+        status="succeeded",
+        verification_evidence={"verified": True},
+    )
+    op4 = operation_service.record_operation(
+        operation_type="runner_stop", target_type="runner", target_id="run-rec-4", status="failed", error="err"
+    )
+
+    reconciled_count = operation_service.reconcile_orphaned_operations()
+    assert reconciled_count == 2
+
+    # op1 and op2 transitioned to 'unknown' with restart notice
+    rec_op1 = operation_service.get_operation(op1["id"])
+    rec_op2 = operation_service.get_operation(op2["id"])
+    assert rec_op1["status"] == "unknown"
+    assert "Controller restarted" in rec_op1["error"]
+    assert rec_op1["finished_at"] is not None
+
+    assert rec_op2["status"] == "unknown"
+    assert "Controller restarted" in rec_op2["error"]
+    assert rec_op2["finished_at"] is not None
+
+    # op3 and op4 remain untouched
+    rec_op3 = operation_service.get_operation(op3["id"])
+    rec_op4 = operation_service.get_operation(op4["id"])
+    assert rec_op3["status"] == "succeeded"
+    assert rec_op4["status"] == "failed"
+
+    # Second run is idempotent
+    assert operation_service.reconcile_orphaned_operations() == 0
+
+
+@pytest.mark.asyncio
+async def test_background_upgrade_writeback_succeeded(fleet_db, monkeypatch):
+    """Background upgrade task writes back succeeded status and verification evidence to OperationLog."""
+    from unittest.mock import AsyncMock
+    from agent_fleet.remotes.executor import ExecResult
+    from agent_fleet.services import action_service
+
+    # Seed runtime and installation
+    with session_scope() as s:
+        host = models.Host(id="h-up-1", name="host-up-1", enabled=True)
+        rt = models.Runtime(id="rt-up-1", key="rt-up-1", host_id="h-up-1", transport="local", enabled=True)
+        inst = models.AgentInstallation(
+            id="inst-up-1",
+            runtime_id="rt-up-1",
+            agent_id="codex",
+            version="0.1.0",
+            detected=True,
+        )
+        s.add(host)
+        s.add(rt)
+        s.add(inst)
+
+    op = operation_service.record_operation(
+        operation_type="agent_upgrade",
+        target_type="runtime",
+        target_id="rt-up-1",
+        target_name="local:codex",
+        status="running",
+        details={"installation_id": "inst-up-1"},
+    )
+
+    mock_runner = AsyncMock()
+    mock_runner.run_script.return_value = ExecResult(stdout="installed @openai/codex@latest", exit_code=0)
+    monkeypatch.setattr(action_service, "build_runner", lambda *args, **kwargs: mock_runner)
+
+    mock_scan_res = AsyncMock()
+    mock_scan_res.ok = True
+    monkeypatch.setattr(action_service, "scan_runtime", AsyncMock(return_value=mock_scan_res))
+    monkeypatch.setattr(action_service, "persist_result", lambda *args, **kwargs: None)
+
+    task = action_service.start_upgrade_task("inst-up-1", operation_id=op["id"])
+    assert task["operation_id"] == op["id"]
+
+    # Wait for the background task to complete
+    for _ in range(50):
+        t = action_service.get_upgrade_task(task["task_id"])
+        if t and t.get("status") in ("completed", "failed"):
+            break
+        await asyncio.sleep(0.05)
+
+    final_op = operation_service.get_operation(op["id"])
+    assert final_op["status"] == "succeeded"
+    assert final_op["details"]["verification"]["exit_code"] == 0
+    assert final_op["details"]["verification"]["scan_refreshed"] is True
+
+
+@pytest.mark.asyncio
+async def test_background_upgrade_writeback_failed(fleet_db, monkeypatch):
+    """Background upgrade task writes back failed status to OperationLog on error."""
+    from unittest.mock import AsyncMock
+    from agent_fleet.remotes.executor import ExecResult
+    from agent_fleet.services import action_service
+
+    with session_scope() as s:
+        host = models.Host(id="h-up-2", name="host-up-2", enabled=True)
+        rt = models.Runtime(id="rt-up-2", key="rt-up-2", host_id="h-up-2", transport="local", enabled=True)
+        inst = models.AgentInstallation(
+            id="inst-up-2",
+            runtime_id="rt-up-2",
+            agent_id="claude",
+            version="1.0.0",
+            detected=True,
+        )
+        s.add(host)
+        s.add(rt)
+        s.add(inst)
+
+    op = operation_service.record_operation(
+        operation_type="agent_upgrade",
+        target_type="runtime",
+        target_id="rt-up-2",
+        target_name="local:claude",
+        status="running",
+        details={"installation_id": "inst-up-2"},
+    )
+
+    mock_runner = AsyncMock()
+    mock_runner.run_script.return_value = ExecResult(
+        stdout="", stderr="npm ERR! 404 Not Found", exit_code=1
+    )
+    monkeypatch.setattr(action_service, "build_runner", lambda *args, **kwargs: mock_runner)
+
+    task = action_service.start_upgrade_task("inst-up-2", operation_id=op["id"])
+
+    for _ in range(50):
+        t = action_service.get_upgrade_task(task["task_id"])
+        if t and t.get("status") in ("completed", "failed"):
+            break
+        await asyncio.sleep(0.05)
+
+    final_op = operation_service.get_operation(op["id"])
+    assert final_op["status"] == "failed"
+    assert "npm ERR! 404" in final_op["error"]
+
+
+def test_batch_upgrade_tracks_operation_ids(fleet_db, monkeypatch):
+    """Batch upgrade accepts operation_ids and links each task."""
+    from unittest.mock import MagicMock
+    from agent_fleet.services import action_service
+
+    with session_scope() as s:
+        host = models.Host(id="h-up-3", name="host-up-3", enabled=True)
+        rt = models.Runtime(id="rt-up-3", key="rt-up-3", host_id="h-up-3", transport="local", enabled=True)
+        inst1 = models.AgentInstallation(
+            id="inst-batch-1",
+            runtime_id="rt-up-3",
+            agent_id="codex",
+            version="1.0.0",
+            detected=True,
+        )
+        inst2 = models.AgentInstallation(
+            id="inst-batch-2",
+            runtime_id="rt-up-3",
+            agent_id="claude",
+            version="1.0.0",
+            detected=True,
+        )
+        s.add(host)
+        s.add(rt)
+        s.add(inst1)
+        s.add(inst2)
+
+    monkeypatch.setattr(action_service, "build_runner", lambda *args, **kwargs: MagicMock())
+
+    tasks = action_service.start_batch_upgrade(
+        ["inst-batch-1", "inst-batch-2"],
+        operation_ids={"inst-batch-1": "op-batch-1", "inst-batch-2": "op-batch-2"},
+    )
+    assert len(tasks) == 2
+    assert tasks[0]["operation_id"] == "op-batch-1"
+    assert tasks[1]["operation_id"] == "op-batch-2"

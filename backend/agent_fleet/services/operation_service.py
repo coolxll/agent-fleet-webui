@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 VALID_STATUSES = {"accepted", "running", "succeeded", "failed", "unknown"}
 
+ALLOWED_TRANSITIONS: dict[str, set[str]] = {
+    "accepted": {"running", "succeeded", "failed", "unknown"},
+    "running": {"succeeded", "failed", "unknown"},
+    "unknown": {"succeeded", "failed"},
+    "succeeded": set(),
+    "failed": set(),
+}
+
 SECRET_KEY_NAMES = {
     "api_key",
     "apikey",
@@ -170,19 +178,21 @@ def update_operation_status(
     details: dict[str, Any] | None = None,
     verification_evidence: Any = None,
     finished_at: datetime | None = None,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Update status, outcomes, and verification evidence for an operation.
 
     Enforces that 'succeeded' transitions require verifiable evidence.
+    Enforces status transition rules according to the operation FSM:
+    - Terminal states ('succeeded', 'failed') cannot regress to 'running' or 'accepted'.
+    - If an invalid transition is attempted and strict=False, the transition is safely ignored
+      without corrupting the existing record.
+    - If strict=True, an invalid transition raises ValueError.
+    - Updates are idempotent when called with the current status.
     """
     if status not in VALID_STATUSES:
         raise ValueError(
             f"Invalid operation status '{status}'. Must be one of {sorted(VALID_STATUSES)}"
-        )
-
-    if status == "succeeded" and not verification_evidence:
-        raise ValueError(
-            "Operation cannot be marked as 'succeeded' without remote verification evidence"
         )
 
     with session_scope() as s:
@@ -190,7 +200,32 @@ def update_operation_status(
         if not op:
             raise ValueError(f"Operation '{op_id}' not found")
 
-        op.status = status
+        is_same_status = (op.status == status)
+        is_allowed = status in ALLOWED_TRANSITIONS.get(op.status, set())
+
+        if not is_same_status and not is_allowed:
+            if strict:
+                raise ValueError(
+                    f"Invalid operation status transition from '{op.status}' to '{status}'"
+                )
+            logger.warning(
+                "Ignoring invalid operation status transition for '%s': '%s' -> '%s'",
+                op_id,
+                op.status,
+                status,
+            )
+        else:
+            if status == "succeeded" and not verification_evidence:
+                existing_verification = (op.details or {}).get("verification")
+                if not existing_verification:
+                    raise ValueError(
+                        "Operation cannot be marked as 'succeeded' without remote verification evidence"
+                    )
+            op.status = status
+            if (status in ("succeeded", "failed", "unknown") or finished_at) and not op.finished_at:
+                op.finished_at = finished_at or models.utcnow()
+            elif finished_at:
+                op.finished_at = finished_at
 
         if error is not None:
             op.error = sanitize_text(error)
@@ -204,11 +239,43 @@ def update_operation_status(
 
         op.details = curr_details
 
-        if status in ("succeeded", "failed", "unknown") or finished_at:
-            op.finished_at = finished_at or models.utcnow()
-
         s.flush()
         return _serialize_operation(op)
+
+
+def reconcile_orphaned_operations(db: Any = None) -> int:
+    """Reconcile orphaned operations after a controller restart.
+
+    Queries all OperationLog records where status is 'running' or 'accepted',
+    and transitions them to 'unknown' with an explanatory error notice.
+    Returns the count of reconciled operations.
+    """
+    reconcile_msg = (
+        "Controller restarted while operation was running or unconfirmed; requires verification"
+    )
+
+    def _reconcile(session) -> int:
+        stmt = select(models.OperationLog).where(
+            models.OperationLog.status.in_(["accepted", "running"])
+        )
+        orphans = list(session.scalars(stmt).all())
+        now = models.utcnow()
+        for op in orphans:
+            op.status = "unknown"
+            if op.error:
+                op.error = sanitize_text(f"{op.error} | {reconcile_msg}")
+            else:
+                op.error = sanitize_text(reconcile_msg)
+            if not op.finished_at:
+                op.finished_at = now
+        session.flush()
+        return len(orphans)
+
+    if db is not None:
+        return _reconcile(db)
+
+    with session_scope() as s:
+        return _reconcile(s)
 
 
 def get_operation(op_id: str) -> dict[str, Any] | None:

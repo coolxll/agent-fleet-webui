@@ -48,6 +48,13 @@ async def lifespan(app: FastAPI):
             log.info("recovered %d interrupted scan run(s): %s", len(recovered), recovered)
     except Exception as exc:
         log.warning("scan recovery failed: %s", exc)
+    try:
+        from agent_fleet.services import operation_service
+        reconciled = operation_service.reconcile_orphaned_operations()
+        if reconciled:
+            log.info("reconciled %d orphaned operation(s) on startup", reconciled)
+    except Exception as exc:
+        log.warning("operation reconciliation failed: %s", exc)
     if settings.include_local_runtime:
         try:
             add_local_runtime(settings)

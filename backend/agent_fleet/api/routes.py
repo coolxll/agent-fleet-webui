@@ -1148,7 +1148,7 @@ async def upgrade_installation_route(inst_id: str, wait: bool = Query(False)):
                 )
             return res
 
-        task = start_upgrade_task(inst_id)
+        task = start_upgrade_task(inst_id, operation_id=op["id"])
         operation_service.update_operation_status(
             op["id"],
             status="running",
@@ -1220,7 +1220,7 @@ async def upgrade_runtime_agent_route(
                 )
             return res
 
-        task = start_upgrade_task(inst_id)
+        task = start_upgrade_task(inst_id, operation_id=op["id"])
         operation_service.update_operation_status(
             op["id"],
             status="running",
@@ -1268,17 +1268,33 @@ def batch_upgrade_route(payload: BatchUpgradeRequest):
     from agent_fleet.services.action_service import start_batch_upgrade
     from agent_fleet.services import operation_service
 
-    tasks = start_batch_upgrade(payload.installation_ids)
+    op_map: dict[str, str] = {}
+    with session_scope() as s:
+        for inst_id in payload.installation_ids:
+            inst = s.get(models.AgentInstallation, inst_id)
+            if inst:
+                agent_id = inst.agent_id
+                host_label = inst.runtime.host.name if inst.runtime and inst.runtime.host else "local"
+                op = operation_service.record_operation(
+                    operation_type="agent_upgrade",
+                    target_type="runtime",
+                    target_id=inst.runtime_id or inst_id,
+                    target_name=f"{host_label}:{agent_id}",
+                    status="running",
+                    details={"installation_id": inst_id, "agent": agent_id, "batch": True},
+                )
+                op_map[inst_id] = op["id"]
+
+    tasks = start_batch_upgrade(payload.installation_ids, operation_ids=op_map)
     for t in tasks:
         inst_id = t.get("installation_id")
-        operation_service.record_operation(
-            operation_type="agent_upgrade",
-            target_type="runtime",
-            target_id=t.get("runtime_id") or inst_id or "unknown",
-            target_name=f"{t.get('host', 'local')}:{t.get('agent', 'unknown')}",
-            status="running",
-            details={"task_id": t.get("task_id"), "installation_id": inst_id, "batch": True},
-        )
+        op_id = op_map.get(inst_id)
+        if op_id:
+            operation_service.update_operation_status(
+                op_id,
+                status="running",
+                details={"task_id": t.get("task_id"), "installation_id": inst_id, "batch": True},
+            )
     return {"tasks": tasks, "queued": len(tasks)}
 
 
@@ -1288,17 +1304,33 @@ def upgrade_machine_all_route(host_id: str):
     from agent_fleet.services import operation_service
 
     outdated_ids = find_outdated_installations(host_id=host_id)
-    tasks = start_batch_upgrade(outdated_ids)
+    op_map: dict[str, str] = {}
+    with session_scope() as s:
+        for inst_id in outdated_ids:
+            inst = s.get(models.AgentInstallation, inst_id)
+            if inst:
+                agent_id = inst.agent_id
+                host_label = inst.runtime.host.name if inst.runtime and inst.runtime.host else "local"
+                op = operation_service.record_operation(
+                    operation_type="agent_upgrade",
+                    target_type="runtime",
+                    target_id=inst.runtime_id or inst_id,
+                    target_name=f"{host_label}:{agent_id}",
+                    status="running",
+                    details={"installation_id": inst_id, "host_id": host_id},
+                )
+                op_map[inst_id] = op["id"]
+
+    tasks = start_batch_upgrade(outdated_ids, operation_ids=op_map)
     for t in tasks:
         inst_id = t.get("installation_id")
-        operation_service.record_operation(
-            operation_type="agent_upgrade",
-            target_type="runtime",
-            target_id=t.get("runtime_id") or inst_id or "unknown",
-            target_name=f"{t.get('host', 'local')}:{t.get('agent', 'unknown')}",
-            status="running",
-            details={"task_id": t.get("task_id"), "installation_id": inst_id, "host_id": host_id},
-        )
+        op_id = op_map.get(inst_id)
+        if op_id:
+            operation_service.update_operation_status(
+                op_id,
+                status="running",
+                details={"task_id": t.get("task_id"), "installation_id": inst_id, "host_id": host_id},
+            )
     return {"tasks": tasks, "queued": len(tasks), "host_id": host_id}
 
 
@@ -1308,17 +1340,33 @@ def upgrade_agent_all_route(agent_id: str):
     from agent_fleet.services import operation_service
 
     outdated_ids = find_outdated_installations(agent_id=agent_id)
-    tasks = start_batch_upgrade(outdated_ids)
+    op_map: dict[str, str] = {}
+    with session_scope() as s:
+        for inst_id in outdated_ids:
+            inst = s.get(models.AgentInstallation, inst_id)
+            if inst:
+                agent_id_val = inst.agent_id
+                host_label = inst.runtime.host.name if inst.runtime and inst.runtime.host else "local"
+                op = operation_service.record_operation(
+                    operation_type="agent_upgrade",
+                    target_type="runtime",
+                    target_id=inst.runtime_id or inst_id,
+                    target_name=f"{host_label}:{agent_id_val}",
+                    status="running",
+                    details={"installation_id": inst_id, "agent_id": agent_id},
+                )
+                op_map[inst_id] = op["id"]
+
+    tasks = start_batch_upgrade(outdated_ids, operation_ids=op_map)
     for t in tasks:
         inst_id = t.get("installation_id")
-        operation_service.record_operation(
-            operation_type="agent_upgrade",
-            target_type="runtime",
-            target_id=t.get("runtime_id") or inst_id or "unknown",
-            target_name=f"{t.get('host', 'local')}:{t.get('agent', 'unknown')}",
-            status="running",
-            details={"task_id": t.get("task_id"), "installation_id": inst_id, "agent_id": agent_id},
-        )
+        op_id = op_map.get(inst_id)
+        if op_id:
+            operation_service.update_operation_status(
+                op_id,
+                status="running",
+                details={"task_id": t.get("task_id"), "installation_id": inst_id, "agent_id": agent_id},
+            )
     return {"tasks": tasks, "queued": len(tasks), "agent_id": agent_id}
 
 
@@ -1328,17 +1376,33 @@ def upgrade_fleet_all_route():
     from agent_fleet.services import operation_service
 
     outdated_ids = find_outdated_installations()
-    tasks = start_batch_upgrade(outdated_ids)
+    op_map: dict[str, str] = {}
+    with session_scope() as s:
+        for inst_id in outdated_ids:
+            inst = s.get(models.AgentInstallation, inst_id)
+            if inst:
+                agent_id = inst.agent_id
+                host_label = inst.runtime.host.name if inst.runtime and inst.runtime.host else "local"
+                op = operation_service.record_operation(
+                    operation_type="agent_upgrade",
+                    target_type="runtime",
+                    target_id=inst.runtime_id or inst_id,
+                    target_name=f"{host_label}:{agent_id}",
+                    status="running",
+                    details={"installation_id": inst_id, "fleet_wide": True},
+                )
+                op_map[inst_id] = op["id"]
+
+    tasks = start_batch_upgrade(outdated_ids, operation_ids=op_map)
     for t in tasks:
         inst_id = t.get("installation_id")
-        operation_service.record_operation(
-            operation_type="agent_upgrade",
-            target_type="runtime",
-            target_id=t.get("runtime_id") or inst_id or "unknown",
-            target_name=f"{t.get('host', 'local')}:{t.get('agent', 'unknown')}",
-            status="running",
-            details={"task_id": t.get("task_id"), "installation_id": inst_id, "fleet_wide": True},
-        )
+        op_id = op_map.get(inst_id)
+        if op_id:
+            operation_service.update_operation_status(
+                op_id,
+                status="running",
+                details={"task_id": t.get("task_id"), "installation_id": inst_id, "fleet_wide": True},
+            )
     return {"tasks": tasks, "queued": len(tasks)}
 
 

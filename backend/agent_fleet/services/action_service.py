@@ -10,6 +10,7 @@ Supports both synchronous execution and background task queues with polling.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from typing import Any
 
@@ -19,6 +20,8 @@ from agent_fleet.remotes.probe import PATH_BOOTSTRAP
 from agent_fleet.services.persist import persist_result
 from agent_fleet.services.scanner import build_runner, scan_runtime, to_ref
 from agent_fleet.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 UPGRADE_RULES: dict[str, dict[str, str]] = {
     "codex": {"package": "@openai/codex", "type": "npm"},
@@ -283,11 +286,63 @@ def list_upgrade_tasks(limit: int = 30) -> list[dict[str, Any]]:
     return sorted(_tasks.values(), key=lambda x: x.get("started_at", 0), reverse=True)[:limit]
 
 
-def start_upgrade_task(inst_id: str) -> dict[str, Any]:
+def _writeback_operation_status(
+    entry: dict[str, Any],
+    status: str,
+    error: str | None = None,
+    details: dict[str, Any] | None = None,
+    verification_evidence: Any = None,
+) -> None:
+    """Write back final outcome to OperationLog if tracked by an operation ID."""
+    op_id = entry.get("operation_id")
+    if not op_id:
+        # Fallback: look for an active agent_upgrade operation for this installation or task
+        try:
+            from agent_fleet.services import operation_service
+            runtime_id = entry.get("runtime_id")
+            inst_id = entry.get("installation_id")
+            task_id = entry.get("task_id")
+            ops = operation_service.list_operations(
+                operation_type="agent_upgrade",
+                target_id=runtime_id,
+                limit=10,
+            )
+            for o in ops:
+                if o.get("status") in ("accepted", "running"):
+                    o_details = o.get("details") or {}
+                    if (
+                        o_details.get("installation_id") == inst_id
+                        or o_details.get("task_id") == task_id
+                    ):
+                        op_id = o.get("id")
+                        entry["operation_id"] = op_id
+                        break
+        except Exception as lookup_err:
+            logger.debug("Failed looking up operation for task %s: %s", entry.get("task_id"), lookup_err)
+
+    if not op_id:
+        return
+
+    try:
+        from agent_fleet.services import operation_service
+        operation_service.update_operation_status(
+            op_id=op_id,
+            status=status,
+            error=error,
+            details=details,
+            verification_evidence=verification_evidence,
+        )
+    except Exception as err:
+        logger.warning("Failed to write back operation %s terminal status: %s", op_id, err)
+
+
+def start_upgrade_task(inst_id: str, operation_id: str | None = None) -> dict[str, Any]:
     """Enqueue upgrade as an asynchronous background task. Returns immediately."""
     # Check if a task is already running for this installation
     active = get_active_task_for_installation(inst_id)
     if active and active.get("status") == "running":
+        if operation_id and not active.get("operation_id"):
+            active["operation_id"] = operation_id
         return active
 
     settings = get_settings()
@@ -317,6 +372,7 @@ def start_upgrade_task(inst_id: str) -> dict[str, Any]:
         "task_id": task_id,
         "installation_id": inst_id,
         "runtime_id": runtime_id,
+        "operation_id": operation_id,
         "agent": agent_id,
         "channel": channel,
         "host": host_name,
@@ -335,11 +391,25 @@ def start_upgrade_task(inst_id: str) -> dict[str, Any]:
     }
     _tasks[task_id] = task_entry
 
-    bg_task = asyncio.create_task(
-        _run_background_upgrade(task_id, inst_id, rt_ref, agent_id, platform, runtime_id, old_version, settings, channel=channel)
-    )
-    _background_tasks.add(bg_task)
-    bg_task.add_done_callback(_background_tasks.discard)
+    try:
+        loop = asyncio.get_running_loop()
+        bg_task = loop.create_task(
+            _run_background_upgrade(
+                task_id,
+                inst_id,
+                rt_ref,
+                agent_id,
+                platform,
+                runtime_id,
+                old_version,
+                settings,
+                channel=channel,
+            )
+        )
+        _background_tasks.add(bg_task)
+        bg_task.add_done_callback(_background_tasks.discard)
+    except RuntimeError:
+        logger.debug("No active running event loop; background upgrade queued for task %s", task_id)
 
     return task_entry
 
@@ -371,14 +441,29 @@ async def _run_background_upgrade(
             res = await runner.run_script(script, timeout=timeout)
         except Exception as exc:
             duration_ms = int((time.monotonic() - start_t) * 1000)
+            err_msg = f"Execution error: {exc}"
             entry.update({
                 "status": "failed",
                 "ok": False,
                 "exit_code": -1,
-                "error": f"Execution error: {exc}",
+                "error": err_msg,
                 "duration_ms": duration_ms,
                 "finished_at": time.time(),
             })
+            _writeback_operation_status(
+                entry=entry,
+                status="failed",
+                error=err_msg,
+                details={
+                    "task_id": task_id,
+                    "installation_id": inst_id,
+                    "runtime_id": runtime_id,
+                    "agent": agent_id,
+                    "old_version": old_version,
+                    "duration_ms": duration_ms,
+                    "exit_code": -1,
+                },
+            )
             return
 
         duration_ms = int((time.monotonic() - start_t) * 1000)
@@ -410,6 +495,47 @@ async def _run_background_upgrade(
             "scan_refreshed": scan_ok,
             "finished_at": time.time(),
         })
+
+        if res.ok:
+            _writeback_operation_status(
+                entry=entry,
+                status="succeeded",
+                verification_evidence={
+                    "scan_refreshed": scan_ok,
+                    "new_version": new_version,
+                    "exit_code": res.exit_code,
+                },
+                details={
+                    "task_id": task_id,
+                    "installation_id": inst_id,
+                    "runtime_id": runtime_id,
+                    "agent": agent_id,
+                    "old_version": old_version,
+                    "new_version": new_version,
+                    "scan_refreshed": scan_ok,
+                    "duration_ms": duration_ms,
+                    "exit_code": res.exit_code,
+                    "stdout": res.stdout,
+                    "stderr": res.stderr,
+                },
+            )
+        else:
+            _writeback_operation_status(
+                entry=entry,
+                status="failed",
+                error=res.failure_reason() or res.stderr or "Upgrade failed",
+                details={
+                    "task_id": task_id,
+                    "installation_id": inst_id,
+                    "runtime_id": runtime_id,
+                    "agent": agent_id,
+                    "old_version": old_version,
+                    "duration_ms": duration_ms,
+                    "exit_code": res.exit_code,
+                    "stdout": res.stdout,
+                    "stderr": res.stderr,
+                },
+            )
 
 
 def find_outdated_installations(
@@ -453,16 +579,24 @@ def find_outdated_installations(
         return outdated_ids
 
 
-def start_batch_upgrade(inst_ids: list[str]) -> list[dict[str, Any]]:
+def start_batch_upgrade(
+    inst_ids: list[str],
+    operation_ids: dict[str, str] | list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Enqueue a batch of installations for background upgrade."""
     tasks: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for inst_id in inst_ids:
+    for idx, inst_id in enumerate(inst_ids):
         if not inst_id or inst_id in seen:
             continue
         seen.add(inst_id)
+        op_id = None
+        if isinstance(operation_ids, dict):
+            op_id = operation_ids.get(inst_id)
+        elif isinstance(operation_ids, (list, tuple)) and idx < len(operation_ids):
+            op_id = operation_ids[idx]
         try:
-            task = start_upgrade_task(inst_id)
+            task = start_upgrade_task(inst_id, operation_id=op_id)
             tasks.append(task)
         except Exception:
             # Skip invalid or unsupported entries without halting batch
