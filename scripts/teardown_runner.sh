@@ -4,38 +4,19 @@
 #
 set -euo pipefail
 
-REPO="coolxll/agent-fleet-webui"
-REMOTE_HOST="corp172-dev"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "==> 1. 从 GitHub 仓库反注册并移除相关 Fleet Runner..."
-RUNNER_IDS=$(gh api "/repos/$REPO/actions/runners" --jq '.runners[] | select(.name | test("corp172-dev-fleet")) | .id' 2>/dev/null || true)
-
-if [ -n "$RUNNER_IDS" ]; then
-  for rid in $RUNNER_IDS; do
-    gh api --method DELETE "/repos/$REPO/actions/runners/$rid" >/dev/null || true
-    echo "✓ GitHub Runner (ID: $rid) 已从仓库 $REPO 注销成功"
-  done
-else
-  echo "ℹ GitHub 仓库中未找到 Fleet 相关 runner，跳过 GitHub 端反注册"
+# 调用通用的 manage_runner 工具
+if [ -f "$SCRIPT_DIR/manage_runner.sh" ]; then
+  bash "$SCRIPT_DIR/manage_runner.sh" stop "coolxll/agent-fleet-webui" "corp172-dev"
 fi
 
-echo "==> 2. 清理 $REMOTE_HOST 上的运行进程与磁盘目录..."
-ssh -o BatchMode=yes "$REMOTE_HOST" "
-  echo '   - 终止 tmux session 及相关进程...'
+# 兼顾清理旧命名规则的历史临时目录与会话
+ssh -o BatchMode=yes "corp172-dev" "
   tmux kill-session -t actions-runner-fleet 2>/dev/null || true
   tmux kill-session -t actions-runner-fleet-2 2>/dev/null || true
   pkill -f 'actions-runner-fleet' 2>/dev/null || true
-  sleep 1
-
-  echo '   - 删除目录 /home/lynn/actions-runner-fleet*...'
   rm -rf /home/lynn/actions-runner-fleet /home/lynn/actions-runner-fleet-2
-  echo '✓ 远端清理完成'
-"
+" 2>/dev/null || true
 
-echo "==> 3. 核验下线状态..."
-REMAINING=$(gh api "/repos/$REPO/actions/runners" --jq '.runners[] | select(.name | test("corp172-dev-fleet")) | .name' 2>/dev/null || true)
-if [ -z "$REMAINING" ]; then
-  echo "✓ 验证通过：所有 Fleet Runner 已彻底下线并清理完毕，无任何残留。"
-else
-  echo "⚠️ 警告：GitHub 上仍可探测到 $REMAINING"
-fi
+echo "✓ 下线与清理已完成"
