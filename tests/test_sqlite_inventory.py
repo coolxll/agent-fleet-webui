@@ -431,7 +431,7 @@ def test_host_connectivity_with_custom_ssh_params(fleet_db, monkeypatch):
     # Test connectivity with custom SSH parameters
     res = sqlite_inventory.test_host_connectivity(host_name)
     assert res["ok"] is True
-    assert res["host"] == "fleetdeployer@10.200.1.5"
+    assert res["host"] == "fleetdeployer@bastion-alias"
     assert res["uname"] == "Linux 6.6.0-test x86_64"
 
     assert len(captured_commands) == 1
@@ -440,7 +440,10 @@ def test_host_connectivity_with_custom_ssh_params(fleet_db, monkeypatch):
     assert "-p" in cmd
     p_idx = cmd.index("-p")
     assert cmd[p_idx + 1] == "8022"
-    assert "fleetdeployer@10.200.1.5" in cmd
+    assert "-o" in cmd
+    hn_idx = cmd.index("HostName=10.200.1.5")
+    assert cmd[hn_idx - 1] == "-o"
+    assert "fleetdeployer@bastion-alias" in cmd
     assert "uname -srm" in cmd
 
     # Also test alias compatibility (no custom port, no custom user)
@@ -475,7 +478,7 @@ def test_runtime_ref_target_and_runner_ssh_resolution():
         ssh_port=3022,
         collect_user="deploy",
     )
-    assert ref_custom.target == "deploy@172.20.0.10"
+    assert ref_custom.target == "deploy@node-1"
 
     ref_alias = RuntimeRef(
         id="rt-alias",
@@ -486,6 +489,89 @@ def test_runtime_ref_target_and_runner_ssh_resolution():
         collect_user="",
     )
     assert ref_alias.target == "openssh-alias"
+
+
+def test_seed_windows_host_and_wsl_runtimes(fleet_db, monkeypatch):
+    """Issue #51: Verify Windows transport is not hardcoded to ssh and declared WSL runtimes are imported."""
+    from agent_fleet.inventory.loader import DiscoveredHost, WslTarget
+    import agent_fleet.services.sqlite_inventory as sq_mod
+
+    win_host = DiscoveredHost(
+        name="win-builder",
+        hostname="192.168.1.120",
+        user="Administrator",
+        port=22,
+        kind_hint="windows",
+        wsl=[
+            WslTarget(distro="Ubuntu-22.04", user="wsluser"),
+            WslTarget(distro="Debian"),
+        ],
+        source="project-yaml",
+    )
+    monkeypatch.setattr("agent_fleet.inventory.load_all", lambda s: [win_host])
+
+    res = sq_mod.seed_from_legacy_files_if_needed(force=True)
+    assert res["created"] >= 1
+
+    h = sq_mod.get_host("win-builder")
+    assert h is not None
+    assert h["name"] == "win-builder"
+
+    # Verify native runtime has windows transport (not ssh!)
+    runtimes = {r["key"]: r for r in h["runtimes"]}
+    native_rt = runtimes.get("native")
+    assert native_rt is not None
+    assert native_rt["kind"] == "windows"
+    assert native_rt["transport"] == "windows"
+    assert native_rt["ssh_alias"] == "win-builder"
+    assert native_rt["ssh_host"] == "192.168.1.120"
+
+    # Verify child WSL runtimes
+    wsl_ubuntu = runtimes.get("wsl:Ubuntu-22.04")
+    assert wsl_ubuntu is not None
+    assert wsl_ubuntu["kind"] == "wsl"
+    assert wsl_ubuntu["transport"] == "wsl"
+    assert wsl_ubuntu["wsl_distro"] == "Ubuntu-22.04"
+    assert wsl_ubuntu["wsl_user"] == "wsluser"
+
+    wsl_debian = runtimes.get("wsl:Debian")
+    assert wsl_debian is not None
+    assert wsl_debian["kind"] == "wsl"
+    assert wsl_debian["transport"] == "wsl"
+    assert wsl_debian["wsl_distro"] == "Debian"
+    assert wsl_debian["wsl_user"] == "Administrator"
+
+    sq_mod.delete_host("win-builder")
+
+
+def test_seed_subsequent_runs_do_not_resurrect_deleted_or_duplicate(fleet_db, monkeypatch):
+    """Issue #51: Verify subsequent runs do not resurrect deleted entries or create duplicate runtimes."""
+    from agent_fleet.inventory.loader import DiscoveredHost
+    import agent_fleet.services.sqlite_inventory as sq_mod
+
+    test_node = "legacy-del-node"
+    mock_host = DiscoveredHost(
+        name=test_node,
+        hostname="192.168.1.99",
+        user="dev",
+        source="project-yaml",
+    )
+    monkeypatch.setattr("agent_fleet.inventory.load_all", lambda s: [mock_host])
+
+    # First seed
+    res1 = sq_mod.seed_from_legacy_files_if_needed(force=True)
+    assert res1["created"] >= 1
+    assert sq_mod.get_host(test_node) is not None
+
+    # User deletes the host
+    deleted = sq_mod.delete_host(test_node)
+    assert deleted is True
+    assert sq_mod.get_host(test_node) is None
+
+    # Subsequent run without force=True must NOT resurrect the deleted host
+    res2 = sq_mod.seed_from_legacy_files_if_needed(force=False)
+    assert res2 == {"created": 0, "updated": 0}
+    assert sq_mod.get_host(test_node) is None
 
 
 def test_no_hardcoded_ssh_user_default(client):

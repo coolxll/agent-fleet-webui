@@ -55,9 +55,12 @@ def host_to_dict(h: models.Host, include_runtimes: bool = True) -> dict[str, Any
                 "reachable": r.reachable,
                 "last_seen_at": models.iso_utc(r.last_seen_at),
                 "last_error": r.last_error,
+                "ssh_alias": r.ssh_alias,
                 "ssh_host": r.ssh_host,
                 "ssh_port": r.ssh_port,
                 "collect_user": r.collect_user,
+                "wsl_distro": r.wsl_distro,
+                "wsl_user": r.wsl_user,
             }
             for r in (h.runtimes or [])
         ]
@@ -93,10 +96,27 @@ def seed_from_legacy_files_if_needed(force: bool = False) -> dict[str, int]:
                 host_to_repos.setdefault(str(h), []).append(str(repo))
 
     with session_scope() as s:
-        # Check if hosts already exist in SQLite
+        # Check if already seeded to prevent resurrecting deleted entries on subsequent runs
+        seeded_record = s.get(models.AppState, "legacy_inventory_seeded")
         existing_hosts = {h.name: h for h in s.execute(select(models.Host)).scalars().all()}
-        if not force and len(existing_hosts) > 0:
+        if not force and (seeded_record is not None or len(existing_hosts) > 0):
             return {"created": 0, "updated": 0}
+
+        def _parse_wsl_targets(raw_wsl: Any) -> list[tuple[str, str | None]]:
+            targets: list[tuple[str, str | None]] = []
+            if not raw_wsl:
+                return targets
+            for item in raw_wsl:
+                if isinstance(item, str):
+                    targets.append((item.strip(), None))
+                elif hasattr(item, "distro"):
+                    targets.append((str(item.distro).strip(), getattr(item, "user", None)))
+                elif isinstance(item, dict):
+                    d = str(item.get("distro", "")).strip()
+                    u = item.get("user")
+                    if d:
+                        targets.append((d, str(u).strip() if u else None))
+            return targets
 
         # 1. Merge runner_fleet.yaml hosts
         for host_name, h_cfg in fleet_hosts_cfg.items():
@@ -109,14 +129,21 @@ def seed_from_legacy_files_if_needed(force: bool = False) -> dict[str, int]:
             max_r = h_cfg.get("max_runners", 4)
             desc = h_cfg.get("description", "")
 
+            raw_kind = (h_cfg.get("kind") or "").lower()
+            is_windows = raw_kind == "windows" or any("windows" in str(lbl).lower() for lbl in labels)
+            kind = "windows" if is_windows else (raw_kind or "linux")
+            transport = h_cfg.get("transport") or ("windows" if is_windows else "ssh")
+
+            wsl_targets = _parse_wsl_targets(h_cfg.get("wsl"))
+
             if row is None:
                 row = models.Host(
                     id=models.new_id(),
                     name=host_name,
-                    hostname=host_name,
+                    hostname=h_cfg.get("hostname") or host_name,
                     description=desc,
                     inventory_source="sqlite",
-                    ssh_host=host_name,
+                    ssh_host=h_cfg.get("hostname") or host_name,
                     ssh_user=user,
                     proxy=proxy,
                     runner_enabled=True,
@@ -127,20 +154,38 @@ def seed_from_legacy_files_if_needed(force: bool = False) -> dict[str, int]:
                 )
                 s.add(row)
                 s.flush()
-                # Create default native runtime
+                # Create default native runtime with proper transport
                 s.add(
                     models.Runtime(
                         id=models.new_id(),
                         host_id=row.id,
                         key="native",
-                        kind="linux",
-                        transport="ssh",
+                        kind=kind,
+                        transport=transport,
                         ssh_alias=host_name,
-                        ssh_host=host_name,
+                        ssh_host=row.ssh_host,
+                        ssh_port=row.ssh_port,
                         collect_user=user,
                         enabled=True,
                     )
                 )
+                for distro, w_user in wsl_targets:
+                    s.add(
+                        models.Runtime(
+                            id=models.new_id(),
+                            host_id=row.id,
+                            key=f"wsl:{distro}",
+                            kind="wsl",
+                            transport="wsl",
+                            wsl_distro=distro,
+                            wsl_user=w_user or user,
+                            ssh_alias=host_name,
+                            ssh_host=row.ssh_host,
+                            ssh_port=row.ssh_port,
+                            collect_user=w_user or user,
+                            enabled=True,
+                        )
+                    )
                 existing_hosts[host_name] = row
                 created += 1
             else:
@@ -155,6 +200,42 @@ def seed_from_legacy_files_if_needed(force: bool = False) -> dict[str, int]:
                     row.target_repos = merged_repos
                 if desc and not row.description:
                     row.description = desc
+
+                native_rt = s.execute(
+                    select(models.Runtime).where(
+                        models.Runtime.host_id == row.id,
+                        models.Runtime.key.in_(("native", "primary")),
+                    )
+                ).scalar_one_or_none()
+                if native_rt and is_windows:
+                    native_rt.kind = "windows"
+                    native_rt.transport = transport
+
+                for distro, w_user in wsl_targets:
+                    wsl_key = f"wsl:{distro}"
+                    existing_wsl = s.execute(
+                        select(models.Runtime).where(
+                            models.Runtime.host_id == row.id,
+                            models.Runtime.key == wsl_key,
+                        )
+                    ).scalar_one_or_none()
+                    if existing_wsl is None:
+                        s.add(
+                            models.Runtime(
+                                id=models.new_id(),
+                                host_id=row.id,
+                                key=wsl_key,
+                                kind="wsl",
+                                transport="wsl",
+                                wsl_distro=distro,
+                                wsl_user=w_user or row.ssh_user,
+                                ssh_alias=row.name,
+                                ssh_host=row.ssh_host,
+                                ssh_port=row.ssh_port,
+                                collect_user=w_user or row.ssh_user,
+                                enabled=row.enabled,
+                            )
+                        )
                 updated += 1
 
         # 2. Merge inventory.yaml hosts
@@ -163,6 +244,22 @@ def seed_from_legacy_files_if_needed(force: bool = False) -> dict[str, int]:
             inv_hosts = load_all(settings)
             for ih in inv_hosts:
                 row = existing_hosts.get(ih.name)
+                raw_kind = (ih.kind_hint or "").lower()
+                is_windows = raw_kind == "windows" or (
+                    ih.tags and any("windows" in str(v).lower() for v in ih.tags.values())
+                )
+                kind = "windows" if is_windows else (raw_kind if raw_kind != "auto" else "unknown")
+
+                # Resolve transport
+                if ih.name == settings.local_host_label:
+                    transport = "local"
+                elif is_windows:
+                    transport = getattr(ih, "transport", None) or "windows"
+                else:
+                    transport = getattr(ih, "transport", None) or "ssh"
+
+                wsl_targets = _parse_wsl_targets(getattr(ih, "wsl", None))
+
                 if row is None:
                     row = models.Host(
                         id=models.new_id(),
@@ -183,8 +280,8 @@ def seed_from_legacy_files_if_needed(force: bool = False) -> dict[str, int]:
                             id=models.new_id(),
                             host_id=row.id,
                             key="native",
-                            kind=ih.kind_hint if ih.kind_hint != "auto" else "unknown",
-                            transport="ssh" if ih.name != settings.local_host_label else "local",
+                            kind=kind,
+                            transport=transport,
                             ssh_alias=ih.name,
                             ssh_host=ih.hostname,
                             ssh_port=ih.port,
@@ -192,6 +289,23 @@ def seed_from_legacy_files_if_needed(force: bool = False) -> dict[str, int]:
                             enabled=bool(ih.enabled),
                         )
                     )
+                    for distro, w_user in wsl_targets:
+                        s.add(
+                            models.Runtime(
+                                id=models.new_id(),
+                                host_id=row.id,
+                                key=f"wsl:{distro}",
+                                kind="wsl",
+                                transport="wsl",
+                                wsl_distro=distro,
+                                wsl_user=w_user or ih.user,
+                                ssh_alias=ih.name,
+                                ssh_host=ih.hostname,
+                                ssh_port=ih.port,
+                                collect_user=w_user or ih.user,
+                                enabled=bool(ih.enabled),
+                            )
+                        )
                     existing_hosts[ih.name] = row
                     created += 1
                 else:
@@ -203,9 +317,74 @@ def seed_from_legacy_files_if_needed(force: bool = False) -> dict[str, int]:
                         row.ssh_user = ih.user
                     if ih.group and not row.group:
                         row.group = ih.group
+                    if ih.tags:
+                        merged_tags = dict(row.tags or {})
+                        for k, v in ih.tags.items():
+                            if k not in merged_tags:
+                                merged_tags[k] = v
+                        row.tags = merged_tags
+
+                    # Sync native runtime kind and transport
+                    native_rt = s.execute(
+                        select(models.Runtime).where(
+                            models.Runtime.host_id == row.id,
+                            models.Runtime.key.in_(("native", "primary")),
+                        )
+                    ).scalar_one_or_none()
+                    if native_rt:
+                        if is_windows:
+                            native_rt.kind = "windows"
+                            native_rt.transport = transport
+                        elif kind != "unknown" and native_rt.kind in ("unknown", "linux"):
+                            native_rt.kind = kind
+                        if ih.hostname and not native_rt.ssh_host:
+                            native_rt.ssh_host = ih.hostname
+                        if ih.port and not native_rt.ssh_port:
+                            native_rt.ssh_port = ih.port
+                        if ih.user and not native_rt.collect_user:
+                            native_rt.collect_user = ih.user
+
+                    # Sync WSL runtimes
+                    for distro, w_user in wsl_targets:
+                        wsl_key = f"wsl:{distro}"
+                        existing_wsl = s.execute(
+                            select(models.Runtime).where(
+                                models.Runtime.host_id == row.id,
+                                models.Runtime.key == wsl_key,
+                            )
+                        ).scalar_one_or_none()
+                        if existing_wsl is None:
+                            s.add(
+                                models.Runtime(
+                                    id=models.new_id(),
+                                    host_id=row.id,
+                                    key=wsl_key,
+                                    kind="wsl",
+                                    transport="wsl",
+                                    wsl_distro=distro,
+                                    wsl_user=w_user or row.ssh_user,
+                                    ssh_alias=row.name,
+                                    ssh_host=row.ssh_host,
+                                    ssh_port=row.ssh_port,
+                                    collect_user=w_user or row.ssh_user,
+                                    enabled=row.enabled,
+                                )
+                            )
+                        else:
+                            if w_user and not existing_wsl.wsl_user:
+                                existing_wsl.wsl_user = w_user
+
                     updated += 1
         except Exception as exc:
             logger.warning("Could not merge inventory.yaml: %s", exc)
+
+        # Mark seeded in AppState to ensure subsequent runs do not resurrect deleted entries
+        if seeded_record is None:
+            seeded_record = models.AppState(key="legacy_inventory_seeded", value={"seeded": True})
+            s.add(seeded_record)
+        else:
+            seeded_record.value = {"seeded": True}
+            seeded_record.updated_at = models.utcnow()
 
     return {"created": created, "updated": updated}
 
@@ -261,20 +440,44 @@ def create_host(payload: dict[str, Any]) -> dict[str, Any]:
         s.flush()
 
         # Add native primary runtime
+        kind = payload.get("kind", "linux")
+        transport = payload.get("transport") or ("windows" if kind == "windows" else "ssh")
+        alias = payload.get("ssh_alias") or (h.hostname if (h.ssh_host and h.hostname != h.ssh_host) else name)
+
         s.add(
             models.Runtime(
                 id=models.new_id(),
                 host_id=h.id,
                 key="native",
-                kind=payload.get("kind", "linux"),
-                transport="ssh",
-                ssh_alias=name,
+                kind=kind,
+                transport=transport,
+                ssh_alias=alias,
                 ssh_host=h.ssh_host,
                 ssh_port=h.ssh_port,
                 collect_user=user,
                 enabled=h.enabled,
             )
         )
+        for w in (payload.get("wsl") or []):
+            d = w if isinstance(w, str) else w.get("distro", "")
+            u = None if isinstance(w, str) else w.get("user")
+            if d:
+                s.add(
+                    models.Runtime(
+                        id=models.new_id(),
+                        host_id=h.id,
+                        key=f"wsl:{d}",
+                        kind="wsl",
+                        transport="wsl",
+                        wsl_distro=d,
+                        wsl_user=u or user,
+                        ssh_alias=alias,
+                        ssh_host=h.ssh_host,
+                        ssh_port=h.ssh_port,
+                        collect_user=u or user,
+                        enabled=h.enabled,
+                    )
+                )
         s.flush()
         return host_to_dict(h)
 
@@ -378,22 +581,36 @@ def test_host_connectivity(id_or_name: str) -> dict[str, Any]:
     if not host_data:
         return {"ok": False, "error": f"主机不存在: {id_or_name}"}
 
-    ssh_host = host_data.get("ssh_host") or host_data.get("hostname") or host_data.get("name")
     ssh_port = host_data.get("ssh_port")
     ssh_user = host_data.get("ssh_user")
 
+    native_rt = None
+    for r in host_data.get("runtimes", []):
+        if r.get("key") in ("native", "primary"):
+            native_rt = r
+            break
+
+    ssh_alias = (native_rt.get("ssh_alias") if native_rt else None) or (
+        host_data.get("hostname")
+        if (host_data.get("ssh_host") and host_data.get("hostname") != host_data.get("ssh_host"))
+        else host_data.get("name")
+    )
+    ssh_host = (native_rt.get("ssh_host") if native_rt else None) or host_data.get("ssh_host") or host_data.get("hostname") or host_data.get("name")
+
     target = resolve_ssh_target(
-        ssh_host=host_data.get("ssh_host"),
-        ssh_alias=host_data.get("hostname"),
+        ssh_host=ssh_host,
+        ssh_alias=ssh_alias,
         host_name=host_data.get("name"),
         ssh_user=ssh_user,
     )
     cmd = build_ssh_command(
-        target=ssh_host,
+        target=target,
         port=ssh_port,
         user=ssh_user,
         connect_timeout=5,
         remote_command="uname -srm",
+        host_address=ssh_host,
+        ssh_alias=ssh_alias,
     )
     start_time = time.time()
     try:
