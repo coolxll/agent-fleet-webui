@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type Overview, type Runtime } from '../api'
 import { useI18n } from '../i18n'
+import InventoryManager from './InventoryManager'
 
 type Props = {
   isOpen: boolean
@@ -13,23 +14,20 @@ type TabKey = 'inventory' | 'schedule' | 'data'
 export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props) {
   const { t, language, toggleLanguage } = useI18n()
   const [activeTab, setActiveTab] = useState<TabKey>('inventory')
-  const [hosts, setHosts] = useState<any[]>([])
   const [runtimes, setRuntimes] = useState<Runtime[]>([])
   const [overview, setOverview] = useState<Overview | null>(null)
   const [schedule, setSchedule] = useState<any>(null)
-  const [busy, setBusy] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const loadData = useCallback(async () => {
     try {
-      const [hRes, rRes, ovRes, schRes] = await Promise.all([
-        api.hosts(true),
+      const [rRes, ovRes, schRes] = await Promise.all([
         api.runtimes(false, true),
         api.overview().catch(() => null),
         fetch('/api/schedule').then((r) => r.json()).catch(() => null)
       ])
-      setHosts(hRes.hosts)
       setRuntimes(rRes.runtimes)
       if (ovRes) setOverview(ovRes)
       if (schRes) setSchedule(schRes)
@@ -45,34 +43,6 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
       setError(null)
     }
   }, [isOpen, loadData])
-
-  const handleSyncInventory = async () => {
-    setBusy(true)
-    setMsg(null)
-    setError(null)
-    try {
-      const res = await api.syncInventory()
-      setMsg(t('toast.inventorySynced', { count: res.hosts_seen ?? 'ok' }))
-      await loadData()
-      onDataChanged?.()
-    } catch (e: any) {
-      setError(String(e.message || e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const handleToggleHost = async (host: any) => {
-    try {
-      await api.setHostEnabled(host.id, !host.enabled)
-      setHosts((prev) =>
-        prev.map((h) => (h.id === host.id ? { ...h, enabled: !host.enabled } : h))
-      )
-      onDataChanged?.()
-    } catch (e: any) {
-      setError(String(e.message || e))
-    }
-  }
 
   const handleToggleRuntime = async (rt: Runtime) => {
     try {
@@ -112,6 +82,7 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
   }
 
   const handleExportJson = async () => {
+    setExporting(true)
     try {
       const res = await fetch('/api/export')
       const data = await res.json()
@@ -131,6 +102,8 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
       )
     } catch (e: any) {
       setError(String(e.message || e))
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -141,7 +114,14 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
       <div
         className="modal-card settings-modal-card"
         onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: 680, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
+        style={{
+          maxWidth: activeTab === 'inventory' ? 980 : 680,
+          width: '95vw',
+          maxHeight: '88vh',
+          display: 'flex',
+          flexDirection: 'column',
+          transition: 'max-width 0.2s ease',
+        }}
       >
         <div className="modal-head">
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -186,55 +166,9 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
 
           {activeTab === 'inventory' && (
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                <div className="small muted">
-                  {language === 'zh'
-                    ? '同步并配置被纳管的主机与运行环境。已排除的主机不会参与全量扫描。'
-                    : 'Manage machines and runtimes. Excluded hosts will not be scanned.'}
-                </div>
-                <button className="btn primary small" onClick={handleSyncInventory} disabled={busy}>
-                  {busy ? t('common.loading') : `🔄 ${t('nav.resync')}`}
-                </button>
-              </div>
+              <InventoryManager onDataChanged={onDataChanged} />
 
-              <div className="settings-sub-panel">
-                <div className="settings-sub-title">
-                  {language === 'zh' ? '主机启用状态' : 'Hosts Inclusion'}
-                </div>
-                <table className="ts-table" style={{ fontSize: 12 }}>
-                  <thead>
-                    <tr>
-                      <th>{t('overview.thHost')}</th>
-                      <th>{language === 'zh' ? '来源' : 'Source'}</th>
-                      <th>{language === 'zh' ? '环境数' : 'Runtimes'}</th>
-                      <th style={{ textAlign: 'right' }}>{t('overview.thEnabled')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {hosts.map((h) => {
-                      const hostRts = runtimes.filter((r) => r.host_id === h.id || r.host === h.name)
-                      return (
-                        <tr key={h.id}>
-                          <td className="bold mono">{h.name}</td>
-                          <td className="small muted">{h.source}</td>
-                          <td className="small">{hostRts.length}</td>
-                          <td style={{ textAlign: 'right' }}>
-                            <button
-                              className={'tag ' + (h.enabled ? 'ok' : 'unknown')}
-                              style={{ cursor: 'pointer' }}
-                              onClick={() => handleToggleHost(h)}
-                            >
-                              {h.enabled ? t('common.on') : t('common.off')}
-                            </button>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="settings-sub-panel" style={{ marginTop: 14 }}>
+              <div className="settings-sub-panel" style={{ marginTop: 18 }}>
                 <div className="settings-sub-title">
                   {language === 'zh' ? '独立环境与扫描开关' : 'Runtimes Control'}
                 </div>
@@ -379,8 +313,8 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
                     ? '导出经过严格安全脱敏（不包含任何 Token、密钥或私有凭证）的 JSON 全机队数据快照。'
                     : 'Download a sanitized JSON export of the entire fleet.'}
                 </p>
-                <button className="btn primary small" onClick={handleExportJson} disabled={busy}>
-                  ⬇️ {t('nav.exportJson')}
+                <button className="btn primary small" onClick={handleExportJson} disabled={exporting}>
+                  ⬇️ {exporting ? (language === 'zh' ? '正在导出...' : 'Exporting...') : t('nav.exportJson')}
                 </button>
               </div>
 
