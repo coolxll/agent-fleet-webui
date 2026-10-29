@@ -27,6 +27,7 @@ from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventor
 from agent_fleet.services import sqlite_inventory, ssh_key_service
 from agent_fleet.inventory.loader import validate_inventory_yaml
 from agent_fleet.settings import ROOT, get_settings
+from agent_fleet.version import get_version_info
 
 router = APIRouter()
 
@@ -220,6 +221,12 @@ def _inst_detail(inst, include_config=True):
 @router.get("/health")
 def health():
     return {"ok": True, "service": "agent-fleet", "ts": _utcnow().isoformat() + "Z"}
+
+
+@router.get("/system/version")
+def system_version():
+    """Return unified application build and version discovery metadata."""
+    return get_version_info()
 
 
 @router.get("/agents")

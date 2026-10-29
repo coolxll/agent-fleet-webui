@@ -524,6 +524,14 @@ export type CompareCandidate = {
   collected_at: string | null
 }
 
+export type SystemVersion = {
+  version: string
+  commit: string
+  commit_short: string
+  build_time: string | null
+  is_release: boolean
+}
+
 export const api = {
   agents: () => get<{ agents: AgentMeta[] }>('/agents'),
   overview: () => get<Overview>('/overview'),
@@ -769,7 +777,9 @@ export const api = {
   exportData: () => get<any>('/export'),
   getControllerSSHKey: () =>
     get<{ found: boolean; public_key?: string }>('/inventory/controller-ssh-key'),
-  verifyToken: (token?: string) => verifyApiToken(token)
+  verifyToken: (token?: string) => verifyApiToken(token),
+  getVersion: () => get<SystemVersion>('/system/version'),
+  version: () => get<SystemVersion>('/system/version')
 }
 
 export type SessionSummary = {
@@ -1114,6 +1124,15 @@ export async function seedInventoryFromLegacy(): Promise<{ created: number; upda
   const data = await res.json()
   return data.migration || { created: 0, updated: 0 }
 }
+
+export async function getSystemVersion(): Promise<SystemVersion> {
+  return api.getVersion()
+}
+
+export async function getVersion(): Promise<SystemVersion> {
+  return api.getVersion()
+}
+
 
 
 

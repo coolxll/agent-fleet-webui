@@ -3,6 +3,7 @@ import {
   api,
   type Overview,
   type Runtime,
+  type SystemVersion,
   getApiToken,
   setApiToken,
   clearApiToken,
@@ -37,6 +38,10 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
   const [tokenTesting, setTokenTesting] = useState(false)
   const [tokenStatusMsg, setTokenStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
 
+  // Version info state
+  const [sysVersion, setSysVersion] = useState<SystemVersion | null>(null)
+  const [copiedCommit, setCopiedCommit] = useState(false)
+
   useEffect(() => {
     const handleAuthReq = () => {
       setAuthRequired(true)
@@ -47,7 +52,7 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
 
   const loadData = useCallback(async () => {
     try {
-      const [rRes, ovRes, schRes] = await Promise.all([
+      const [rRes, ovRes, schRes, verRes] = await Promise.all([
         api.runtimes(false, true).catch((e: any) => {
           const errMsg = String(e.message || e)
           if (errMsg.includes('401') || errMsg.toLowerCase().includes('unauthorized')) {
@@ -56,11 +61,13 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
           throw e
         }),
         api.overview().catch(() => null),
-        api.getSchedule().catch(() => null)
+        api.getSchedule().catch(() => null),
+        api.getVersion().catch(() => null)
       ])
       setRuntimes(rRes.runtimes)
       if (ovRes) setOverview(ovRes)
       if (schRes) setSchedule(schRes)
+      if (verRes) setSysVersion(verRes)
       setAuthRequired(false)
       setError(null)
     } catch (e: any) {
@@ -207,6 +214,16 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
       onDataChanged?.()
     } catch {
       // If auth is required, loadData will fail and set authRequired flag
+    }
+  }
+
+  const handleCopyCommit = async (sha: string) => {
+    try {
+      await navigator.clipboard.writeText(sha)
+      setCopiedCommit(true)
+      setTimeout(() => setCopiedCommit(false), 2000)
+    } catch {
+      // ignore clipboard error
     }
   }
 
@@ -553,11 +570,93 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
                   </button>
                 </div>
               </div>
+
+              {/* Application Version & Build Metadata Section */}
+              <div className="settings-sub-panel" style={{ marginTop: 14 }}>
+                <div
+                  className="settings-sub-title"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                >
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span>🏷️</span>
+                    <span>{t('version.title')}</span>
+                  </span>
+                  {sysVersion && (
+                    <span
+                      className={'tag ' + (sysVersion.is_release ? 'ok' : 'unknown')}
+                      style={{ fontSize: 11, fontWeight: 500 }}
+                    >
+                      {sysVersion.is_release ? t('version.release') : t('version.development')}
+                    </span>
+                  )}
+                </div>
+
+                {sysVersion ? (
+                  <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span className="muted small">{t('version.systemVersion')}</span>
+                      <span style={{ fontFamily: 'monospace', fontWeight: 600, fontSize: 13 }}>
+                        v{sysVersion.version}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span className="muted small">{t('version.commit')}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <code
+                          style={{
+                            fontSize: 12,
+                            padding: '2px 6px',
+                            background: 'var(--bg-subtle, rgba(255,255,255,0.06))',
+                            borderRadius: 4,
+                          }}
+                          title={sysVersion.commit}
+                        >
+                          {sysVersion.commit_short}
+                        </code>
+                        {sysVersion.commit && sysVersion.commit !== 'dev' && (
+                          <button
+                            type="button"
+                            className="btn small"
+                            onClick={() => handleCopyCommit(sysVersion.commit)}
+                            style={{ padding: '2px 8px', fontSize: 11, height: 22 }}
+                            title={t('version.copyCommit')}
+                          >
+                            {copiedCommit ? `✓ ${t('version.commitCopied')}` : `📋 ${t('version.copyCommit')}`}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {sysVersion.build_time && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span className="muted small">{t('version.buildTime')}</span>
+                        <span className="small muted" style={{ fontFamily: 'monospace' }}>
+                          {sysVersion.build_time}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="muted small" style={{ margin: '6px 0 0' }}>
+                    {t('common.loading')}
+                  </p>
+                )}
+              </div>
             </div>
           )}
         </div>
 
-        <div className="modal-foot">
+        <div className="modal-foot" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div className="small muted" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {sysVersion && (
+              <>
+                <span>Agent Fleet v{sysVersion.version}</span>
+                <span>•</span>
+                <span style={{ fontFamily: 'monospace' }}>{sysVersion.commit_short}</span>
+              </>
+            )}
+          </div>
           <button className="btn" onClick={onClose}>
             {t('common.close')}
           </button>

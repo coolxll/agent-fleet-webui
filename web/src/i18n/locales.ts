@@ -450,7 +450,18 @@ export const translations = {
     'auth.requiredNotice': 'Backend API access control is active. A valid API secret is required to perform operations.',
     'auth.statusConfigured': 'Token configured',
     'auth.statusNone': 'No token configured',
-    'auth.switchTabHint': 'Configure in Data & Preferences'
+    'auth.switchTabHint': 'Configure in Data & Preferences',
+
+    // System Version & Build Info
+    'version.title': 'Application Version',
+    'version.systemVersion': 'Version',
+    'version.commit': 'Commit',
+    'version.buildTime': 'Build Time',
+    'version.release': 'Release',
+    'version.development': 'Development',
+    'version.copyCommit': 'Copy Commit SHA',
+    'version.commitCopied': 'Commit SHA copied',
+    'version.unknown': 'Unknown'
   },
   zh: {
     // Navigation & header
@@ -901,7 +912,18 @@ export const translations = {
     'auth.requiredNotice': '后端已开启 API 安全鉴权，需配置有效凭据以执行操作与读取数据。',
     'auth.statusConfigured': '已配置凭证',
     'auth.statusNone': '未配置凭证',
-    'auth.switchTabHint': '前往「数据与偏好」进行配置'
+    'auth.switchTabHint': '前往「数据与偏好」进行配置',
+
+    // System Version & Build Info
+    'version.title': '应用构建版本',
+    'version.systemVersion': '版本号',
+    'version.commit': '提交哈希 (Commit)',
+    'version.buildTime': '构建时间',
+    'version.release': '正式发布版',
+    'version.development': '开发测试版',
+    'version.copyCommit': '复制提交哈希',
+    'version.commitCopied': '提交哈希已复制',
+    'version.unknown': '未知'
   }
 } as const
 
