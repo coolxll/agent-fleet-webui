@@ -1,5 +1,10 @@
 # Agent Fleet Explorer
 
+<p align="center">
+  <b>English</b> •
+  <a href="README_ZH.md">简体中文</a>
+</p>
+
 Control plane for the AI coding agents installed across your machines:
 inspect installations and configuration, manage work on a task board, and
 observe Paseo services across the fleet.
@@ -124,10 +129,12 @@ Nothing is duplicated: if a host appears in several sources it is stored once.
   warnings, and a sanitized JSON view.
 * **Compare** - the same agent on two machines side by side, or two snapshots
   of one runtime, as a field-level change list.
-* **Quotas** - a standalone, account-based menu. You import an account
+* **Quotas & Auth Settings** - a standalone, account-based menu. You import an account
   credential (verified against the vendor's online API before it is saved),
   and the view shows the account, plan, weekly/5-hour bars, remaining
   percentage and reset countdown. Refreshing calls the online API in real time.
+  The top **Auth Settings** button allows managing Antigravity OAuth client secrets
+  directly in the UI, masked securely and persisted with 0600 file permissions.
   Accounts are grouped by Agent. Codex/ChatGPT, Antigravity, QoderCN,
   WorkBuddy/CodeBuddy and Trae CN are supported. Trae CN accepts a
   `Cloud-IDE-JWT` access token or JSON with `access_token` and optional
@@ -226,6 +233,18 @@ servers and unsupported CLI schemas are shown as explicit statuses.
 * Every successful collection also writes a historical snapshot (kept
   indefinitely), and any two snapshots (or two installations of the same
   agent) can be compared.
+
+## GitHub Actions Runner Fleet (Declarative Management)
+
+The fleet supports declarative, multi-machine self-hosted runner orchestration driven by `config/runner_fleet.yaml` and `scripts/manage_runner.sh`:
+
+* **Outbound-only Security (Zero Inbound Port Exposure)**: Runners poll GitHub via HTTPS/WSS; machines need no public IPs and expose no open ports.
+* **Shared Proxy Egress**: Centralizes proxy routing (e.g. `corp172-dev` Tailscale SOCKS5 `100.93.132.98:1080` or LAN HTTP `10.8.1.172:8118`) across all runner nodes.
+* **Commands**:
+  * `./scripts/manage_runner.sh overview`: Global cross-repository & cross-host status matrix.
+  * `./scripts/manage_runner.sh sync`: Declaratively reconcile runners to match desired state.
+  * `./scripts/manage_runner.sh prune`: One-click garbage collection of offline ghost runners.
+  * Detailed architecture and setup: see [docs/runner-fleet-guide.md](docs/runner-fleet-guide.md).
 
 ## CLI
 
@@ -331,23 +350,25 @@ Overrides: `TRAE_AUTH_SSH`, `TRAE_AUTH_PATH`, `AGENT_FLEET_API`,
 
 ## Tests
 
-    .venv/bin/python -m pytest tests/ -q
+    # Fast multi-worker execution via pytest-xdist:
+    .venv/bin/python -m pytest tests/ -n auto --dist=loadscope
 
-92 tests: adapters against fixtures (installed / absent / config-only /
+426+ tests: adapters against fixtures (installed / absent / config-only /
 missing / malformed / unreadable), the sanitizer, the probe protocol,
 all three inventory formats, timeout and connection-failure handling,
 concurrency, last-known-good retention, diff, scope precedence, scheduler and
-export, plus the HTTP API.
+export, quota authentication settings, runner fleet management, plus the HTTP API.
 
 Run from the repo root, as shown above.
 
 ## Repo layout
 
     backend/agent_fleet/   inventory, remotes (ssh/wsl/powershell), adapters, services, api
-    web/src/               overview, matrix, inspector, compare
-    scripts/               maintenance jobs (Trae credential sync)
+    web/src/               overview, matrix, inspector, compare, quotas, tasks, daemons
+    config/                declarative configuration (runner_fleet.yaml)
+    scripts/               maintenance & fleet tools (manage_runner.sh, sync_trae_credential.py)
     tests/fixtures/        real-shaped agent configs including fake credentials
-    docs/                  requirements, research, architecture, progress
+    docs/                  architecture, research, requirements, runner-fleet-guide
     inventory.yaml         your fleet (kind hints + WSL distros)
 
 ## Adding an agent
