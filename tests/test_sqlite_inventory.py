@@ -138,3 +138,211 @@ def test_inventory_hosts_api(client):
     # 7. Check 404
     res = client.get(f"/api/inventory/hosts/{test_api_host}")
     assert res.status_code == 404
+
+
+def test_sqlite_ssot_not_overwritten_by_inventory_sync(fleet_db, monkeypatch):
+    """验证 SQLite 中修改的主机属性在普通同步或再次启动时不被旧 YAML 覆盖回滚 (SSOT)。"""
+    from agent_fleet.inventory.loader import DiscoveredHost
+    from agent_fleet.services.inventory_sync import sync_inventory
+    import agent_fleet.services.inventory_sync as inv_sync_mod
+
+    settings = fleet_db
+    host_name = "ssot-node-test"
+
+    # 1. 在 SQLite 中创建自定义主机
+    sqlite_inventory.create_host(
+        {
+            "name": host_name,
+            "hostname": "user-custom-hostname",
+            "group": "user-custom-group",
+            "tags": {"role": "worker", "user_tag": "preserve_me"},
+            "ssh_user": "custom-user",
+        }
+    )
+
+    # 2. 模拟外部旧 YAML 包含同名主机，但具有旧属性
+    mock_yaml_host = DiscoveredHost(
+        name=host_name,
+        hostname="old-yaml-hostname",
+        group="old-yaml-group",
+        tags={"role": "outdated-role", "yaml_tag": "new_key"},
+        user="old-user",
+        source="project-yaml",
+    )
+    monkeypatch.setattr(inv_sync_mod, "load_all", lambda s: [mock_yaml_host])
+
+    # 3. 运行非 force 的普通同步 (sync_inventory 默认 force=False)
+    sync_res = sync_inventory(settings, force=False)
+    assert sync_res["updated"] == 1
+
+    # 4. 验证 SQLite 中的核心属性未被旧 YAML 冲刷
+    h = sqlite_inventory.get_host(host_name)
+    assert h["hostname"] == "user-custom-hostname", "用户在 SQLite 中设置的 hostname 不应被 YAML 覆盖"
+    assert h["group"] == "user-custom-group", "用户在 SQLite 中设置的 group 不应被 YAML 覆盖"
+    assert h["tags"]["role"] == "worker", "用户在 SQLite 中设置的 tag 冲突项不应被 YAML 覆盖"
+    assert h["tags"]["user_tag"] == "preserve_me"
+    assert h["tags"]["yaml_tag"] == "new_key", "新出现的 non-conflicting 标签允许补入"
+
+    # 5. 再次调用 seed_from_legacy_files_if_needed(force=False) 模拟重启
+    migrated = sqlite_inventory.seed_from_legacy_files_if_needed(force=False)
+    assert migrated == {"created": 0, "updated": 0}, "已有主机时不应发生二次迁移覆盖"
+    h_after = sqlite_inventory.get_host(host_name)
+    assert h_after["hostname"] == "user-custom-hostname"
+
+    # 6. 如果显式 force=True，则允许覆盖
+    sync_res_force = sync_inventory(settings, force=True)
+    assert sync_res_force["updated"] == 1
+    h_forced = sqlite_inventory.get_host(host_name)
+    assert h_forced["hostname"] == "old-yaml-hostname"
+    assert h_forced["group"] == "old-yaml-group"
+    assert h_forced["tags"]["role"] == "outdated-role"
+
+
+def test_runner_query_does_not_resurrect_deleted_or_disabled_hosts(tmp_path):
+    """验证 SQLite 中删除或禁用的主机/仓库关联，不会被 manage_runner.sh 脚本重新复活。"""
+    import os
+    import sqlite3
+    import subprocess
+    import json
+    from pathlib import Path
+
+    root_dir = Path(__file__).resolve().parent.parent
+    script_path = root_dir / "scripts" / "manage_runner.sh"
+
+    # 1. 创建独立的临时 SQLite DB
+    test_db = tmp_path / "test_runner.db"
+    conn = sqlite3.connect(str(test_db))
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE hosts (
+            id TEXT PRIMARY KEY,
+            name TEXT UNIQUE NOT NULL,
+            hostname TEXT,
+            description TEXT,
+            inventory_source TEXT,
+            group_name TEXT,
+            tags TEXT,
+            ssh_host TEXT,
+            ssh_port INTEGER,
+            ssh_user TEXT,
+            proxy TEXT,
+            runner_enabled BOOLEAN DEFAULT 0,
+            runner_max_concurrency INTEGER DEFAULT 2,
+            runner_labels TEXT,
+            target_repos TEXT,
+            enabled BOOLEAN DEFAULT 1,
+            created_at TIMESTAMP,
+            updated_at TIMESTAMP
+        )
+    """)
+    # 插入一个活跃主机 (enabled=1, runner_enabled=1, target_repos=['org/active-repo'])
+    cur.execute(
+        """
+        INSERT INTO hosts (id, name, ssh_user, proxy, runner_labels, target_repos, runner_enabled, runner_max_concurrency, enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "h1",
+            "node-active",
+            "activeuser",
+            "http://127.0.0.1:8118",
+            json.dumps(["self-hosted", "node-active"]),
+            json.dumps(["org/active-repo"]),
+            1,
+            4,
+            1,
+        ),
+    )
+    # 插入一个被禁用的主机 (enabled=0)
+    cur.execute(
+        """
+        INSERT INTO hosts (id, name, ssh_user, proxy, runner_labels, target_repos, runner_enabled, runner_max_concurrency, enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "h2",
+            "node-disabled",
+            "disableduser",
+            "",
+            json.dumps(["self-hosted", "node-disabled"]),
+            json.dumps(["org/revive-repo"]),
+            1,
+            2,
+            0,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    # 2. 创建临时 YAML，包含已被删除的 node-deleted，已被禁用的 node-disabled，以及已被移除的仓库
+    custom_yaml = tmp_path / "legacy_runner_fleet.yaml"
+    custom_yaml.write_text(
+        """
+hosts:
+  node-active:
+    user: yaml-user
+    proxy: http://yaml-proxy:8080
+    labels: [self-hosted, yaml]
+  node-disabled:
+    user: yaml-disabled-user
+    proxy: http://yaml-disabled:8080
+    labels: [self-hosted, disabled]
+  node-deleted:
+    user: yaml-deleted-user
+    proxy: http://yaml-deleted:8080
+    labels: [self-hosted, deleted]
+pools:
+  org/active-repo:
+    - node-active
+    - node-deleted
+  org/revive-repo:
+    - node-disabled
+  org/deleted-repo:
+    - node-deleted
+""",
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env["AGENT_FLEET_DB_PATH"] = str(test_db)
+    env["RUNNER_FLEET_CONFIG"] = str(custom_yaml)
+
+    # 3. 运行 manage_runner.sh 查询 hosts 和 pools
+    # 验证 node-deleted 和 node-disabled 不在 hosts 中
+    cmd = [
+        "bash",
+        "-c",
+        f"source {script_path} 2>/dev/null || true; py_query \"import json; print(json.dumps(cfg))\"",
+    ]
+    res = subprocess.run(cmd, env=env, capture_output=True, text=True)
+    assert res.returncode == 0, f"py_query failed: {res.stderr}"
+    data = json.loads(res.stdout.strip())
+
+    # a) 验证 hosts: 只有 node-active，没有 node-disabled，更没有 node-deleted
+    assert "node-active" in data["hosts"]
+    assert "node-disabled" not in data["hosts"], "禁用主机不应被 YAML 复活"
+    assert "node-deleted" not in data["hosts"], "已删除主机不应被 YAML 复活"
+    assert data["hosts"]["node-active"]["user"] == "activeuser", "活跃主机配置应来自 SQLite SSOT"
+
+    # b) 验证 pools: 只有 org/active-repo: ['node-active']
+    assert "org/active-repo" in data["pools"]
+    assert data["pools"]["org/active-repo"] == ["node-active"], "已删除的主机不应出现在 pools 中"
+    assert "org/revive-repo" not in data["pools"], "禁用主机的 repo 关联不应被复活"
+    assert "org/deleted-repo" not in data["pools"], "已删除主机的 repo 关联不应被复活"
+
+    # c) 验证回退场景：若 SQLite 数据库中主机数为 0，则应回退读取 YAML
+    empty_db = tmp_path / "empty.db"
+    conn_empty = sqlite3.connect(str(empty_db))
+    conn_empty.execute("CREATE TABLE hosts (id TEXT PRIMARY KEY, enabled BOOLEAN)")
+    conn_empty.commit()
+    conn_empty.close()
+
+    env_empty = os.environ.copy()
+    env_empty["AGENT_FLEET_DB_PATH"] = str(empty_db)
+    env_empty["RUNNER_FLEET_CONFIG"] = str(custom_yaml)
+
+    res_fallback = subprocess.run(cmd, env=env_empty, capture_output=True, text=True)
+    assert res_fallback.returncode == 0
+    fallback_data = json.loads(res_fallback.stdout.strip())
+    assert "node-deleted" in fallback_data["hosts"], "SQLite 为空时应正常回退至 YAML"
+    assert "org/deleted-repo" in fallback_data["pools"]

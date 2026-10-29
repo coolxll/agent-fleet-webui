@@ -17,7 +17,7 @@ from agent_fleet.api.paseo_routes import router as paseo_router
 from agent_fleet.api.task_routes import router as task_router
 from agent_fleet.api.quota_source_routes import router as quota_source_router
 from agent_fleet.db import create_all, init_engine
-from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
+from agent_fleet.services.inventory_sync import add_local_runtime
 from agent_fleet.services import sqlite_inventory
 from agent_fleet.services.scheduler import get_schedule
 from agent_fleet.services import task_service, magpie_quota
@@ -46,11 +46,6 @@ async def lifespan(app: FastAPI):
             add_local_runtime(settings)
         except Exception as exc:
             log.warning("local runtime setup failed: %s", exc)
-    try:
-        result = sync_inventory(settings)
-        log.info("inventory sync: %s", result)
-    except Exception as exc:
-        log.warning("inventory sync failed: %s", exc)
     try:
         schedule = get_schedule()
         if schedule.enabled:
