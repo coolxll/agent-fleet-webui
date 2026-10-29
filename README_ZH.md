@@ -107,7 +107,22 @@ flowchart TD
 
 ---
 
-### 2. 手动分步启动
+### 2. Docker 快速部署
+
+使用 Docker Compose 一键启动完整服务：
+
+```bash
+docker compose up -d
+```
+
+启动后直接访问 `http://localhost:8000`。容器内特性：
+- 采用多阶段构建，单容器集成托管已编译的前端 React 应用与 FastAPI 后端。
+- 自动将 `./data` 挂载至 `/app/data` 实现 SQLite 数据库与任务状态持久化。
+- 默认将宿主机 `~/.ssh` 以只读方式挂载（`/root/.ssh:ro`），使控制器无缝复用已有 SSH 密钥安全探测远端节点。
+
+---
+
+### 3. 手动分步启动
 
 ```bash
 # 1. 激活虚拟环境并安装依赖 (Python 3.11+; 推荐 3.13)

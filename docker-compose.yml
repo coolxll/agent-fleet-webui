@@ -1,0 +1,14 @@
+services:
+  agent-fleet:
+    build: .
+    container_name: agent-fleet-webui
+    ports:
+      - "8000:8000"
+    environment:
+      - AGENT_FLEET_HOST=0.0.0.0
+      - AGENT_FLEET_PORT=8000
+      - AGENT_FLEET_DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
+      - ~/.ssh:/root/.ssh:ro
+    restart: unless-stopped

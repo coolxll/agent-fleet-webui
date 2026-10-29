@@ -58,6 +58,21 @@ Note: By default, the API operates in loopback development mode. For external ex
 
 ---
 
+### Quick Start with Docker
+
+Deploy with Docker Compose in a single command:
+
+```bash
+docker compose up -d
+```
+
+The WebUI will be accessible at `http://localhost:8000`. The container:
+- Unifies the pre-built React frontend and FastAPI backend into a single service.
+- Mounts `./data` to `/app/data` to persist the SQLite database and state.
+- Mounts `~/.ssh` as read-only (`/root/.ssh:ro`) so the controller can reach remote fleet nodes via host SSH credentials.
+
+---
+
 ### Manual step-by-step setup
 
 The backend and CLI import the `agent_fleet` package, so run them from
