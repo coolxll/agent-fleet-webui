@@ -93,13 +93,24 @@
   - **严禁子 Agent 自行重启或关闭 WebUI / 后端服务进程**；
   - **严禁越界修改未分配的文件**。
 
-### 3.3 主 Agent 闭环交付职责
+### 3.3 子 Agent 交付自检与 Code Review 规范（强制）
+为杜绝 AI 编码常见的“越界改动、破坏既有契约、死循环挑刺”，所有子 Agent 与主 Agent 遵循**有界实用审查机制 (Bounded Code Review)**：
+1. **实施子 Agent 必须执行 Phase 2 自审 (Self-Review)**：
+   - 编码和单测完成后，子 Agent 必须运行 `git diff <分配文件>` 进行自我审查；
+   - 交付汇报必须包含明确的 `### Self-Code-Review` 章节（核对契约兼容、异常捕获、无私有硬编码、无敏感凭证泄露）。
+2. **高风险/核心模块实施独立 Review 门禁**：
+   - 当涉及认证安全、数据库迁移、多机通信与公开支持矩阵时，主 Agent 派发只读审查子 Agent 进行独立审核。
+3. **有界收敛防死循环准则**：
+   - **严格 P0/P1 硬分水岭**：仅在存在真实崩溃、数据损坏、安全越权、契约破坏时判定阻断（FAIL/CONDITIONAL PASS）；对风格、命名建议等 P2/P3 记录归档，绝不阻断交付。
+   - **最多 2 轮收敛门禁 (Two-Round Rule)**：第 2 轮终审仅验证第 1 轮指出的 P0/P1 是否闭环，严禁球门后移（No moving goalposts）。
+
+### 3.4 主 Agent 闭环交付职责
 - 接收所有子 Agent 的交付汇报；
 - 统一 Review 各子任务的实际 Diff，确保符合架构风格与无冗余修改；
 - 在主工作区运行全量测试套件（Backend Pytest + Web Typecheck）；
 - 统一组织规范的 Git Commit，并在需要时统一重启或刷新验证服务。
 
-### 3.4 Git Worktree 管理原则（用完即清，强制）
+### 3.5 Git Worktree 管理原则（用完即清，强制）
 当子 Agent 或编排流程使用独立 Git Worktree（如 `~/workspace/worktrees/<repo>/<task>`）时，必须严格遵守以下生命周期：
 1. **Worktree 绝非长期存储**：任务交付完成（改动已提取合并至主任务分支并提交）或确认放弃后，**必须由主 Agent 在同一轮会话收尾中立即清理**。
 2. **安全清理流程**：
