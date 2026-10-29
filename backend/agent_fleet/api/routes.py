@@ -557,7 +557,7 @@ class HostCreatePayload(BaseModel):
     tags: dict | None = None
     ssh_host: str | None = None
     ssh_port: int | None = 22
-    ssh_user: str | None = "lynn"
+    ssh_user: str | None = None
     proxy: str | None = ""
     runner_enabled: bool = False
     runner_max_concurrency: int = 2

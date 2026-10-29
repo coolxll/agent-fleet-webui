@@ -487,3 +487,35 @@ def test_runtime_ref_target_and_runner_ssh_resolution():
     )
     assert ref_alias.target == "openssh-alias"
 
+
+def test_no_hardcoded_ssh_user_default(client):
+    """Verify that omitting ssh_user does not default to 'lynn' in API or models."""
+    test_node = "test-no-default-user"
+    sqlite_inventory.delete_host(test_node)
+
+    # 1. API creation without ssh_user
+    res = client.post(
+        "/api/inventory/hosts",
+        json={
+            "name": test_node,
+            "hostname": "192.168.1.50",
+        },
+    )
+    assert res.status_code == 200
+    host_data = res.json()["host"]
+    assert host_data["ssh_user"] in ("", None)
+    assert host_data["ssh_user"] != "lynn"
+
+    # 2. Get host check
+    fetched = sqlite_inventory.get_host(test_node)
+    assert fetched["ssh_user"] in ("", None)
+    assert fetched["ssh_user"] != "lynn"
+
+    # 3. Model check in database
+    with session_scope() as s:
+        db_host = s.get(models.Host, host_data["id"])
+        assert db_host.ssh_user is None
+
+    sqlite_inventory.delete_host(test_node)
+
+

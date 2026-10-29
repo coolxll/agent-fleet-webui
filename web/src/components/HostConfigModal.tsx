@@ -28,7 +28,7 @@ export default function HostConfigModal({
   const [description, setDescription] = useState('')
   const [sshHost, setSshHost] = useState('')
   const [sshPort, setSshPort] = useState(22)
-  const [sshUser, setSshUser] = useState('lynn')
+  const [sshUser, setSshUser] = useState('')
   const [proxy, setProxy] = useState('')
   const [runnerEnabled, setRunnerEnabled] = useState(false)
   const [runnerMaxConcurrency, setRunnerMaxConcurrency] = useState(2)
@@ -47,7 +47,7 @@ export default function HostConfigModal({
       setDescription(initialHost.description || '')
       setSshHost(initialHost.ssh_host || initialHost.hostname || initialHost.name)
       setSshPort(initialHost.ssh_port || 22)
-      setSshUser(initialHost.ssh_user || 'lynn')
+      setSshUser(initialHost.ssh_user || '')
       setProxy(initialHost.proxy || '')
       setRunnerEnabled(Boolean(initialHost.runner_enabled))
       setRunnerMaxConcurrency(initialHost.runner_max_concurrency || 2)
@@ -59,7 +59,7 @@ export default function HostConfigModal({
       setDescription('')
       setSshHost('')
       setSshPort(22)
-      setSshUser('lynn')
+      setSshUser('')
       setProxy('')
       setRunnerEnabled(true)
       setRunnerMaxConcurrency(2)
@@ -95,7 +95,7 @@ export default function HostConfigModal({
       description: description.trim(),
       ssh_host: sshHost.trim() || cleanName,
       ssh_port: Number(sshPort) || 22,
-      ssh_user: sshUser.trim() || 'lynn',
+      ssh_user: sshUser.trim() || '',
       proxy: proxy.trim(),
       runner_enabled: runnerEnabled,
       runner_max_concurrency: Number(runnerMaxConcurrency) || 2,
@@ -233,6 +233,7 @@ export default function HostConfigModal({
                   <input
                     type="text"
                     className="input full"
+                    placeholder={zh ? '例如 root, ubuntu 或留空' : 'e.g. root, ubuntu, or leave empty'}
                     value={sshUser}
                     onChange={(e) => setSshUser(e.target.value)}
                   />

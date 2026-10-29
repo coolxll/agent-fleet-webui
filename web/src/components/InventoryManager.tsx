@@ -340,7 +340,7 @@ export default function InventoryManager({ onDataChanged }: Props) {
                     {/* SSH 连接 */}
                     <td style={{ padding: '10px 12px', verticalAlign: 'middle' }}>
                       <div className="mono small">
-                        <span style={{ color: 'var(--text-muted)' }}>{h.ssh_user || 'lynn'}@</span>
+                        {h.ssh_user ? <span style={{ color: 'var(--text-muted)' }}>{h.ssh_user}@</span> : null}
                         <span>{h.ssh_host || h.hostname || h.name}</span>
                         <span style={{ color: 'var(--text-muted)' }}>:{h.ssh_port || 22}</span>
                       </div>

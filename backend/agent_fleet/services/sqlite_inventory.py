@@ -105,7 +105,7 @@ def seed_from_legacy_files_if_needed(force: bool = False) -> dict[str, int]:
             labels = h_cfg.get("labels") or ["self-hosted", "Linux", "X64", host_name]
             repos = host_to_repos.get(host_name, [])
             proxy = h_cfg.get("proxy", "")
-            user = h_cfg.get("user", "lynn")
+            user = h_cfg.get("user") or None
             max_r = h_cfg.get("max_runners", 4)
             desc = h_cfg.get("description", "")
 
@@ -173,7 +173,7 @@ def seed_from_legacy_files_if_needed(force: bool = False) -> dict[str, int]:
                         tags=ih.tags or {},
                         ssh_host=ih.hostname or ih.name,
                         ssh_port=ih.port or 22,
-                        ssh_user=ih.user or "lynn",
+                        ssh_user=ih.user or None,
                         enabled=bool(ih.enabled),
                     )
                     s.add(row)
