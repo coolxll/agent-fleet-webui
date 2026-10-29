@@ -8,20 +8,21 @@
 
 系统采用单体轻量化、高鲁棒的单进程架构，通过 SQLite (`data/fleet.db`) 统一收敛所有配置、状态与历史快照，配合文件级权限隔离（`data/quota_accounts.json` 0600）保证凭证安全。
 
-领域划分为六大核心子系统：
+领域划分为七大核心子系统：
 
 1. **基础设施与算力纳管域 (Infrastructure & Compute Fleet)**：负责纳管物理机/虚拟机、统一 SSH 连接、出站代理出口配置以及 GitHub Actions Runner Fleet 算力调度池；
-2. **Agent 资产与探测域 (Agent Discovery & Configuration)**：基于只读探针流收集多环境（macOS, Linux, Windows, WSL）上的 Coding Agent 拓扑、版本、多层配置与脱敏结果；
-3. **任务编排与协同流转域 (Task Orchestration & Handoff)**：维护开发任务看板、子执行阶段（Stage）、跨机器/跨 Agent 的执行协同与执行互斥锁；
-4. **会话历史与转录域 (Sessions & Sanitized Transcripts)**：纳管各 Agent 原生对话历史、Token/消息计数及严格脱敏后的交互 Turns 缓存；
-5. **运行时观测域 (Runtime Daemon Observers)**：无侵入旁路观测 Herdr 和 Paseo 等终端多路复用器的运行状态与工作空间；
-6. **凭据隔离与配额域 (Secret-Isolated Quotas)**：以内存及只读视角展示模型提供商 Quota，敏感 Token 绝不入库。
+2. **代码资产与工作空间域 (Repositories & Workspaces Fleet)**：统一管理逻辑 Git 仓库资产（Repository）、多机分布式检出工作空间（Workspace/Checkout）与 Worktree 状态；
+3. **Agent 资产与探测域 (Agent Discovery & Configuration)**：基于只读探针流收集多环境（macOS, Linux, Windows, WSL）上的 Coding Agent 拓扑、版本、多层配置与脱敏结果；
+4. **任务编排与协同流转域 (Task Orchestration & Handoff)**：维护开发任务意图（FleetTask）、子执行阶段（TaskStage/AgentExecution）、跨机器/跨 Agent 的执行协同、执行互斥锁与外部平台工作项投影（GitHubWorkItem）；
+5. **会话历史与转录域 (Sessions & Sanitized Transcripts)**：纳管各 Agent 原生对话历史、Token/消息计数及严格脱敏后的交互 Turns 缓存；
+6. **运行时观测域 (Runtime Daemon Observers)**：无侵入旁路观测 Herdr 和 Paseo 等终端多路复用器的运行状态与工作空间；
+7. **凭据隔离与配额域 (Secret-Isolated Quotas)**：以内存及只读视角展示模型提供商 Quota，敏感 Token 绝不入库。
 
 ---
 
 ## 2. 实体关系图 (E-R Diagram)
 
-以下为系统所有持久化实体及其外键约束（级联删除 / 设空）的完整 Mermaid E-R 图：
+以下为系统所有持久化实体及其外键约束（级联删除 / 设空）的完整 Mermaid E-R 图（参见 [ADR 0002](adr/0002-workspace-repository-execution-boundaries.md)）：
 
 ```mermaid
 erDiagram
@@ -38,8 +39,18 @@ erDiagram
     SCAN_RUN ||--o{ SCAN_TASK : "dispatches (CASCADE)"
     
     SESSION ||--o| SESSION_TRANSCRIPT : "caches (CASCADE)"
+
+    REPOSITORY ||--o{ WORKSPACE : "checked_out_at (CASCADE)"
+    REPOSITORY ||--o{ FLEET_TASK : "targets (SET NULL)"
+    REPOSITORY ||--o{ GITHUB_WORK_ITEM : "tracks (CASCADE)"
+    
+    HOST ||--o{ WORKSPACE : "hosts (CASCADE)"
+    RUNTIME ||--o{ WORKSPACE : "contains (CASCADE)"
+    
+    GITHUB_WORK_ITEM |o--o{ FLEET_TASK : "fulfills (SET NULL)"
     
     FLEET_TASK ||--o{ TASK_STAGE : "deconstructs (CASCADE)"
+    WORKSPACE ||--o{ TASK_STAGE : "executes_in (SET NULL)"
     RUNTIME ||--o{ TASK_STAGE : "executes (SET NULL)"
     SESSION ||--o{ TASK_STAGE : "binds_session (SET NULL)"
     
@@ -204,8 +215,56 @@ erDiagram
         datetime cached_at
     }
 
+    REPOSITORY {
+        string id PK
+        string canonical_name UK
+        string remote_url
+        string default_branch
+        string vcs_type
+        string description
+        boolean is_tracked
+        datetime created_at
+        datetime updated_at
+    }
+
+    WORKSPACE {
+        string id PK
+        string repository_id FK
+        string host_id FK
+        string runtime_id FK
+        text path
+        string worktree_mode
+        string current_branch
+        string head_commit
+        boolean is_dirty
+        string status
+        datetime last_inspected_at
+        text inspected_error
+        datetime created_at
+        datetime updated_at
+    }
+
+    GITHUB_WORK_ITEM {
+        string id PK
+        string repository_id FK
+        string item_type
+        int number
+        string external_id
+        text title
+        string state
+        string url
+        string author
+        json labels
+        string branch_name
+        string head_sha
+        datetime synced_at
+    }
+
     FLEET_TASK {
         string id PK
+        string repository_id FK
+        string target_workspace_id FK
+        string github_work_item_id FK
         string title
         text goal
         string status
@@ -218,6 +277,7 @@ erDiagram
         string id PK
         string task_id FK
         string active_task_id UK
+        string workspace_id FK
         string runtime_id FK
         string session_id FK
         string source_session_id FK
@@ -225,6 +285,9 @@ erDiagram
         string agent_id
         string native_session_id
         text project_path
+        string head_commit_before
+        string head_commit_after
+        boolean is_dirty_after
         string kind
         string status
         text prompt
@@ -300,19 +363,53 @@ erDiagram
   - `resolution`: `effective`（全层级成功解析）或 `declared`（存在读取降级）；
   - `mcp_servers`, `skills`, `settings`: 严格经过脱敏管道洗白后的结构化配置。
 
-### 3.4 `fleet_tasks` & `task_stages` (工作流看板与执行阶段)
+### 3.4 `repositories` (逻辑代码仓库资产)
+- **定位**：代码资产的全局逻辑表示，独立于任何单台物理机检出（详见 [ADR 0002](adr/0002-workspace-repository-execution-boundaries.md)）。
+- **关键属性**：
+  - `canonical_name`: 规范化唯一名称（如 `coolxll/agent-fleet-webui`）；
+  - `remote_url`: 远程 Git 地址（如 `https://github.com/coolxll/agent-fleet-webui.git`）；
+  - `default_branch`: 默认主干分支（如 `main`）；
+  - `is_tracked`: 是否纳入活跃任务编排与看板联动。
+
+### 3.5 `workspaces` (多机物理检出与工作空间)
+- **定位**：特定主机/运行时环境中的一个物理 Git 检出目录。一个 Repository 可在多台机器、多个 Worktree 拥有独立的 Workspace。
+- **唯一约束**：`uq_workspace_runtime_path (runtime_id, path)`。
+- **关键属性**：
+  - `worktree_mode`: 检出形态，区分 `main_worktree`（主工作区）、`linked_worktree`（关联派生工作区）与 `standalone_clone`（独立克隆）；
+  - `current_branch`: 当前检出的本地分支名；
+  - `head_commit`: 40 位 HEAD Commit SHA；
+  - `is_dirty`: 工作区是否包含未提交代码变动；
+  - `status`: 健康状态（`active` 活跃, `stale` 陈旧, `unreachable` 主机失联, `missing` 路径被删除）。
+
+### 3.6 `github_work_items` (外部平台工作项投影)
+- **定位**：GitHub Issues、Pull Requests 与 Actions Workflow Runs 的本地只读聚合投影缓存（配合 Issue #17 流水线看板）。
+- **单向事实源原则**：外部事实源绝对以 GitHub 为准，本地仅作只读拉取与状态展示，绝不绕过远程 API 私自篡改生命周期状态。
+- **关键属性**：
+  - `item_type`: 工作项类别（`issue`, `pull_request`, `action_run`）；
+  - `number`: GitHub Issue / PR 编号；
+  - `state`: 外部原生生命周期状态（`open`, `closed`, `merged` 等）；
+  - `head_sha`: 关联 Commit 或 PR 分支最新 SHA。
+
+### 3.7 `fleet_tasks` & `task_stages` (工作流看板与执行阶段)
 - **定位**：持久化用户分配的编码协同任务，支持跨机器、跨 Agent 派发与接力（Handoff）。
 - **关键属性**：
+  - `repository_id`: 所属代码仓库外键，将交付意图收敛至全局代码资产；
+  - `target_workspace_id`: 目标工作空间外键，在派发接力时精确锚定检出环境；
+  - `github_work_item_id`: 关联的外部工作项（Issue/PR）投影；
+  - `workspace_id`: 单次阶段执行实际绑定的物理工作空间；
   - `active_task_id`: 阶段执行互斥唯一锁。由 SQLite 唯一约束在数据库层面杜绝并发重复触发同一任务；
-  - `native_session_id`: 绑定到底层 Agent 的原生会话句柄（如 Codex/Claude 会话 ID）。
+  - `head_commit_before` & `head_commit_after`: 执行前后的代码 Commit 基线审计快照；
+  - `is_dirty_after`: 执行完毕后工作区是否存在未提交变动；
+  - `native_session_id`: 绑定到底层 Agent 的原生会话句柄（如 Codex/Claude 会话 ID）；
+  - `project_path` & `host_name`: 历史兼容文本快照字段，平滑兼容老版本接口与报表。
 
-### 3.5 `sessions` & `session_transcripts` (会话与转录缓存)
+### 3.8 `sessions` & `session_transcripts` (会话与转录缓存)
 - **定位**：聚合管理各节点的 Agent 会话历史。
 - **关键属性**：
   - `session_key`: 原生会话标识符；
   - `has_secrets_masked`, `masked_count`: 脱敏管道统计指标，确保聊天记录中的 API Key、Token 不在 WebUI 或导出中泄漏。
 
-### 3.6 凭证安全隔离层 (`data/quota_accounts.json`)
+### 3.9 凭证安全隔离层 (`data/quota_accounts.json`)
 - **定位**：非数据库存储的安全机密文件（文件权限 `0600`，配合进程内 `threading.RLock` 原子写入）。
 - **设计红线**：所有外部 Token（如 GitHub Personal Token, Antigravity 凭证）绝不存入 SQLite，防止数据库导出、备份或快照产生机密外泄。
 
@@ -373,11 +470,26 @@ stateDiagram-v2
     done --> [*]
 ```
 
+### 4.4 工作空间生命周期状态机 (Workspace Lifecycle)
+
+```mermaid
+stateDiagram-v2
+    [*] --> active : 探针初次探测或新建检出
+    active --> active : 周期巡检/更新 (commit & dirty 刷新)
+    active --> stale : 远端长时间未巡检超出 TTL
+    stale --> active : 重新巡检连通成功
+    active --> unreachable : 宿主机断网或 SSH 不可达
+    unreachable --> active : 宿主机网络恢复
+    active --> missing : 物理目录已被删除或移动
+    missing --> active : 重新检出到原路径
+    missing --> [*] : 人工注销或清理淘汰
+```
+
 ---
 
 ## 5. 系统可扩展性设计契约 (Extensibility Contracts)
 
-为了保证系统在未来引入更多物理节点、异构操作系统、新兴 Coding Agent 以及复杂工作流时能够平滑演进，架构遵循以下五项核心契约：
+为了保证系统在未来引入更多物理节点、异构操作系统、新兴 Coding Agent 以及复杂工作流时能够平滑演进，架构遵循以下六项核心契约：
 
 ### 契约 1: 纯函数式 Agent 适配器插件机制 (Functional Adapter Contract)
 - **原则**：所有适配器继承 `backend/agent_fleet/adapters/base.py::AgentAdapter`。
@@ -400,3 +512,8 @@ stateDiagram-v2
 ### 契约 5: 数据库自动平滑演进原则 (Zero-Downtime Schema Evolution)
 - **原则**：基于 `agent_fleet.db::_add_missing_columns()` 实现元数据内省与自愈。
 - **向后兼容**：实体新增列时声明合理的默认值（Default）与空值容忍（Nullable），系统启动阶段自动执行增量 `ALTER TABLE ADD COLUMN`，既无需复杂繁重的手动迁移脚本，亦不会破坏既有历史数据的连续性。
+
+### 契约 6: 多机代码空间与执行血缘确定性契约 (Workspace & Provenance Contract)
+- **原则**：根据 [ADR 0002](adr/0002-workspace-repository-execution-boundaries.md)，单次执行（TaskStage / AgentExecution）必须绑定确定的 Workspace 物理检出，严格区分逻辑 Repository 标识与单机路径。
+- **状态审计**：执行启动前必须固化记录基线 `head_commit_before`；执行完成后必须收集最新 `head_commit_after` 与 `is_dirty_after`，保证代码变动可追溯、跨机接力不混淆。
+- **事实源解耦**：外部 GitHub Issue/PR 状态仅作为 `github_work_items` 单向只读投影，本地任务编排状态与执行互斥锁作为内部唯一事实源。
