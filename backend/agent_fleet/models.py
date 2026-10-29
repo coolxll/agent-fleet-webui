@@ -53,13 +53,30 @@ class Host(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String, unique=True, index=True)
     hostname: Mapped[str | None] = mapped_column(String, nullable=True)
-    inventory_source: Mapped[str] = mapped_column(String, default="project-yaml")
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    inventory_source: Mapped[str] = mapped_column(String, default="sqlite")
     group: Mapped[str | None] = mapped_column(String, nullable=True)
     tags: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # SSH 连接配置
+    ssh_host: Mapped[str | None] = mapped_column(String, nullable=True)
+    ssh_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ssh_user: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # 出站代理配置 (HTTP / SOCKS5, 例如 http://127.0.0.1:8118 或 socks5://100.93.132.98:1080)
+    proxy: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # GitHub Actions Runner Fleet 纳管属性
+    runner_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    runner_max_concurrency: Mapped[int] = mapped_column(Integer, default=2)
+    runner_labels: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    target_repos: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
     # A host can be disabled (for example an SSH alias you do not want in the
     # fleet) without deleting its history.
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     runtimes: Mapped[list["Runtime"]] = relationship(
         back_populates="host", cascade="all, delete-orphan"

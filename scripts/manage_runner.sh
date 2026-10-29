@@ -20,16 +20,61 @@ if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
   PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
 fi
 
-# 解析 config/runner_fleet.yaml 辅助函数
+# 解析 SQLite 数据库 (优先) 或 config/runner_fleet.yaml (回退) 辅助函数
 py_query() {
   local code="$1"
   "$PYTHON_BIN" - <<PYEOF
-import yaml, sys
-try:
-    with open('$CONFIG_FILE', 'r', encoding='utf-8') as f:
-        cfg = yaml.safe_load(f) or {}
-except Exception:
-    cfg = {}
+import sys, sqlite3, json
+from pathlib import Path
+
+db_path = Path("${AGENT_FLEET_DB_PATH:-$ROOT_DIR/data/fleet.db}")
+cfg = {"hosts": {}, "pools": {}}
+
+if db_path.is_file():
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.cursor()
+        cur.execute("SELECT name, ssh_user, proxy, runner_labels, target_repos, runner_enabled, runner_max_concurrency, description FROM hosts WHERE enabled=1")
+        for row in cur.fetchall():
+            h_name, user, proxy, labels_raw, repos_raw, r_enabled, max_r, desc = row
+            try:
+                labels = json.loads(labels_raw) if labels_raw else []
+            except Exception:
+                labels = []
+            try:
+                repos = json.loads(repos_raw) if repos_raw else []
+            except Exception:
+                repos = []
+
+            cfg["hosts"][h_name] = {
+                "user": user or "lynn",
+                "proxy": proxy or "",
+                "labels": labels or ["self-hosted", "Linux", "X64", h_name],
+                "max_runners": max_r or 2,
+                "description": desc or ""
+            }
+            if r_enabled:
+                for repo in repos:
+                    if h_name not in cfg["pools"].setdefault(repo, []):
+                        cfg["pools"][repo].append(h_name)
+        conn.close()
+    except Exception:
+        pass
+
+# Fallback & Supplement: if CONFIG_FILE exists, merge any missing entries
+if Path("$CONFIG_FILE").is_file():
+    try:
+        import yaml
+        with open("$CONFIG_FILE", "r", encoding="utf-8") as f:
+            y = yaml.safe_load(f) or {}
+            for k, v in (y.get("hosts", {}) or {}).items():
+                if k not in cfg["hosts"]:
+                    cfg["hosts"][k] = v
+            for k, v in (y.get("pools", {}) or {}).items():
+                if k not in cfg["pools"]:
+                    cfg["pools"][k] = v
+    except Exception:
+        pass
 
 $code
 PYEOF
