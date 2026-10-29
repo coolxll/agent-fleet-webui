@@ -1,0 +1,318 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v0.2.0; defaults to current ref if empty)'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Dry run: build and verify all artifacts without publishing to GHCR or Releases'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # =========================================================================
+  # 1. Quality & Pre-Release Test Gate
+  # =========================================================================
+  test-gate:
+    name: Pre-release Test Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install Backend Dependencies
+        run: |
+          uv pip install -r backend/requirements.txt
+
+      - name: Run Backend Tests
+        run: |
+          export PYTHONPATH=backend
+          uv run pytest tests/ -n auto --dist=loadscope -q
+
+      - name: Setup Node.js 22 & Cache npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: Install Frontend Dependencies
+        run: |
+          cd web
+          npm ci
+
+      - name: Run Frontend Typecheck
+        run: |
+          cd web
+          npm run typecheck
+
+      - name: Build Frontend Assets
+        run: |
+          cd web
+          npm run build
+
+  # =========================================================================
+  # 2. Build & Package Integrated Release Artifacts
+  # =========================================================================
+  build-artifacts:
+    name: Build & Package Release Artifacts
+    needs: [test-gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      semver: ${{ steps.meta.outputs.semver }}
+      is_dry_run: ${{ steps.meta.outputs.is_dry_run }}
+
+    steps:
+      - name: Checkout Repository (Full History)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Release Tag & Mode
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v0.2.0-dev"
+          fi
+
+          SEMVER="${TAG#v}"
+
+          IS_DRY_RUN="false"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            IS_DRY_RUN="true"
+          elif [[ "${{ github.ref }}" != refs/tags/v* ]]; then
+            IS_DRY_RUN="true"
+          fi
+
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "semver=${SEMVER}" >> "$GITHUB_OUTPUT"
+          echo "is_dry_run=${IS_DRY_RUN}" >> "$GITHUB_OUTPUT"
+
+          echo "Selected Release Tag: ${TAG} (SemVer: ${SEMVER}), Dry Run: ${IS_DRY_RUN}"
+
+      - name: Setup Node.js 22 & Cache npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: Setup uv & Python 3.13
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install Dependencies
+        run: |
+          cd web && npm ci
+          cd ..
+          uv pip install -r backend/requirements.txt
+
+      - name: Execute Release Build Script
+        run: |
+          chmod +x scripts/build_release.sh
+          ./scripts/build_release.sh "${{ steps.meta.outputs.release_tag }}" --output-dir dist
+
+      - name: Upload Distributable Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dist-${{ steps.meta.outputs.release_tag }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  # =========================================================================
+  # 3. Build & Publish Multi-Stage Docker Container Image
+  # =========================================================================
+  docker-image:
+    name: Build & Publish Container Image
+    needs: [test-gate, build-artifacts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        if: ${{ needs.build-artifacts.outputs.is_dry_run == 'false' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker Metadata & Tags
+        id: docker_meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ needs.build-artifacts.outputs.release_tag }}
+            type=raw,value=${{ needs.build-artifacts.outputs.semver }}
+            type=raw,value=latest,enable=${{ needs.build-artifacts.outputs.is_dry_run == 'false' }}
+
+      - name: Build & Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ needs.build-artifacts.outputs.is_dry_run == 'false' }}
+          tags: ${{ steps.docker_meta.outputs.tags }}
+          labels: ${{ steps.docker_meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # =========================================================================
+  # 4. Publish GitHub Release with Release Notes & Assets
+  # =========================================================================
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-artifacts, docker-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Staged Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dist-${{ needs.build-artifacts.outputs.release_tag }}
+          path: dist
+
+      - name: Generate Release Notes Draft Template
+        id: notes
+        run: |
+          TAG="${{ needs.build-artifacts.outputs.release_tag }}"
+          SEMVER="${{ needs.build-artifacts.outputs.semver }}"
+          REPO="${{ github.repository }}"
+
+          cat << 'EOF' > release_notes.md
+          ## 📦 What's Changed
+          EOF
+
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            echo "### Commits since ${PREV_TAG}" >> release_notes.md
+            git log "${PREV_TAG}..${TAG}" --oneline --no-merges | sed 's/^/- /' >> release_notes.md 2>/dev/null || true
+          else
+            echo "### Included Commits" >> release_notes.md
+            git log -n 20 --oneline --no-merges | sed 's/^/- /' >> release_notes.md 2>/dev/null || true
+          fi
+
+          cat << EOF >> release_notes.md
+
+          ### ⚠️ Breaking Changes
+          - None in this release.
+
+          ### 🔄 Database & Migration Notes
+          - Current Schema Version: **1**
+          - Database schema migrations run automatically on startup via SQLite \`PRAGMA user_version = 1\`.
+          - **Pre-upgrade Backup**: Before updating existing deployments, always create a point-in-time verified backup:
+            \`\`\`bash
+            python -m agent_fleet.cli backup
+            \`\`\`
+
+          ### 📥 Installation & Artifacts
+
+          #### Checksum Verification (SHA-256)
+          \`\`\`bash
+          curl -LO https://github.com/${REPO}/releases/download/${TAG}/SHA256SUMS
+          curl -LO https://github.com/${REPO}/releases/download/${TAG}/agent-fleet-${TAG}.tar.gz
+          sha256sum -c SHA256SUMS --ignore-missing
+          \`\`\`
+
+          #### Standalone Tarball
+          \`\`\`bash
+          tar -xzf agent-fleet-${TAG}.tar.gz
+          cd agent-fleet-${TAG}
+          ./start.sh
+          \`\`\`
+
+          #### Multi-stage Docker Container
+          \`\`\`bash
+          docker pull ghcr.io/${REPO}:${TAG}
+          docker run -d -p 8000:8000 -v agent_fleet_data:/app/data --name agent-fleet ghcr.io/${REPO}:${TAG}
+          \`\`\`
+
+          ### ⏪ Rollback & Recovery Runbook
+          If any regression occurs during deployment:
+          1. Stop running service:
+             \`\`\`bash
+             docker stop agent-fleet || pkill -f "uvicorn agent_fleet.main:app"
+             \`\`\`
+          2. Restore database from pre-upgrade backup snapshot:
+             \`\`\`bash
+             python -m agent_fleet.cli restore data/backups/fleet_backup_<timestamp>.db
+             \`\`\`
+          3. Consult [docs/recovery-guide.md](docs/recovery-guide.md) and [docs/release-runbook.md](docs/release-runbook.md) for full emergency procedures.
+          EOF
+
+          echo "Generated release notes:"
+          cat release_notes.md
+
+      - name: Publish GitHub Release
+        if: ${{ needs.build-artifacts.outputs.is_dry_run == 'false' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-artifacts.outputs.release_tag }}
+          name: Agent Fleet Explorer ${{ needs.build-artifacts.outputs.release_tag }}
+          body_path: release_notes.md
+          files: |
+            dist/agent-fleet-*.tar.gz
+            dist/agent-fleet-*.zip
+            dist/SHA256SUMS
+          draft: false
+          prerelease: false
+
+      - name: Dry Run Summary
+        if: ${{ needs.build-artifacts.outputs.is_dry_run == 'true' }}
+        run: |
+          echo "=== DRY RUN RELEASE BUILD COMPLETED ==="
+          echo "Tag: ${{ needs.build-artifacts.outputs.release_tag }}"
+          echo "Artifacts generated in dist/:"
+          ls -la dist/
+          echo "SHA256 Checksums:"
+          cat dist/SHA256SUMS
+          echo "Publishing was skipped as requested by dry_run mode."
