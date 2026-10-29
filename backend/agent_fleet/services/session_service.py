@@ -924,6 +924,114 @@ def mask_sensitive_text(text: str) -> tuple[str, int]:
     return masked, count
 
 
+def mask_sensitive_data(val: Any) -> tuple[Any, int]:
+    """Recursively mask sensitive tokens and credentials from arbitrary data structures.
+
+    Handles strings, dicts, lists, tuples, and nested combinations.
+    """
+    if val is None:
+        return None, 0
+    if isinstance(val, str):
+        return mask_sensitive_text(val)
+    if isinstance(val, dict):
+        new_dict: dict[str, Any] = {}
+        total = 0
+        for k, v in val.items():
+            k_str = str(k)
+            k_masked, k_count = mask_sensitive_text(k_str)
+            total += k_count
+
+            # If the key name itself indicates a secret/credential, mask value aggressively
+            is_secret_key = any(
+                s in k_str.lower()
+                for s in (
+                    "api_key",
+                    "apikey",
+                    "secret",
+                    "password",
+                    "token",
+                    "auth_token",
+                    "access_token",
+                    "authorization",
+                )
+            )
+            if is_secret_key and isinstance(v, str) and len(v) >= 6 and "***MASKED***" not in v:
+                v_masked = "***MASKED***"
+                v_count = 1
+            else:
+                v_masked, v_count = mask_sensitive_data(v)
+            total += v_count
+            new_dict[k_masked] = v_masked
+        return new_dict, total
+    if isinstance(val, list):
+        new_list: list[Any] = []
+        total = 0
+        for item in val:
+            item_masked, item_count = mask_sensitive_data(item)
+            total += item_count
+            new_list.append(item_masked)
+        return new_list, total
+    if isinstance(val, tuple):
+        new_tup: list[Any] = []
+        total = 0
+        for item in val:
+            item_masked, item_count = mask_sensitive_data(item)
+            total += item_count
+            new_tup.append(item_masked)
+        return tuple(new_tup), total
+    return val, 0
+
+
+def sanitize_tool_call(tc: Any) -> tuple[Any, int]:
+    """Sanitize a tool call entry (name, input, output, and extra fields) recursively."""
+    if not isinstance(tc, dict):
+        return mask_sensitive_data(tc)
+
+    total = 0
+    clean_tc = dict(tc)
+    if "name" in clean_tc:
+        clean_tc["name"], c = mask_sensitive_text(str(clean_tc["name"]))
+        total += c
+    if "input" in clean_tc:
+        clean_tc["input"], c = mask_sensitive_data(clean_tc["input"])
+        total += c
+    if "output" in clean_tc:
+        clean_tc["output"], c = mask_sensitive_data(clean_tc["output"])
+        total += c
+    for k, v in list(clean_tc.items()):
+        if k not in ("name", "input", "output", "id"):
+            clean_tc[k], c = mask_sensitive_data(v)
+            total += c
+    return clean_tc, total
+
+
+def sanitize_turn(turn: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Sanitize content, thinking, and tool_calls in a single conversation turn."""
+    masked_count = 0
+    t = dict(turn)
+
+    if t.get("content"):
+        c_masked, c_count = mask_sensitive_text(str(t["content"]))
+        t["content"] = c_masked
+        masked_count += c_count
+
+    if t.get("thinking"):
+        th_clean = clean_transcript_text(t["thinking"])
+        th_masked, th_count = mask_sensitive_text(th_clean)
+        t["thinking"] = th_masked
+        masked_count += th_count
+
+    if t.get("tool_calls"):
+        sanitized_tc = []
+        for tc in t["tool_calls"]:
+            tc_clean, tc_count = sanitize_tool_call(tc)
+            sanitized_tc.append(tc_clean)
+            masked_count += tc_count
+        t["tool_calls"] = sanitized_tc
+
+    return t, masked_count
+
+
 def clean_transcript_text(text: str) -> str:
     """Strip XML wrappers and internal agent artifacts into clean human-readable conversation text."""
     if not text:
@@ -2117,13 +2225,31 @@ async def get_session_transcript(
     if not session_obj:
         raise ValueError(f"Session '{session_id}' not found")
 
-    # If cached, return immediately
+    # If cached, return after verifying tool_calls and contents are fully sanitized
     if session_obj.transcript and session_obj.transcript.turns:
+        cached_turns = session_obj.transcript.turns
+        sanitized_turns = []
+        extra_masked = 0
+        for turn in cached_turns:
+            s_turn, m_count = sanitize_turn(turn)
+            sanitized_turns.append(s_turn)
+            extra_masked += m_count
+
+        total_masked = (session_obj.transcript.masked_count or 0) + extra_masked
+        has_secrets = session_obj.transcript.has_secrets_masked or (total_masked > 0)
+
+        # Seamlessly update cached transcript in database if sensitive data was masked on read
+        if extra_masked > 0:
+            session_obj.transcript.turns = sanitized_turns
+            session_obj.transcript.masked_count = total_masked
+            session_obj.transcript.has_secrets_masked = has_secrets
+            db_session.flush()
+
         return {
             "session_id": session_id,
-            "turns": session_obj.transcript.turns,
-            "has_secrets_masked": session_obj.transcript.has_secrets_masked,
-            "masked_count": session_obj.transcript.masked_count,
+            "turns": sanitized_turns,
+            "has_secrets_masked": has_secrets,
+            "masked_count": total_masked,
             "cached": True,
             "cached_at": models.iso_utc(session_obj.transcript.cached_at),
         }
@@ -2438,15 +2564,12 @@ print('___HIST_JSON___' + json.dumps(turns))
         else:
             c_clean = ""
 
-        c, count1 = mask_sensitive_text(c_clean)
-        turn["content"] = c
-        total_masked += count1
+        turn["content"] = c_clean
 
-        if turn.get("thinking"):
-            th_clean = clean_transcript_text(turn["thinking"])
-            th, count2 = mask_sensitive_text(th_clean)
-            turn["thinking"] = th
-            total_masked += count2
+        # Sanitize content, thinking, and recursive tool_calls (inputs, outputs, nested dicts/lists)
+        sanitized_t, t_masked = sanitize_turn(turn)
+        turn.update(sanitized_t)
+        total_masked += t_masked
 
     # Save to SessionTranscript cache
     now = models.utcnow()
