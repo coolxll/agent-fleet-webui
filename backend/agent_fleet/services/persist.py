@@ -170,9 +170,43 @@ def _store_config(s, inst, cfg, now):
     # Gate on parse_status alone: keep (and still point at) the previous config
     # when this run produced nothing usable.
     if cfg.parse_status in ("empty", "error", "unsupported"):
-        # At most one config row exists per installation (replaced below), and
+        # At most one config row exists per installation, and
         # inst.config_id points at it, so this is a primary-key lookup.
-        return s.get(models.AgentConfiguration, inst.config_id) if inst.config_id else None
+        if inst.config_id:
+            return s.get(models.AgentConfiguration, inst.config_id)
+        return s.execute(
+            select(models.AgentConfiguration).where(
+                models.AgentConfiguration.installation_id == inst.id
+            )
+        ).scalars().first()
+
+    existing = s.execute(
+        select(models.AgentConfiguration)
+        .where(models.AgentConfiguration.installation_id == inst.id)
+        .order_by(models.AgentConfiguration.collected_at.desc())
+    ).scalars().all()
+
+    if existing:
+        row = existing[0]
+        row.resolution = cfg.resolution
+        row.parse_status = cfg.parse_status
+        row.model = cfg.model
+        row.model_provider = cfg.model_provider
+        row.base_url = cfg.base_url
+        row.base_url_masked = cfg.base_url_masked
+        row.mcp_servers = cfg.mcp_servers
+        row.skills = cfg.skills
+        row.settings = cfg.settings
+        row.quota = cfg.quota
+        row.unsupported_fields = cfg.unsupported_fields
+        row.sanitized = cfg.sanitized
+        row.warnings = cfg.warnings
+        row.collected_at = now
+        for dup in existing[1:]:
+            s.delete(dup)
+        s.flush()
+        return row
+
     row = models.AgentConfiguration(
         id=models.new_id(),
         installation_id=inst.id,
@@ -193,12 +227,4 @@ def _store_config(s, inst, cfg, now):
     )
     s.add(row)
     s.flush()
-    # keep at most the current config per installation
-    old = s.execute(
-        select(models.AgentConfiguration)
-        .where(models.AgentConfiguration.installation_id == inst.id)
-        .where(models.AgentConfiguration.id != row.id)
-    ).scalars().all()
-    for o in old:
-        s.delete(o)
     return row

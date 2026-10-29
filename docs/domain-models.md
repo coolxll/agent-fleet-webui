@@ -35,6 +35,7 @@ erDiagram
     
     AGENT_INSTALLATION ||--o{ CONFIG_SOURCE : "originates (CASCADE)"
     AGENT_INSTALLATION ||--o| AGENT_CONFIGURATION : "resolves_to (CASCADE)"
+    AGENT_CONFIGURATION ||--o| AGENT_INSTALLATION : "active_config (SET NULL)"
     
     SCAN_RUN ||--o{ SCAN_TASK : "dispatches (CASCADE)"
     
@@ -114,7 +115,7 @@ erDiagram
         datetime detected_at
         text error
         string config_status
-        string config_id
+        string config_id FK
     }
 
     CONFIG_SOURCE {
@@ -134,7 +135,7 @@ erDiagram
 
     AGENT_CONFIGURATION {
         string id PK
-        string installation_id FK
+        string installation_id FK, UK
         string resolution
         string parse_status
         string model
@@ -357,7 +358,9 @@ erDiagram
 
 ### 3.3 `agent_installations` & `agent_configurations` (Agent 资产与生效配置)
 - **定位**：指定运行时环境下具体 Coding Agent（如 Codex, Claude Code, Trae, Qoder, OpenCode 等）的安装实例与规范化配置。
-- **唯一约束**：`uq_runtime_agent (runtime_id, agent_id)`。
+- **唯一约束与外键契约**：
+  - `agent_installations`: `uq_runtime_agent (runtime_id, agent_id)`，外键 `config_id` 指向 `agent_configurations.id (ON DELETE SET NULL)`；
+  - `agent_configurations`: 唯一约束 `uq_agent_config_installation_id (installation_id)`，外键 `installation_id` 指向 `agent_installations.id (ON DELETE CASCADE)`。形成强保证的数据库级 1:1 双向完整性约束。
 - **关键属性**：
   - `status`: 安装状态（见状态机章节）；
   - `resolution`: `effective`（全层级成功解析）或 `declared`（存在读取降级）；
@@ -509,9 +512,11 @@ stateDiagram-v2
   2. 探测阶段获取的 raw 内容必须经由 `adapters/sanitize.py` 进行白名单过滤与正则替换（如 `sk-...` 脱敏）；
   3. 即使发生数据库泄露或用户执行快照导出，亦保证无任何明文机密泄漏。
 
-### 契约 5: 数据库自动平滑演进原则 (Zero-Downtime Schema Evolution)
-- **原则**：基于 `agent_fleet.db::_add_missing_columns()` 实现元数据内省与自愈。
-- **向后兼容**：实体新增列时声明合理的默认值（Default）与空值容忍（Nullable），系统启动阶段自动执行增量 `ALTER TABLE ADD COLUMN`，既无需复杂繁重的手动迁移脚本，亦不会破坏既有历史数据的连续性。
+### 契约 5: 数据库自动平滑演进原则 (Zero-Downtime Schema Evolution & Migrations)
+- **原则**：结合增量列内省（`_add_missing_columns`）与版本化幂等迁移管道（`run_migrations` / `schema_migrations` / `PRAGMA user_version`）实现数据库平滑自愈与演进。
+- **向后兼容与约束演进**：
+  1. 新增列场景：实体新增列时声明合理的默认值（Default）与空值容忍（Nullable），系统启动阶段自动执行增量 `ALTER TABLE ADD COLUMN`；
+  2. 约束与关系演进场景：对 SQLite 无法直接 ALTER 的约束（如 UNIQUE 约束、FOREIGN KEY、索引重构及历史数据去重清理），通过有序版本迁移器在事务与外键保护下以安全 12 步重建表机制平滑升级，保持历史数据零丢失与多次启动的完全幂等性。
 
 ### 契约 6: 多机代码空间与执行血缘确定性契约 (Workspace & Provenance Contract)
 - **原则**：根据 [ADR 0002](adr/0002-workspace-repository-execution-boundaries.md)，单次执行（TaskStage / AgentExecution）必须绑定确定的 Workspace 物理检出，严格区分逻辑 Repository 标识与单机路径。

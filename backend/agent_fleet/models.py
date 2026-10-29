@@ -154,7 +154,16 @@ class AgentInstallation(Base):
 
     # parsed | partial | empty | unsupported | error | not_scanned
     config_status: Mapped[str] = mapped_column(String, default="not_scanned")
-    config_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    config_id: Mapped[str | None] = mapped_column(
+        String,
+        ForeignKey(
+            "agent_configurations.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_agent_installation_config_id",
+        ),
+        nullable=True,
+    )
 
     runtime: Mapped["Runtime"] = relationship(back_populates="installations")
     config: Mapped["AgentConfiguration | None"] = relationship(
@@ -202,10 +211,16 @@ class AgentConfiguration(Base):
     """
 
     __tablename__ = "agent_configurations"
+    __table_args__ = (
+        UniqueConstraint("installation_id", name="uq_agent_config_installation_id"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     installation_id: Mapped[str] = mapped_column(
-        String, ForeignKey("agent_installations.id", ondelete="CASCADE"), index=True
+        String,
+        ForeignKey("agent_installations.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
     )
 
     # declared | effective | unknown
