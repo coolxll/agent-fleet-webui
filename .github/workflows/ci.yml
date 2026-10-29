@@ -23,23 +23,22 @@ concurrency:
 jobs:
   backend:
     name: Backend Pytest (434 tests)
-    runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 15
-    env:
-      HTTP_PROXY: http://127.0.0.1:8118
-      HTTPS_PROXY: http://127.0.0.1:8118
-      ALL_PROXY: http://127.0.0.1:8118
-      NO_PROXY: "localhost,127.0.0.1,100.*,10.*"
-      UV_CACHE_DIR: /tmp/.uv-cache
-      UV_LINK_MODE: copy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Backend Environment (Python 3.13 via uv)
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
+      - name: Install Backend Dependencies
         run: |
-          uv venv .venv --python 3.13
+          uv venv .venv
           uv pip install -r backend/requirements.txt
 
       - name: Run Backend Tests (Parallel via pytest-xdist)
@@ -49,23 +48,24 @@ jobs:
 
   frontend:
     name: Frontend Typecheck & Build
-    runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 15
-    env:
-      HTTP_PROXY: http://127.0.0.1:8118
-      HTTPS_PROXY: http://127.0.0.1:8118
-      ALL_PROXY: http://127.0.0.1:8118
-      NO_PROXY: "localhost,127.0.0.1,100.*,10.*"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Frontend Dependencies (Local Node & Disk Cache)
+      - name: Setup Node.js 22 & Cache npm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: 'web/package-lock.json'
+
+      - name: Install Frontend Dependencies
         run: |
           cd web
-          export npm_config_cache=/tmp/.npm-cache
-          npm ci --prefer-offline || npm install
+          npm ci
 
       - name: Run Frontend Typecheck
         run: |
