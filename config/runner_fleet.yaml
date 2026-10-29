@@ -17,9 +17,9 @@ hosts:
     max_runners: 6
 
   x13:
-    description: "Ubuntu Kubuntu 工作站 / 日常开发机"
+    description: "Ubuntu Kubuntu 工作站 / 日常开发机 (复用 corp172-dev Tailscale SOCKS5 代理)"
     user: "lynns"
-    proxy: ""
+    proxy: "socks5://100.93.132.98:1080"
     labels: ["self-hosted", "Linux", "X64", "x13"]
     max_runners: 2
 

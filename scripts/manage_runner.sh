@@ -11,7 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-CONFIG_FILE="$ROOT_DIR/config/runner_fleet.yaml"
+CONFIG_FILE="${RUNNER_FLEET_CONFIG:-$ROOT_DIR/config/runner_fleet.yaml}"
 RUNNER_VERSION="2.322.0" # 统一稳定版 runner
 
 # Python 解释器查找（优先虚拟环境，保证 yaml 模块可用）
@@ -23,15 +23,16 @@ fi
 # 解析 config/runner_fleet.yaml 辅助函数
 py_query() {
   local code="$1"
-  "$PYTHON_BIN" -c "
+  "$PYTHON_BIN" - <<PYEOF
 import yaml, sys
 try:
     with open('$CONFIG_FILE', 'r', encoding='utf-8') as f:
         cfg = yaml.safe_load(f) or {}
-    $code
-except Exception as e:
-    sys.exit(0)
-"
+except Exception:
+    cfg = {}
+
+$code
+PYEOF
 }
 
 # 获取当前 git 仓库的 owner/repo
@@ -191,7 +192,7 @@ cmd_start() {
     if [ ! -f \"\$TARBALL\" ]; then
       echo '   - 首次下载 runner 安装包缓存...'
       if [ -n \"$host_proxy\" ]; then
-        curl -sSL -x \"$host_proxy\" -o \"\$TARBALL\" \"https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz\"
+        curl -sSL --proxy \"$host_proxy\" -o \"\$TARBALL\" \"https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz\"
       else
         curl -sSL -o \"\$TARBALL\" \"https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz\"
       fi
@@ -203,14 +204,17 @@ cmd_start() {
     rm -rf \"$target_dir\"/*
     tar -zxf \"\$TARBALL\" -C \"$target_dir\"
 
-    # 自动写入代理配置（若该 host 需要代理）
+    # 自动写入代理配置（支持 HTTP 与 SOCKS5 出站代理共享）
     if [ -n \"$host_proxy\" ]; then
       cat << ENVEOF > \"$target_dir/.env\"
 HTTP_PROXY=$host_proxy
 HTTPS_PROXY=$host_proxy
 http_proxy=$host_proxy
 https_proxy=$host_proxy
+ALL_PROXY=$host_proxy
+all_proxy=$host_proxy
 NO_PROXY=localhost,127.0.0.1,10.*,172.*,100.*
+no_proxy=localhost,127.0.0.1,10.*,172.*,100.*
 ENVEOF
     else
       touch \"$target_dir/.env\"
@@ -475,4 +479,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
