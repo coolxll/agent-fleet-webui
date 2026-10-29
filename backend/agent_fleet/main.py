@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -95,20 +95,40 @@ app.include_router(quota_source_router, prefix="/api")
 
 
 if WEB_DIST.is_dir():
-    app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
-    if (WEB_DIST / "icons").is_dir():
-        app.mount("/icons", StaticFiles(directory=WEB_DIST / "icons"), name="icons")
+    resolved_web_dist = WEB_DIST.resolve()
+    app.mount("/assets", StaticFiles(directory=resolved_web_dist / "assets"), name="assets")
+    if (resolved_web_dist / "icons").is_dir():
+        app.mount("/icons", StaticFiles(directory=resolved_web_dist / "icons"), name="icons")
 
     @app.get("/")
     def index():
-        return FileResponse(WEB_DIST / "index.html")
+        index_file = resolved_web_dist / "index.html"
+        if index_file.is_file():
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="Not found")
 
     @app.get("/{full_path:path}")
     def spa(full_path: str):
-        candidate = WEB_DIST / full_path
-        if full_path and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(WEB_DIST / "index.html")
+        clean_path = full_path.replace("\\", "/").lstrip("/")
+        try:
+            resolved_candidate = (resolved_web_dist / clean_path).resolve()
+        except (ValueError, RuntimeError):
+            raise HTTPException(status_code=404, detail="Not found")
+
+        if not resolved_candidate.is_relative_to(resolved_web_dist):
+            raise HTTPException(status_code=404, detail="Not found")
+
+        rel_path = resolved_candidate.relative_to(resolved_web_dist)
+        if any(part.startswith(".") for part in rel_path.parts):
+            raise HTTPException(status_code=404, detail="Not found")
+
+        if resolved_candidate.is_file():
+            return FileResponse(resolved_candidate)
+
+        index_file = resolved_web_dist / "index.html"
+        if index_file.is_file():
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="Not found")
 else:
 
     @app.get("/")
