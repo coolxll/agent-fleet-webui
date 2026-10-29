@@ -12,6 +12,7 @@ from sqlalchemy import delete, select
 from agent_fleet import models
 from agent_fleet.adapters.registry import agent_ids, agent_meta
 from agent_fleet.db import session_scope
+from agent_fleet.services import attention_service
 from agent_fleet.services import diff
 from agent_fleet.services import persist as _persist  # noqa: F401
 from agent_fleet.services import scan_service
@@ -240,6 +241,13 @@ def list_updates():
     res["paseo"] = latest_available("paseo")
     res["herdr"] = latest_available("herdr")
     return res
+
+
+@router.get("/attention")
+def get_attention(limit: int = Query(50, ge=1)):
+    """Return aggregated attention items across the fleet."""
+    with session_scope() as s:
+        return attention_service.get_attention_summary(db=s, limit=limit)
 
 
 # --------------------------------------------------------------------------

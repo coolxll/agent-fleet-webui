@@ -461,7 +461,25 @@ export const translations = {
     'version.development': 'Development',
     'version.copyCommit': 'Copy Commit SHA',
     'version.commitCopied': 'Commit SHA copied',
-    'version.unknown': 'Unknown'
+    'version.unknown': 'Unknown',
+
+    // Attention items & drawer
+    'attention.title': 'Fleet Attention',
+    'attention.subtitle': 'Pending scan failures, stale probe records, and blocked tasks across the fleet',
+    'attention.badge': 'Attention',
+    'attention.empty': 'All systems healthy! No pending attention items.',
+    'attention.refresh': 'Refresh',
+    'attention.errors': '{count} error(s)',
+    'attention.warnings': '{count} warning(s)',
+    'attention.type.scan_failed': 'Scan Failed',
+    'attention.type.scan_stale': 'Stale / Unscanned',
+    'attention.type.task_blocked': 'Task Blocked',
+    'attention.action.view': 'View details',
+    'attention.action.jumpToHost': 'Jump to Machine',
+    'attention.action.jumpToTask': 'Jump to Task',
+    'attention.filter.all': 'All',
+    'attention.filter.errors': 'Errors',
+    'attention.filter.warnings': 'Warnings'
   },
   zh: {
     // Navigation & header
@@ -923,7 +941,25 @@ export const translations = {
     'version.development': '开发测试版',
     'version.copyCommit': '复制提交哈希',
     'version.commitCopied': '提交哈希已复制',
-    'version.unknown': '未知'
+    'version.unknown': '未知',
+
+    // Attention items & drawer
+    'attention.title': '待处理事项',
+    'attention.subtitle': '聚合扫描失败、探针过期与任务阻塞的待关注异常',
+    'attention.badge': '待处理',
+    'attention.empty': '所有系统运行正常！暂无待处理异常。',
+    'attention.refresh': '刷新',
+    'attention.errors': '{count} 项严重错误',
+    'attention.warnings': '{count} 项警告',
+    'attention.type.scan_failed': '扫描失败',
+    'attention.type.scan_stale': '探针过期 / 未扫描',
+    'attention.type.task_blocked': '任务阻塞',
+    'attention.action.view': '查看详情',
+    'attention.action.jumpToHost': '跳转至对应主机',
+    'attention.action.jumpToTask': '跳转至对应任务',
+    'attention.filter.all': '全部',
+    'attention.filter.errors': '错误',
+    'attention.filter.warnings': '警告'
   }
 } as const
 

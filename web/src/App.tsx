@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api } from './api'
+import { api, type AttentionSummary } from './api'
 import MachinesView from './views/MachinesView'
 import AgentsView from './views/AgentsView'
 import Matrix from './views/Matrix'
@@ -9,6 +9,7 @@ import TaskBoardView from './views/TaskBoardView'
 import DaemonsView from './views/DaemonsView'
 import SettingsModal from './components/SettingsModal'
 import TasksDrawer from './components/TasksDrawer'
+import AttentionDrawer from './components/AttentionDrawer'
 import ErrorBoundary from './components/ErrorBoundary'
 import { useI18n } from './i18n'
 import { UpgradesProvider, useUpgrades } from './context/UpgradesContext'
@@ -44,6 +45,31 @@ function AppShell({
   } | null>(null)
   const [busy, setBusy] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [attentionDrawerOpen, setAttentionDrawerOpen] = useState(false)
+  const [attentionSummary, setAttentionSummary] = useState<AttentionSummary | null>(null)
+  const [attentionLoading, setAttentionLoading] = useState(false)
+
+  const loadAttention = useCallback(async () => {
+    setAttentionLoading(true)
+    try {
+      const res = await api.getAttention()
+      setAttentionSummary(res)
+    } catch {
+      /* ignore */
+    } finally {
+      setAttentionLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadAttention()
+    const timer = setInterval(loadAttention, 30000)
+    return () => clearInterval(timer)
+  }, [loadAttention, refreshSignal])
+
+  const handleAttentionNavigate = (view: 'machines' | 'tasks') => {
+    handleTabSwitch(view)
+  }
 
   const handleTabSwitch = (nextTab: ViewTab) => {
     setTab(nextTab)
@@ -209,6 +235,43 @@ function AppShell({
             {runId ? t('nav.scanning') : `🔄 ${t('nav.scanAll')}`}
           </button>
 
+          {/* Attention badge button */}
+          <button
+            className="btn small"
+            onClick={() => setAttentionDrawerOpen((prev) => !prev)}
+            title={t('attention.title')}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              borderColor:
+                (attentionSummary?.total || 0) > 0
+                  ? (attentionSummary?.counts.error || 0) > 0
+                    ? 'var(--bad)'
+                    : 'var(--warn)'
+                  : undefined,
+              color:
+                (attentionSummary?.total || 0) > 0
+                  ? (attentionSummary?.counts.error || 0) > 0
+                    ? '#ff9c96'
+                    : '#e3b341'
+                  : undefined,
+              background:
+                (attentionSummary?.total || 0) > 0
+                  ? (attentionSummary?.counts.error || 0) > 0
+                    ? 'rgba(248, 81, 73, 0.15)'
+                    : 'rgba(210, 153, 34, 0.15)'
+                  : undefined,
+              opacity: (attentionSummary?.total || 0) > 0 ? 1 : 0.6,
+            }}
+          >
+            <span>⚠️</span>
+            <span>
+              {t('attention.badge')}
+              {(attentionSummary?.total || 0) > 0 ? ` (${attentionSummary?.total})` : ''}
+            </span>
+          </button>
+
           <button
             className="btn small"
             onClick={() => setShowSettings(true)}
@@ -251,6 +314,15 @@ function AppShell({
         isOpen={tasksDrawerOpen}
         onClose={() => setTasksDrawerOpen(false)}
         onDataChanged={triggerRefresh}
+      />
+
+      <AttentionDrawer
+        isOpen={attentionDrawerOpen}
+        onClose={() => setAttentionDrawerOpen(false)}
+        onNavigate={handleAttentionNavigate}
+        summary={attentionSummary}
+        loading={attentionLoading}
+        onRefresh={loadAttention}
       />
     </div>
   )

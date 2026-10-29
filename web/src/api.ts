@@ -37,6 +37,34 @@ export type Runtime = {
 
 export type AgentMeta = { id: string; name: string; config_supported: boolean }
 
+export type AttentionItemType = 'scan_failed' | 'scan_stale' | 'task_blocked'
+export type AttentionSeverity = 'error' | 'warning'
+export type AttentionTargetType = 'host' | 'task'
+export type AttentionActionView = 'machines' | 'tasks'
+
+export interface AttentionItem {
+  id: string
+  type: AttentionItemType
+  severity: AttentionSeverity
+  target_type: AttentionTargetType
+  target_id: string
+  target_name: string
+  message: string
+  first_detected_at: string | null
+  last_updated_at: string | null
+  action_view: AttentionActionView
+  action_payload: Record<string, any>
+}
+
+export interface AttentionSummary {
+  total: number
+  items: AttentionItem[]
+  counts: {
+    error: number
+    warning: number
+  }
+}
+
 export type MatrixCell = {
   state: string
   installation_id: string | null
@@ -778,6 +806,7 @@ export const api = {
   getControllerSSHKey: () =>
     get<{ found: boolean; public_key?: string }>('/inventory/controller-ssh-key'),
   verifyToken: (token?: string) => verifyApiToken(token),
+  getAttention: (limit = 50) => get<AttentionSummary>('/attention?limit=' + limit),
   getVersion: () => get<SystemVersion>('/system/version'),
   version: () => get<SystemVersion>('/system/version')
 }
