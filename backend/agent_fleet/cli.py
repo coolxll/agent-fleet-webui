@@ -22,7 +22,11 @@ from agent_fleet import models
 from agent_fleet.db import create_all, init_engine, session_scope
 from agent_fleet.services import persist
 from agent_fleet.services.backup_service import create_backup
-from agent_fleet.services.restore_service import RestoreError, restore_database
+from agent_fleet.services.restore_service import (
+    RestoreError,
+    check_target_offline,
+    restore_database,
+)
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
 from agent_fleet.services.scanner import scan_runtime, to_ref
 from agent_fleet.settings import get_settings
@@ -161,11 +165,40 @@ def cmd_restore(settings, args):
     def _progress(msg: str):
         print(f"[*] {msg}", file=sys.stderr)
 
+    target_path = Path(args.target_db).resolve() if args.target_db else settings.db_path.resolve()
+    force = args.force
+
+    if target_path.exists():
+        is_offline, reason = check_target_offline(target_path, settings=settings)
+        if not is_offline and not force:
+            print(f"Warning: Target database appears to be active: {reason}", file=sys.stderr)
+            if sys.stdin.isatty():
+                try:
+                    ans = (
+                        input("Target database may be active. Force restore and replace anyway? [y/N]: ")
+                        .strip()
+                        .lower()
+                    )
+                    if ans in ("y", "yes"):
+                        force = True
+                    else:
+                        print("Restore aborted by user.", file=sys.stderr)
+                        raise SystemExit(1)
+                except (EOFError, KeyboardInterrupt):
+                    print("\nRestore aborted.", file=sys.stderr)
+                    raise SystemExit(1)
+            else:
+                print(
+                    "Error: Target database is active. Pass --force to override in non-interactive mode.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+
     try:
         result = restore_database(
             backup_path=args.backup_path,
-            target_path=args.target_db,
-            force=args.force,
+            target_path=target_path,
+            force=force,
             settings=settings,
             progress_callback=_progress,
         )

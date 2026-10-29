@@ -45,6 +45,21 @@ class DatabaseActiveError(RestoreError):
     """Raised when the target database is locked or has active WAL activity without --force."""
 
 
+def _is_pid_alive(pid: int) -> bool:
+    """Check if process with given PID is currently alive."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def get_max_known_schema_version() -> int:
     """Return the maximum known schema version supported by the current codebase."""
     try:
@@ -195,11 +210,21 @@ def validate_backup_for_restore(
     }
 
 
-def check_target_offline(target_path: Path) -> tuple[bool, str | None]:
+def check_target_offline(
+    target_path: Path,
+    settings: Settings | None = None,
+) -> tuple[bool, str | None]:
     """Check if the target SQLite database appears to be offline and safe to replace.
+
+    Checks:
+    1. Active PID files for running Agent Fleet server/controller processes.
+    2. Active directory file locks (.agent_fleet.lock).
+    3. Active WAL file with pending frames.
+    4. SQLite transaction locks and WAL checkpoint quiescence.
 
     Args:
         target_path: Path to the target SQLite database file.
+        settings: Optional Settings instance.
 
     Returns:
         tuple of (is_offline: bool, failure_reason: str | None)
@@ -207,7 +232,54 @@ def check_target_offline(target_path: Path) -> tuple[bool, str | None]:
     if not target_path.exists():
         return True, None
 
-    # Check 1: Active WAL file check (performed before connecting so connect does not alter/checkpoint WAL)
+    # Check 1: Process PID file check
+    pid_files = [target_path.parent / "agent_fleet.pid"]
+    if settings is not None:
+        s_pid = settings.data_dir / "agent_fleet.pid"
+        if s_pid not in pid_files:
+            pid_files.append(s_pid)
+    else:
+        try:
+            s_pid = get_settings().data_dir / "agent_fleet.pid"
+            if s_pid not in pid_files:
+                pid_files.append(s_pid)
+        except Exception:
+            pass
+
+    for pf in pid_files:
+        if pf.exists():
+            try:
+                content = pf.read_text(encoding="utf-8").strip()
+                if content:
+                    pid = int(content.split()[0])
+                    if _is_pid_alive(pid):
+                        return (
+                            False,
+                            f"Active Agent Fleet server process detected (PID {pid} recorded in {pf.name}). "
+                            "Stop the server process before restoring.",
+                        )
+            except (ValueError, OSError) as e:
+                logger.debug("Failed to read PID file %s: %s", pf, e)
+
+    # Check 2: Directory lock file
+    lock_file = target_path.parent / ".agent_fleet.lock"
+    if lock_file.exists():
+        try:
+            import fcntl
+
+            with open(lock_file, "r+") as lf:
+                try:
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                except (BlockingIOError, OSError):
+                    return (
+                        False,
+                        f"Target database directory has an active file lock ({lock_file.name}).",
+                    )
+        except (ImportError, OSError):
+            pass
+
+    # Check 3: Active WAL file check (performed before connecting so connect does not alter/checkpoint WAL)
     wal_file = target_path.with_name(f"{target_path.name}-wal")
     if wal_file.exists() and wal_file.stat().st_size > 0:
         return (
@@ -216,12 +288,22 @@ def check_target_offline(target_path: Path) -> tuple[bool, str | None]:
             "The database may have uncheckpointed writes or an active background process.",
         )
 
-    # Check 2: Exclusive lock test
+    # Check 4: Exclusive lock test & WAL quiescence
     try:
         conn = sqlite3.connect(str(target_path), timeout=0.2)
         try:
             conn.execute("BEGIN EXCLUSIVE")
             conn.execute("COMMIT")
+
+            # In WAL mode, verify checkpoint truncate is not busy
+            row = conn.execute("PRAGMA journal_mode").fetchone()
+            if row and str(row[0]).lower() == "wal":
+                cp_row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                if cp_row and cp_row[0] == 1:
+                    return (
+                        False,
+                        "Target database has active connections holding the WAL file busy.",
+                    )
         finally:
             conn.close()
     except sqlite3.OperationalError as e:
@@ -286,18 +368,18 @@ def restore_database(
 
     # Step 2: Offline Safety Check
     _notify("Step 2/4: Checking target database offline state...")
-    is_offline, reason = check_target_offline(target_file)
+    is_offline, reason = check_target_offline(target_file, settings=settings)
     if not is_offline:
         if not force:
             raise DatabaseActiveError(
-                f"Target database safety check failed: {reason}. "
+                f"Target database safety check failed: {reason} "
                 "Ensure all Agent Fleet services are stopped, or use --force to override."
             )
         _notify(f"  [WARN] Bypassing offline check (--force specified): {reason}")
     else:
         _notify("  [OK] Target database is offline and unlocked")
 
-    # Step 3: Create Pre-Restore Safety Snapshot
+    # Step 3: Create Pre-Restore Safety Snapshot via SQLite Online Backup API
     _notify("Step 3/4: Creating safety pre-restore snapshot...")
     target_file.parent.mkdir(parents=True, exist_ok=True)
     pre_restore_bak: Path | None = None
@@ -313,13 +395,43 @@ def restore_database(
                 target_file.parent / f"{target_file.name}.pre_restore_{ts}_{uuid.uuid4().hex[:6]}.bak"
             )
 
-        shutil.copy2(target_file, pre_restore_bak)
-        os.chmod(pre_restore_bak, 0o600)
-
+        # Preserve a copy of WAL file BEFORE any SQLite connection is opened,
+        # in case backup() checkpoints/removes the WAL or target is in DELETE mode.
+        # Note: Do not name it with "-wal" suffix to prevent SQLite from treating it
+        # as pre_restore_bak's own active WAL file during backup connection.
         if target_wal.exists():
-            pre_restore_wal = target_file.parent / f"{pre_restore_bak.name}-wal"
+            pre_restore_wal = target_file.parent / f"{pre_restore_bak.name}.wal_backup"
             shutil.copy2(target_wal, pre_restore_wal)
             os.chmod(pre_restore_wal, 0o600)
+
+        try:
+            # Use SQLite Online Backup API for atomic, consistent snapshot
+            src_conn = sqlite3.connect(str(target_file), timeout=10.0)
+            try:
+                dst_conn = sqlite3.connect(str(pre_restore_bak))
+                try:
+                    with dst_conn:
+                        src_conn.backup(dst_conn)
+                finally:
+                    dst_conn.close()
+            finally:
+                src_conn.close()
+
+            # Verify integrity of snapshot
+            bak_ok, _, _ = inspect_sqlite_database(pre_restore_bak)
+            if not bak_ok:
+                raise BackupValidationError(
+                    f"Generated pre-restore safety snapshot failed integrity check: {pre_restore_bak}"
+                )
+
+            os.chmod(pre_restore_bak, 0o600)
+        except Exception as e:
+            # Fallback to direct copy if target DB is not valid SQLite (e.g. raw corrupted bytes)
+            logger.warning(
+                "SQLite backup API failed for pre-restore snapshot (%s), falling back to raw copy", e
+            )
+            shutil.copy2(target_file, pre_restore_bak)
+            os.chmod(pre_restore_bak, 0o600)
 
         _notify(f"  [OK] Safety backup created: {pre_restore_bak.name}")
     else:
@@ -327,11 +439,11 @@ def restore_database(
 
     # Step 4: Atomic Database Restore with Rollback Protection
     _notify("Step 4/4: Executing atomic database swap...")
-    temp_suffix = f".tmp_restore_{uuid.uuid4().hex}"
+    temp_suffix = f".tmp_restore_{os.getpid()}_{uuid.uuid4().hex[:6]}"
     tmp_target = target_file.parent / f"{target_file.name}{temp_suffix}"
 
     try:
-        # Copy verified backup to temporary target file in same directory
+        # 1. Ensure replacement DB is staged and verified in a temporary file in the same directory
         shutil.copy2(backup_file, tmp_target)
         os.chmod(tmp_target, 0o600)
 
@@ -340,15 +452,42 @@ def restore_database(
         if not temp_ok:
             raise BackupValidationError("Temporary copy failed PRAGMA integrity_check before swap.")
 
-        # Clean up existing WAL and SHM files of target to prevent WAL contamination
-        if target_wal.exists():
-            target_wal.unlink()
-        if target_shm.exists():
-            target_shm.unlink()
+        # 2. Acquire exclusive lock / ensure target is quiescent
+        if target_file.exists():
+            try:
+                lock_conn = sqlite3.connect(str(target_file), timeout=1.0)
+                try:
+                    lock_conn.execute("BEGIN EXCLUSIVE")
+                    # Checkpoint to truncate WAL if in WAL mode
+                    try:
+                        lock_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    except Exception:
+                        pass
+                finally:
+                    lock_conn.close()
+            except sqlite3.OperationalError as e:
+                if not force:
+                    raise DatabaseActiveError(
+                        f"Target database became locked by another process during restore preparation ({e})"
+                    )
+                _notify(f"  [WARN] Proceeding with swap despite lock (--force specified): {e}")
 
-        # Atomic swap
+        # 3. Perform atomic replace
         os.replace(tmp_target, target_file)
         os.chmod(target_file, 0o600)
+
+        # 4. Only after successful replace, clean up legacy WAL and SHM sidecars safely
+        if target_wal.exists():
+            try:
+                target_wal.unlink()
+            except OSError as e:
+                logger.warning("Could not unlink legacy WAL file %s: %s", target_wal, e)
+        if target_shm.exists():
+            try:
+                target_shm.unlink()
+            except OSError as e:
+                logger.warning("Could not unlink legacy SHM file %s: %s", target_shm, e)
+
         _notify(f"  [OK] Successfully restored database to {target_file}")
 
     except Exception as exc:

@@ -404,3 +404,205 @@ def test_rollback_restores_pre_existing_wal(tmp_path: Path, monkeypatch: pytest.
     assert target_db.exists()
     assert target_wal.exists()
     assert target_wal.read_bytes() == b"important_wal_data_to_preserve"
+
+
+def test_restore_offline_check_rejects_wal_active_writer(tmp_path: Path):
+    """Test offline check rejects restore when connection holds write lock in WAL mode."""
+    src_db = tmp_path / "src.db"
+    _create_sample_db(src_db, [(1, "backup_val")])
+
+    backup_dir = tmp_path / "backups"
+    create_backup(src_db, backup_dir, "wal_test.db")
+    backup_file = backup_dir / "wal_test.db"
+
+    target_db = tmp_path / "target_wal_active.db"
+    conn = sqlite3.connect(str(target_db))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE users (id INT PRIMARY KEY, name TEXT)")
+    conn.execute("INSERT INTO users VALUES (1, 'initial')")
+    conn.commit()
+
+    # Begin write transaction and leave it open
+    conn.execute("BEGIN IMMEDIATE")
+    conn.execute("INSERT INTO users VALUES (2, 'uncommitted')")
+
+    try:
+        is_offline, reason = check_target_offline(target_db)
+        assert is_offline is False
+        assert "locked" in reason.lower() or "wal" in reason.lower()
+
+        with pytest.raises(DatabaseActiveError):
+            restore_database(backup_file, target_path=target_db, force=False)
+    finally:
+        conn.close()
+
+
+def test_restore_pid_file_detection(tmp_path: Path):
+    """Test that active server process PID file prevents restore unless forced."""
+    src_db = tmp_path / "src.db"
+    _create_sample_db(src_db, [(1, "backup_val")])
+
+    backup_dir = tmp_path / "backups"
+    create_backup(src_db, backup_dir, "pid_test.db")
+    backup_file = backup_dir / "pid_test.db"
+
+    target_db = tmp_path / "target_pid.db"
+    _create_sample_db(target_db, [(10, "current_val")])
+
+    pid_file = tmp_path / "agent_fleet.pid"
+    # Write current alive PID
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+
+    is_offline, reason = check_target_offline(target_db)
+    assert is_offline is False
+    assert f"PID {os.getpid()}" in reason
+
+    with pytest.raises(DatabaseActiveError, match="Active Agent Fleet server process detected"):
+        restore_database(backup_file, target_path=target_db, force=False)
+
+    # With force=True, restore should bypass PID lock
+    res = restore_database(backup_file, target_path=target_db, force=True)
+    assert res["status"] == "success"
+
+    # Dead PID should be ignored
+    pid_file.write_text("99999999", encoding="utf-8")
+    is_offline, reason = check_target_offline(target_db)
+    assert is_offline is True
+    assert reason is None
+
+
+def test_pre_restore_snapshot_consistency_with_wal(tmp_path: Path):
+    """Test that safety pre-restore snapshot captures consistent state of active WAL database."""
+    src_db = tmp_path / "src.db"
+    _create_sample_db(src_db, [(1, "restored_one")])
+
+    backup_dir = tmp_path / "backups"
+    create_backup(src_db, backup_dir, "pre_snap.db")
+    backup_file = backup_dir / "pre_snap.db"
+
+    target_db = tmp_path / "target_wal_snap.db"
+    conn = sqlite3.connect(str(target_db))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE users (id INT PRIMARY KEY, name TEXT)")
+    conn.executemany("INSERT INTO users VALUES (?, ?)", [(1, "one"), (2, "two"), (3, "three")])
+    conn.commit()
+
+    # Insert more rows into WAL while keeping connection active
+    conn.execute("INSERT INTO users VALUES (4, 'four_in_wal')")
+    conn.commit()
+
+    try:
+        wal_file = tmp_path / "target_wal_snap.db-wal"
+        assert wal_file.exists()
+        assert wal_file.stat().st_size > 0
+
+        res = restore_database(backup_file, target_path=target_db, force=True)
+        assert res["status"] == "success"
+        assert res["pre_restore_backup"] is not None
+
+        pre_bak = Path(res["pre_restore_backup"])
+        assert pre_bak.exists()
+
+        # Verify pre_restore snapshot integrity
+        integrity_ok, version, counts = inspect_sqlite_database(pre_bak)
+        assert integrity_ok is True
+        assert counts["users"] == 4
+
+        # Connect to snapshot and verify all 4 rows including WAL rows are present
+        conn_bak = sqlite3.connect(str(pre_bak))
+        rows = conn_bak.execute("SELECT id, name FROM users ORDER BY id").fetchall()
+        conn_bak.close()
+        assert rows == [(1, "one"), (2, "two"), (3, "three"), (4, "four_in_wal")]
+    finally:
+        conn.close()
+
+
+def test_rollback_preserves_wal_data_integrity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Test that rollback safely recovers target DB and WAL without corruption on swap failure."""
+    src_db = tmp_path / "src.db"
+    _create_sample_db(src_db, [(100, "new_val")])
+
+    backup_dir = tmp_path / "backups"
+    create_backup(src_db, backup_dir, "rb_wal.db")
+    backup_file = backup_dir / "rb_wal.db"
+
+    target_db = tmp_path / "target_rb.db"
+    conn = sqlite3.connect(str(target_db))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE users (id INT PRIMARY KEY, name TEXT)")
+    conn.executemany("INSERT INTO users VALUES (?, ?)", [(1, "alpha"), (2, "beta")])
+    conn.commit()
+    conn.close()
+
+    # Simulate swap failure via monkeypatching os.replace
+    def fake_replace(src, dst):
+        raise OSError("Simulated hardware write error during swap")
+
+    monkeypatch.setattr(os, "replace", fake_replace)
+
+    with pytest.raises(OSError, match="Simulated hardware write error during swap"):
+        restore_database(backup_file, target_path=target_db, force=True)
+
+    # Verify target_db was rolled back and is completely valid
+    assert target_db.exists()
+    conn_check = sqlite3.connect(str(target_db))
+    rows = conn_check.execute("PRAGMA integrity_check").fetchall()
+    assert rows == [("ok",)]
+    user_rows = conn_check.execute("SELECT id, name FROM users ORDER BY id").fetchall()
+    conn_check.close()
+    assert user_rows == [(1, "alpha"), (2, "beta")]
+
+
+def test_cli_restore_active_interactive_and_noninteractive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+):
+    """Test CLI restore warnings, prompt in interactive mode, and --force requirement in non-interactive mode."""
+    import sys
+
+    src_db = tmp_path / "src.db"
+    _create_sample_db(src_db, [(1, "backup_val")])
+
+    backup_dir = tmp_path / "backups"
+    create_backup(src_db, backup_dir, "cli_test.db")
+    backup_file = backup_dir / "cli_test.db"
+
+    target_db = tmp_path / "target_cli.db"
+    _create_sample_db(target_db, [(2, "target_val")])
+
+    # Put an active WAL file on target_db
+    wal_file = tmp_path / "target_cli.db-wal"
+    wal_file.write_bytes(b"active_wal_bytes")
+
+    # 1. Non-interactive without --force should fail
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    with pytest.raises(SystemExit) as exc:
+        main(["restore", str(backup_file), "--target-db", str(target_db)])
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "Warning: Target database appears to be active" in captured.err
+    assert "Pass --force to override in non-interactive mode" in captured.err
+
+    # 2. Interactive with user answering 'n' should abort
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: "n")
+    with pytest.raises(SystemExit) as exc:
+        main(["restore", str(backup_file), "--target-db", str(target_db)])
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "Restore aborted by user." in captured.err
+
+    # 3. Interactive with user answering 'y' should proceed
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+    main(["restore", str(backup_file), "--target-db", str(target_db)])
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert out["status"] == "success"
+
+    # 4. Non-interactive with --force should succeed
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    # create active wal again
+    wal_file.write_bytes(b"active_wal_bytes_again")
+    main(["restore", str(backup_file), "--target-db", str(target_db), "--force"])
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert out["status"] == "success"
