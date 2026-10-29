@@ -48,17 +48,22 @@ def resolve_ssh_target(
     host_name: str | None = None,
     ssh_user: str | None = None,
 ) -> str:
-    """Resolve the SSH destination target (e.g., 'user@192.168.1.100' or 'alias').
+    """Resolve the SSH destination target operand (e.g., 'alias', 'user@alias', or '192.168.1.100').
 
-    Resolution priority for host address:
-    1. ssh_host (explicit IP or hostname)
-    2. ssh_alias (SSH config alias)
-    3. host_name (fleet Host name)
+    Resolution priority for destination operand:
+    1. ssh_alias (OpenSSH alias from ~/.ssh/config, to preserve config block semantics)
+    2. ssh_host (explicit IP or hostname)
+    3. host_name (fleet Host name fallback)
 
-    If ssh_user is provided and not already present in the host string,
-    it is prepended as 'user@host'.
+    When both an alias and an explicit IP/hostname are present, the alias is used
+    as the OpenSSH destination operand so that OpenSSH matches the `Host <alias>`
+    block in ~/.ssh/config (inheriting IdentityFile, ProxyJump, etc.), while the
+    network address is passed via -o HostName=<address> in build_ssh_command().
+
+    If ssh_user is provided and not already present in the target string,
+    it is prepended as 'user@target'.
     """
-    raw = (ssh_host or ssh_alias or host_name or "").strip()
+    raw = (ssh_alias or ssh_host or host_name or "").strip()
     clean_host, parsed_user, _ = parse_ssh_destination(raw)
     effective_user = (ssh_user or parsed_user or "").strip()
 
@@ -67,40 +72,123 @@ def resolve_ssh_target(
     return clean_host
 
 
+def resolve_ssh_connection(
+    ssh_host: str | None = None,
+    ssh_alias: str | None = None,
+    host_name: str | None = None,
+    ssh_user: str | None = None,
+    ssh_port: int | None = None,
+) -> tuple[str, list[str]]:
+    """Resolve the OpenSSH destination operand and required command-line options.
+
+    Returns (destination_operand, extra_options).
+
+    Semantics:
+    - If BOTH an alias and an explicit network address are provided (and different):
+      destination operand is the alias (inheriting Host configuration from ~/.ssh/config),
+      and '-o HostName=<address>' is added to options.
+    - If only an alias is present: destination operand is alias.
+    - If only an address is present: destination operand is address.
+    - If ssh_user is present: 'user@operand' is returned.
+    """
+    clean_alias, alias_user, alias_port = parse_ssh_destination(ssh_alias)
+    clean_host, host_user, host_port = parse_ssh_destination(ssh_host)
+    clean_hostname, hname_user, hname_port = parse_ssh_destination(host_name)
+
+    effective_user = (ssh_user or alias_user or host_user or hname_user or "").strip()
+
+    alias = clean_alias or (clean_hostname if clean_host and clean_hostname != clean_host else None)
+    address = clean_host or (clean_hostname if not alias else None)
+
+    options: list[str] = []
+
+    if alias and address and alias != address:
+        operand = alias
+        options.append(f"HostName={address}")
+    elif alias:
+        operand = alias
+    elif address:
+        operand = address
+    else:
+        operand = clean_hostname or ""
+
+    if effective_user and operand and "@" not in operand:
+        operand = f"{effective_user}@{operand}"
+
+    return operand, options
+
+
 def build_ssh_command(
-    target: str,
+    target: str = "",
     port: int | None = None,
     user: str | None = None,
     connect_timeout: int = 5,
     remote_command: list[str] | str | None = None,
     batch_mode: bool = True,
     extra_options: list[str] | None = None,
+    host_address: str | None = None,
+    ssh_host: str | None = None,
+    ssh_alias: str | None = None,
 ) -> list[str]:
     """Build a robust OpenSSH CLI command argv list.
 
-    Non-standard ports (!= 22) are passed via -p.
-    Users are prepended to target as user@host if not already present.
+    Connection & Precedence Semantics:
+    1. Alias vs Address:
+       - When BOTH an SSH alias and an explicit IP/hostname address are provided,
+         the alias is passed as the destination operand (so OpenSSH matches the
+         `Host <alias>` block in ~/.ssh/config, inheriting IdentityFile, ProxyJump, etc.),
+         and '-o HostName=<address>' is added so OpenSSH connects to the explicit IP/address.
+       - If only an alias is present, connects to alias.
+       - If only an address is present, connects to address.
+    2. User:
+       - Explicit user is prepended to operand as 'user@operand'.
+       - If omitted, operand has no user prefix, allowing ~/.ssh/config `User` to apply.
+    3. Port:
+       - Non-standard ports (!= 22) are passed via -p <port>.
+       - Standard port 22 or None omits -p, allowing ~/.ssh/config `Port` to apply.
     """
     cmd = ["ssh"]
     if batch_mode:
         cmd.extend(["-o", "BatchMode=yes"])
     if connect_timeout:
         cmd.extend(["-o", f"ConnectTimeout={connect_timeout}"])
-    if extra_options:
-        for opt in extra_options:
-            cmd.extend(["-o", opt])
 
-    clean_host, parsed_user, parsed_port = parse_ssh_destination(target)
-    effective_port = port or parsed_port
-    effective_user = user or parsed_user
+    opts = list(extra_options or [])
+
+    # Resolve operand and address
+    clean_target, target_user, target_port = parse_ssh_destination(target)
+    clean_addr, addr_user, addr_port = parse_ssh_destination(host_address or ssh_host)
+    clean_alias, alias_user, alias_port = parse_ssh_destination(ssh_alias)
+
+    effective_port = port or target_port or addr_port or alias_port
+    effective_user = user or target_user or alias_user or addr_user
+
+    # Determine alias and address
+    alias = clean_alias or (clean_target if clean_addr and clean_target != clean_addr else None)
+    address = clean_addr or (clean_target if not alias else None)
+
+    if alias and address and alias != address:
+        operand = alias
+        hostname_opt = f"HostName={address}"
+        if not any(o.startswith("HostName=") for o in opts):
+            opts.insert(0, hostname_opt)
+    elif alias:
+        operand = alias
+    elif address:
+        operand = address
+    else:
+        operand = clean_target or target
+
+    for opt in opts:
+        cmd.extend(["-o", opt])
 
     if effective_port and int(effective_port) != 22:
         cmd.extend(["-p", str(effective_port)])
 
-    if effective_user and clean_host and "@" not in clean_host:
-        final_target = f"{effective_user}@{clean_host}"
+    if effective_user and operand and "@" not in operand:
+        final_target = f"{effective_user}@{operand}"
     else:
-        final_target = clean_host or target
+        final_target = operand or target
 
     cmd.append(final_target)
 
