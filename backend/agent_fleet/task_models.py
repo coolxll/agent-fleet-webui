@@ -31,7 +31,7 @@ class TaskStage(Base):
     source_session_id: Mapped[str | None] = mapped_column(ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True)
     host_name: Mapped[str] = mapped_column(String, default="")
     agent_id: Mapped[str] = mapped_column(String)
-    native_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    native_session_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     project_path: Mapped[str] = mapped_column(Text, default="")
     kind: Mapped[str] = mapped_column(String, default="handoff")
     status: Mapped[str] = mapped_column(String, default="starting")
