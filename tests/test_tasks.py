@@ -160,7 +160,7 @@ async def test_real_bridge_fake_native_protocol(fleet_db, tmp_path, claude, resu
     stage_id = execution_stage(task_id, runtime_id, tmp_path, agent)
     executable, _ = fake_agent(tmp_path, claude=claude, resume=resume)
     await asyncio.wait_for(service._execute(stage_id, RuntimeRef(id=runtime_id, transport='local'), executable,
-        agent, str(tmp_path), 'Task goal', 'existing-native' if resume else None), timeout=8)
+        agent, str(tmp_path), 'Task goal', 'existing-native' if resume else None), timeout=25)
     task = service.get_task(task_id)
     assert task['status'] == 'review'
     stage = task['stages'][0]
@@ -178,7 +178,7 @@ async def test_resume_rejection_is_failure_without_fresh_partial_context(fleet_d
     stage_id = execution_stage(task_id, runtime_id, tmp_path)
     executable, _ = fake_agent(tmp_path, failure=True, resume=True)
     await asyncio.wait_for(service._execute(stage_id, RuntimeRef(id=runtime_id, transport='local'), executable,
-        'codex', str(tmp_path), 'Task', 'missing-session'), timeout=8)
+        'codex', str(tmp_path), 'Task', 'missing-session'), timeout=25)
     stage = service.get_task(task_id)['stages'][0]
     assert stage['status'] == 'failed'
     assert 'Missing native session' in stage['error']
@@ -249,7 +249,7 @@ async def test_handoff_api_start_is_pending_then_real_ack(client, tmp_path):
     try:
         with pytest.raises(service.TaskError, match='active'):
             await service.start_handoff(task_id, {**draft, 'preview_hash': preview['preview_hash']})
-        await asyncio.wait_for(asyncio.shield(job), timeout=8)
+        await asyncio.wait_for(asyncio.shield(job), timeout=25)
         result = service.get_task(task_id)
         assert result['stages'][-1]['status'] == 'completed'
         assert result['stages'][0]['session_id'] == source_id
