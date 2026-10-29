@@ -1,9 +1,22 @@
 # Architecture
 
-Read-only observer: it connects to machines you already have SSH access to,
-reads agent installs and their configuration across scopes, sanitizes
-everything, and stores a normalized snapshot. It never writes to a remote
-machine. Requirements it implements: `requirements.md`.
+Agent Fleet Explorer is a dual-mode control plane over heterogeneous development
+machines reached via standard OpenSSH. It balances two fundamental principles:
+
+1. **Read-only Discovery & Observability:** routine fleet discovery, configuration
+   inspection, version tracking, and quota monitoring are strictly non-invasive
+   and side-effect-free. Probes never alter files or system state.
+2. **Controlled Remote Write Operations:** explicit, user-initiated operational
+   actions:
+   - **One-click Agent Upgrades:** binary/package upgrades across runtimes via
+     server-synthesized whitelist commands (`action_service.py`).
+   - **Runner Fleet Lifecycle:** declarative management and process supervision
+     of GitHub Actions self-hosted runner slots (`scripts/manage_runner.sh`).
+   - **Task Board Dispatch & Handoff:** dispatching coding tasks to remote POSIX
+     runtimes and orchestrating cross-agent session transitions (`task_service.py`).
+
+Requirements it implements: `requirements.md`. Architectural decision records:
+`docs/adr/`.
 
 ## Shape
 
@@ -11,8 +24,8 @@ machine. Requirements it implements: `requirements.md`.
                                      |
                                      +--> SQLite (fleet.db)
 
-One backend process. No queue, no workers, no microservices. Scans run as
-asyncio tasks inside the API process.
+One backend process. No queue, no workers, no microservices. Scans and
+operational actions run as bounded asyncio tasks inside the API process.
 
 ## Collection model
 
@@ -120,27 +133,98 @@ Statuses are kept separate on purpose:
   previous configuration row is retained and `config_status` keeps describing
   it, so a broken parse never blanks the inspector.
 
-## Security model
+## Operational execution pipeline
 
-Three layers, all in `backend/agent_fleet/adapters/sanitize.py`:
+While observation scans are read-only, Agent Fleet provides three explicit,
+controlled remote write capabilities:
 
-1. **Field whitelist.** Adapters emit known fields only. Unknown keys are
+### 1. One-click Agent Upgrades (`action_service.py`)
+- **Strict command synthesis:** Zero client-supplied command strings are accepted.
+  Upgrade commands are generated entirely server-side from `UPGRADE_RULES` based
+  on agent identifier, target platform (POSIX vs Windows PowerShell), and channel
+  (`latest` vs `stable`).
+- **Official updater precedence:** For agents with native self-updaters
+  (e.g. `claude update`, `opencode upgrade`, `pi update`, `qodercli update`, `agy update`),
+  the official command is attempted first before falling back to package managers (`npm`).
+- **Execution safety:** Commands run under `PATH_BOOTSTRAP` (or `WIN_PATH_BOOTSTRAP`)
+  to ensure correct binary resolution without polluting system environments.
+- **Concurrency & isolation:** Protected by per-runtime `asyncio.Lock` to prevent
+  conflicting concurrent updates on the same node.
+- **Observability:** Supports both synchronous execution and background task
+  queues with polling (`GET /api/upgrades/{task_id}`). On completion, an automated
+  post-upgrade probe is dispatched to refresh state.
+
+### 2. Declarative Runner Fleet Lifecycle (`manage_runner.sh`)
+- **Declarative topology:** Self-hosted GitHub Actions runners are defined in
+  `config/runner_fleet.yaml`, declaring host endpoints, slot counts, proxies, and labels.
+- **Outbound-only networking:** Runners register with GitHub via temporary JIT
+  tokens and poll over HTTPS/WSS. Target hosts require **zero inbound open ports**.
+- **Shared proxy egress:** Enables multi-node clusters to share a centralized
+  Tailscale SOCKS5 or LAN HTTP proxy for outbound GitHub communication.
+- **Process group isolation:** Stop and prune routines use exact slot matching
+  (distinguishing `slot-0` from legacy instances) and enforce trailing-slash
+  directory boundaries in `pkill` to prevent collateral process kills.
+
+### 3. Task Board Dispatch & Handoff (`task_service.py`)
+- **Task & Stage orchestration:** Dispatches coding tasks to remote POSIX runtimes
+  hosting Claude Code or Codex.
+- **Working directory verification:** Ensures the target repository exists, checks
+  Git branch and status (`rev-parse HEAD`, `git status --short`), and verifies
+  preconditions before handoff.
+- **Session lineage:** Recovers previous native sessions when resuming on the
+  same host and directory, or initializes a clean session with full context handoff.
+- **Supervision:** Monitored via CLI streaming protocols with cancellation on
+  process shutdown and state tracking recorded in SQLite (`fleet_tasks` and `task_stages`).
+
+## Security model and trust boundaries
+
+The system implements defense-in-depth across the network, authentication,
+remote execution, and data layers:
+
+### Trust Boundaries & Network Privileges
+1. **OpenSSH Credential Boundary:** The controller relies exclusively on existing
+   local OpenSSH credentials (`~/.ssh/config`, ssh-agent, or identity keys) to
+   authenticate with remote nodes. The application never stores, prompts for, or
+   duplicates private keys or passwords.
+2. **User Privilege Boundary:** All remote operations execute strictly within the
+   permissions of the configured SSH user account on the target machine. Root or
+   `sudo` privileges are never assumed or required.
+3. **OpenSSH Alias Preservation:** Network targets preserve configured SSH aliases
+   as destination operands while supplying `-o HostName=<address>`, ensuring host-specific
+   directives (`IdentityFile`, `ProxyJump`, `CertificateFile`) in `~/.ssh/config`
+   remain fully effective.
+4. **API Access Control:** Configurable via `AGENT_FLEET_API_SECRET`:
+   - *Default (Anonymous Read-Only):* Read-only routes are unauthenticated for seamless
+     local loopback developer workflows, while write operations (upgrades, syncs,
+     task dispatch) require Bearer authentication.
+   - *Strict Mode (`AGENT_FLEET_ALLOW_ANONYMOUS_READONLY=false`):* Enforces Bearer
+     token authentication across all API endpoints for exposed or shared network
+     deployments.
+   - *WebUI Bearer Injection:* Frontend requests route through a unified `authFetch`
+     layer with local token persistence and automatic 401 handling.
+
+### Remote Execution Safety
+1. **Zero Untyped Remote Execution:** The API provides no endpoint for executing
+   arbitrary shell commands.
+2. **Parameterless Synthesis:** Operational scripts use fixed templates and server-controlled
+   identifiers.
+3. **Process Slot Isolation:** Runner management bounds process signals strictly to
+   the configured instance path, eliminating cross-slot process leakage.
+
+### Data Sanitization (Three Layers in `sanitize.py`)
+1. **Field Whitelist:** Adapters emit known fields only. Unknown keys are
    reported by name and their values are dropped.
-2. **Name-based dropping.** Any key whose name looks credential-ish
+2. **Name-based Dropping:** Any key whose name looks credential-ish
    (`apiKey`, `token`, `password`, `Authorization`, ...) is removed
-   recursively - nesting is what leaked a real key during development.
-3. **Value-based redaction.** Values that look like credentials (`sk-...`,
-   `ghp_...`, JWTs, `Bearer <token>`) are replaced even under an innocent key.
-
-Additional rules:
-
-* URLs are reduced to scheme + host + port + path; query strings, fragments,
-  embedded credentials and secret-looking path segments are stripped.
-* Environment blocks are reported as key names only, never values.
-* The probe generator refuses to touch `.ssh/`, `id_rsa`, `.aws/credentials`,
-  `.npmrc`, keychain and similar paths even if an adapter asked for them.
-* Raw remote config data exists only in memory during a scan and is never
-  persisted; only the sanitized structure reaches SQLite.
+   recursively at any nesting depth.
+3. **Value-based Redaction:** Values matching credential patterns (`sk-...`,
+   `ghp_...`, JWTs, `Bearer <token>`) are replaced with masked placeholders.
+4. **Memory-Only Raw Bytes:** Raw remote configuration streams exist only in
+   memory during a scan and are never written to disk or database. Only the
+   sanitized structure reaches SQLite.
+5. **Credential Store Separation:** Imported quota credentials live in
+   `data/quota_accounts.json` with mode `0600`, outside SQLite; the API never
+   returns raw credentials. Antigravity OAuth client secrets are similarly isolated.
 
 ### Declared vs effective
 

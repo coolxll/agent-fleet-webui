@@ -7,27 +7,34 @@ This is the requirements source the other documents refer to:
 * `architecture.md` - how the requirements are implemented.
 * `progress.md` - which requirements are reached, and the known gaps.
 
-Last updated: 2026-10-18
+Last updated: 2026-10-29
 
 ## 1. Problem
 
-AI coding agents (Codex CLI, Claude Code, OpenCode, Pi, Hermes) are installed
-ad hoc across workstations and servers running macOS, Linux, Windows and WSL.
-Each one keeps its configuration in its own format and location, per user and
-per machine. There is no single place to answer:
+AI coding agents (Codex CLI, Claude Code, OpenCode, Pi, Hermes, AGY, CodeBuddy,
+Qoder) are installed ad hoc across workstations and servers running macOS,
+Linux, Windows and WSL. Each one keeps its configuration in its own format
+and location, per user and per machine. There is no single place to answer:
 
 * which agents are installed on each machine, at which version;
-* which model, provider, endpoint, MCP servers and skills each one is
+* which model, provider, endpoint, MCP servers, skills and quota pools each one is
   configured to use;
-* how two machines - or the same machine before and after an upgrade - differ.
+* how two machines - or the same machine before and after an upgrade - differ;
+* how to coordinate remote coding tasks and maintain agent execution lifecycles.
 
-The existing tools surveyed in `research.md` §1 either mutate configuration
-(CC-Switch, Magpie) or require an agent to be installed on every endpoint
-(FleetDM). Both are incompatible with hosts that are only reachable over SSH
-and must not be modified.
+The existing tools surveyed in `research.md` §1 either forcibly mutate configuration
+(CC-Switch, Magpie) or require a heavy agent/daemon installed on every endpoint
+(FleetDM).
 
-**Goal:** a read-only control plane over the fleet, reached with the existing
-SSH configuration and with nothing installed on the remote side.
+**Goal:** a dual-mode control plane over the fleet:
+1. **Read-only Discovery & Observability:** zero-side-effect, non-invasive fleet
+   probing, configuration inspection, version tracking, and quota monitoring
+   reached through existing SSH credentials with nothing permanently installed
+   on remote endpoints.
+2. **Controlled Remote Operational Actions:** explicit, user-initiated write
+   operations (one-click agent upgrades, runner fleet lifecycles, and task board
+   handoff) executed over authorized SSH with strict safety whitelists and
+   parameterless command synthesis.
 
 ## 2. Users and scenarios
 
@@ -39,25 +46,34 @@ of development machines.
 | Fleet audit | Every host and runtime with the agents installed and their config summary |
 | Drift detection | The same agent compared across two machines, field by field |
 | Upgrade history | Two snapshots of one runtime compared, field by field |
-| Review / hand-off | One sanitized JSON export of the whole fleet |
+| One-click upgrade | Controlled upgrade of outdated agents across runtimes via whitelist templates |
+| Runner fleet ops | Declarative synchronization and lifecycle control of GitHub Actions runners |
+| Task handoff | Task board dispatch relaying coding goals to remote agent sessions |
+| Review / export | One sanitized JSON export of the whole fleet |
 | Recurring check | Scheduled fleet scans with visible progress and stale markers |
 
-Phase 1 assumes a **single trusted operator**. There is no login, no
-multi-tenant access control, and no audit trail of who viewed what. The API is
-meant to listen on loopback (see OPS-1).
+Phase 1 assumed a single operator. The platform has since introduced API token
+authentication (`AGENT_FLEET_API_SECRET`) supporting both anonymous read-only
+and strict authenticated modes.
 
-## 3. Hard constraints
+## 3. Hard constraints and trust boundary
 
-These are not negotiable and every feature must preserve them.
+These constraints are non-negotiable and every feature must preserve them.
 
 | ID | Constraint | Reason |
 | --- | --- | --- |
-| HC-1 | **Read-only on remote machines.** No file writes, installs, upgrades, config edits or arbitrary command execution. | Hosts are production/shared machines; the tool must be safe to point at anything reachable. |
-| HC-2 | **Nothing installed on remotes.** Only shells and binaries already present. | No package manager, agent daemon or Python runtime can be assumed. |
-| HC-3 | **Reuse existing SSH configuration and credentials.** No keys or passwords are collected, copied or stored. | `~/.ssh/config` (ProxyJump, ports, Tailscale names, agents) already works; duplicating it creates a second credential path. |
-| HC-4 | **No credential ever reaches storage or an API response.** | Configs routinely contain live API keys and tokens. |
+| HC-1 | **Non-invasive discovery; controlled operations.** Routine fleet scans, inventory probes and config discovery must remain strictly read-only and non-invasive. Remote write operations (one-click agent upgrades, runner fleet lifecycles, and task board execution) are strictly opt-in, parameterless or whitelisted, and must only execute upon explicit user action. | Production/shared hosts must be safe to monitor continuously; operations must never have accidental side effects. |
+| HC-2 | **Nothing permanently installed on remotes.** Probes and operational commands rely exclusively on standard shells and binaries already present (e.g. bash, sh, powershell, npm, git). | No package manager, agent daemon or Python runtime can be mandated on remote targets. |
+| HC-3 | **Reuse existing SSH configuration and credentials.** No keys or passwords are collected, copied or stored. | `~/.ssh/config` (ProxyJump, ports, Tailscale names, agents) already works; duplicating it creates a dangerous second credential path. |
+| HC-4 | **No credential ever reaches storage or an API response.** | Remote configs and memory dumps routinely contain live API keys and tokens. |
 | HC-5 | **Raw remote config is never persisted.** Raw bytes exist in memory during one scan only. | Removing the raw copy removes the main blast radius of a database leak. |
-| HC-6 | **Single local process, no external services.** SQLite plus the FastAPI process. | Deployable on a laptop; no queue or database to operate. |
+| HC-6 | **Single local process, no external services.** SQLite plus the FastAPI process. | Deployable on a laptop or container; no message queues or external database clusters to operate. |
+
+### Trust Boundary & Privilege Model
+
+* **Controller OpenSSH Access:** The controller machine requires authorized OpenSSH credentials (`~/.ssh/config` identity files, SSH agent, or keypairs) to reach remote fleet nodes.
+* **Target Execution Privileges:** Remote operations execute strictly under the permissions of the configured SSH user on the target machine. Root / sudo is never requested or assumed.
+* **Zero Command Injection (Action Whitelist):** Remote write operations (upgrades, runner actions) never execute arbitrary client-supplied strings. Commands are synthesized from strict server-side whitelists (`UPGRADE_RULES`) and parameterless templates run through `PATH_BOOTSTRAP` with per-runtime concurrency locks.
 
 ## 4. Functional requirements
 
@@ -148,32 +164,80 @@ automated test or the evidence in `progress.md`.
 | API-1 | Read-only HTTP API plus scan triggers. | All routes under `/api`; reads never mutate remote state; the only writes are scan runs, schedule state, inventory sync and the runtime enable flag. | `tests/test_api.py` |
 | CLI-1 | Command-line parity. | `sync`, `runtimes`, `probe <target>`, `scan [--host <name> | --runtime <id>]` work without the UI. | `python -m agent_fleet.cli --help`, manual |
 | OPS-1 | Safe default deployment. | One process, SQLite only, no authentication; intended to bind to loopback and not be exposed to untrusted networks. | code review (`main.py`, CORS) |
-| OPS-2 | Configuration by environment. | `AGENT_FLEET_*` variables cover storage, inventory, timeouts, concurrency, TTL and the local runtime (see README). | `README.md`, `settings.py` |
+| OPS-2 | Configuration by environment. | `AGENT_FLEET_*` variables cover storage, inventory, timeouts, concurrency, TTL, auth secret and local runtime. | `README.md`, `settings.py` |
+| OPS-3 | API access control. | Optional `AGENT_FLEET_API_SECRET` enforces Bearer token authentication; supports `AGENT_FLEET_ALLOW_ANONYMOUS_READONLY=true` (default: read allowed, writes require auth) or `false` (strict auth required for all routes). | `tests/test_security_auth.py` |
 
-## 5. Non-goals (phase 1)
+### Remote operations and execution
 
-Deliberately not implemented; see `research.md` §6 and `progress.md`:
+| ID | Requirement | Acceptance criteria | Verified by |
+| --- | --- | --- | --- |
+| UPG-1 | One-click remote agent upgrade. | Whitelisted, parameterless script synthesis from `UPGRADE_RULES` across POSIX (`sh`) and Windows (`powershell`); zero arbitrary command execution; per-runtime lock; background tasks with observable progress; automatic post-upgrade re-scan. | `tests/test_action_service.py` |
+| RUN-1 | Declarative runner fleet lifecycle. | Orchestrates self-hosted GitHub Actions runners via `config/runner_fleet.yaml` and `scripts/manage_runner.sh`; outbound-only polling; proxy routing; precise slot matching and process group boundary isolation; ghost runner pruning. | `tests/test_manage_runner.py`, `tests/test_runner_fleet.py` |
+| TASK-1 | Task board dispatch and handoff. | Dispatches coding tasks to remote POSIX runtimes (Claude Code / Codex); protocol-observed execution; native session resumption or new session handoff; transcript lineage recorded in SQLite. | `tests/test_tasks.py`, `tests/test_sessions.py` |
 
-* Config write-back, provider switching, API-key sync.
-* Remote install, upgrade or task execution; session orchestration.
-* Agent daemon or anything installed on remotes.
-* Continuous watching/polling: scans are manual or scheduled.
-* Reading credential stores (`auth.json`, `.hermes/.env`, SSH keys, keychain,
-  `.npmrc`, `.netrc`, cloud credentials).
-* Authentication, multi-user access control and audit logging.
-* Snapshot pruning: history is currently kept indefinitely.
+## 5. Platform × Agent × Capability Matrix
 
-## 6. Known gaps that still satisfy the requirements
+The support matrix across target operating systems, agents, and platform capabilities:
 
-Tracked in `progress.md`; they are honest limits of phase 1, not violations.
+### 5.1 Agent × Capability Matrix
+
+| Agent ID | Display Name | Probe & Discovery | Quota Ingestion | Task Dispatch & Handoff | Agent Upgrade |
+| --- | --- | --- | --- | --- | --- |
+| `claude` | Claude Code | **Supported (Full)** | Unsupported (No consumer API) | **Supported (Full)** (POSIX) | **Supported (Full)** (`cli` / `npm`) |
+| `codex` | Codex CLI | **Supported (Full)** | **Supported (Full)** (OAuth / Magpie) | **Supported (Full)** (POSIX) | **Supported (Full)** (`npm`) |
+| `agy` | Antigravity (AGY) | **Supported (Full)** | **Supported (Full)** (Google Quotas) | Unsupported (Roadmap) | **Supported (Full)** (`agy update`) |
+| `opencode` | OpenCode | **Supported (Full)** | Unsupported (BYOK / Multi-provider) | Unsupported (Roadmap) | **Supported (Full)** (`cli` / `npm`) |
+| `pi` | Pi Coding Agent | **Supported (Full)** | Unsupported (BYOK / Multi-provider) | Unsupported (Roadmap) | **Supported (Full)** (`cli` / `npm`) |
+| `hermes` | Hermes Agent | **Supported (Full)** | Unsupported (BYOK / Multi-provider) | Unsupported (Roadmap) | **Supported (Full)** (`cli` / installer) |
+| `codebuddy` | CodeBuddy / WorkBuddy | **Supported (Full)** | **Supported (Full)** (Token / Local Ext) | Unsupported (Roadmap) | **Supported (Full)** (`npm`) |
+| `qoder` | Qoder / QoderCN | **Supported (Full)** | **Supported (Full)** (OpenAPI / Token) | Unsupported (Roadmap) | **Supported (Full)** (`cli` / `npm`) |
+
+### 5.2 Platform × Capability Matrix
+
+| Platform / Environment | Probe & Discovery | Quota Collection | Task Dispatch & Handoff | Agent Upgrade Execution | Runner Fleet Orchestration |
+| --- | --- | --- | --- | --- | --- |
+| **macOS (Darwin)** | **Supported (Full)** (POSIX sh) | **Supported (Full)** (Controller / local snapshot) | **Supported (Full)** (Local / SSH POSIX) | **Supported (Full)** (POSIX scripts) | **Supported (Partial)** (Bash runner; launchd pending verification) |
+| **Linux (Deb/Ubuntu/RHEL)** | **Supported (Full)** (POSIX sh) | **Supported (Full)** (Controller / local snapshot) | **Supported (Full)** (Local / SSH POSIX) | **Supported (Full)** (POSIX scripts) | **Supported (Full)** (systemd / background daemon + proxy) |
+| **Windows (Native PowerShell)** | **Supported (Full)** (Chunked b64 PowerShell) | **Supported (Full)** (Controller / local snapshot) | Unsupported (POSIX streaming required) | **Supported (Full)** (PowerShell scripts) | Unsupported (Bash / Linux runner environment required) |
+| **WSL2 (Windows Subsystem)** | **Supported (Full)** (`wsl.exe` / SSH POSIX) | **Supported (Full)** (Controller / local snapshot) | **Supported (Full)** (SSH POSIX target) | **Supported (Full)** (POSIX scripts) | **Supported (Partial)** (Runs inside Linux distro) |
+
+> **Verification status notes**:
+> - *Supported (Full)*: Covered by unit/integration test suites and verified against target specifications.
+> - *Supported (Partial)*: Functional under documented constraints (e.g. WSL requiring direct SSH runtime for task handoffs; macOS runner fleet requiring manual supervisor configuration).
+> - *Pending Real-Host Verification*: Script synthesis and unit mocks implemented; awaiting dedicated automated test on real bare-metal Windows CI node.
+> - *Unsupported / Not Applicable*: By architectural design (e.g. Claude Code having no public consumer quota API; Windows native shell lacking POSIX pty streaming for task board handoffs).
+
+## 6. Non-goals
+
+Deliberately out of scope for the control plane:
+
+* **Arbitrary command execution:** No arbitrary shell commands or untyped scripts can be sent via the API; all remote execution paths are whitelisted and parameterless.
+* **Persistent remote daemons:** No proprietary daemon, background agent or telemetry service is installed on remote targets.
+* **Remote credential stores tampering:** No collection, modification or transmission of SSH private keys, cloud credentials (`.aws/`), or raw authorization tokens.
+* **Continuous polling / aggressive scraping:** Probes are manual, event-driven, or cleanly scheduled.
+* **Multi-tenant enterprise RBAC:** Phase 1 and 2 operate on a trusted operator model with optional shared API secret token access control.
+
+## 7. Known gaps that still satisfy the requirements
+
+Tracked in `progress.md`; they are honest limits, not violations:
 
 * Some Windows-specific config layouts parse as `partial`, not `parsed`.
 * Skills are detected by directory/`SKILL.md` presence; frontmatter is not parsed.
 * Renaming a WSL distro in the inventory leaves the old runtime row behind.
 * Claude's per-project MCP servers recorded in `~/.claude.json` are listed but
   not merged into the user-scope list.
+* Task board dispatch requires POSIX-compliant streaming and cannot currently target Windows native PowerShell runtimes directly.
 
-## 7. Sources and change log
+### 7.1 Operational isolation & security guarantees (Fixes #49–#53)
+
+The following operational fixes are formally incorporated into the platform contract:
+* **WebUI Token Injection (#49):** Unified Bearer token authorization across all WebUI API requests with graceful 401 interception and settings token management.
+* **OpenSSH Alias Preservation (#50):** Preserves `~/.ssh/config` alias semantics (`IdentityFile`, `ProxyJump`, `Port`) while honoring explicit IP overrides via `-o HostName=<address>`.
+* **Windows & WSL Runtime Topology (#51):** First-run inventory seeding retains Windows native transport contracts and preserves declared `wsl:` child runtimes.
+* **Precision Runner Slot Matching (#52):** Single-slot runner stopping strictly targets the specified instance, restricting legacy un-suffixed fallbacks exclusively to slot 0.
+* **Process Boundary Isolation (#53):** Enforces trailing-slash directory path boundaries (`$target_dir/`) to prevent cross-slot process termination (e.g., slot-1 vs slot-10).
+
+## 8. Sources and change log
 
 Requirement sources, in order of authority:
 
@@ -186,5 +250,6 @@ Requirement sources, in order of authority:
 
 | Date | Change | Reason |
 | --- | --- | --- |
+| 2026-10-29 | Reconciled operational boundary (dual nature: read-only discovery + controlled operations), added Trust Boundary, Platform × Agent × Capability Matrix, and operational requirements (UPG-1, RUN-1, TASK-1, OPS-3). | Issue #63: align product specifications with operational capabilities. |
 | 2026-10-18 | Scope discovery and precedence (CFG-1..CFG-4), comparison (CMP-1..CMP-2), scheduling (SCAN-3..SCAN-4), export (EXP-1). | Stage 8; `resolution` added so "declared" and "effective" are no longer conflated. |
 | 2026-10-18 | This document created. | The project had research, architecture and progress notes but no requirements source. |

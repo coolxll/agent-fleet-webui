@@ -6,13 +6,17 @@
 </p>
 
 Control plane for the AI coding agents installed across your machines:
-inspect installations and configuration, manage work on a task board, and
-observe Paseo services across the fleet.
+inspect installations and configuration, manage work on a task board, coordinate
+declarative runner fleets, and observe daemon services across the fleet.
 
-Discovery and configuration scans remain read-only. Explicit upgrade and task
-handoff actions can change the target machine; handoff starts a coding Agent
-in the selected existing working directory. The original discovery requirements
-and verification are in `docs/requirements.md`.
+The system operates on an explicit **operational dual nature**:
+- **Read-only Discovery & Observability:** routine fleet discovery, configuration
+  inspection, version tracking, and quota monitoring are strictly non-invasive
+  and side-effect-free. Probes never alter files or system state.
+- **Controlled Remote Write Operations:** explicit, user-initiated actions—such
+  as one-click agent upgrades, GitHub Actions runner fleet lifecycle management,
+  and task board dispatch/handoff—execute over authorized OpenSSH sessions under
+  strict safety whitelists and parameterless command synthesis.
 
 Supported agents: Codex CLI, Claude Code, OpenCode, Pi, Hermes,
 Antigravity (AGY), CodeBuddy, and Qoder (QoderCN).
@@ -261,6 +265,34 @@ The fleet supports declarative, multi-machine self-hosted runner orchestration d
   * `./scripts/manage_runner.sh prune`: One-click garbage collection of offline ghost runners.
   * Detailed architecture and setup: see [docs/runner-fleet-guide.md](docs/runner-fleet-guide.md).
 
+## Platform × Agent × Capability Matrix
+
+The support matrix across operating systems, AI coding agents, and system capabilities:
+
+### Agent Capabilities
+
+| Agent | Probe & Discovery | Quota Ingestion | Task Dispatch & Handoff | One-Click Upgrade |
+| --- | --- | --- | --- | --- |
+| **Claude Code** (`claude`) | Full | Unsupported (Direct console billing) | Full (POSIX local/SSH) | Full (`claude update` / `npm`) |
+| **Codex CLI** (`codex`) | Full | Full (ChatGPT token / Magpie) | Full (POSIX local/SSH) | Full (`npm`) |
+| **Antigravity** (`agy`) | Full | Full (Google Quota Pools) | Unsupported (Roadmap) | Full (`agy update`) |
+| **OpenCode** (`opencode`) | Full | Unsupported (Multi-provider BYOK) | Unsupported (Roadmap) | Full (`opencode upgrade` / `npm`) |
+| **Pi** (`pi`) | Full | Unsupported (Multi-provider BYOK) | Unsupported (Roadmap) | Full (`pi update` / `npm`) |
+| **Hermes** (`hermes`) | Full | Unsupported (Multi-provider BYOK) | Unsupported (Roadmap) | Full (`hermes update` / install) |
+| **CodeBuddy** (`codebuddy`) | Full | Full (WorkBuddy/CodeBuddy API) | Unsupported (Roadmap) | Full (`npm`) |
+| **Qoder** (`qoder`) | Full | Full (QoderCN OpenAPI) | Unsupported (Roadmap) | Full (`qodercli update` / `npm`) |
+
+### Platform Support
+
+| Platform / Runtime | Probe & Discovery | Quota Collection | Task Board Dispatch | Remote Upgrade Execution | Runner Fleet Orchestration |
+| --- | --- | --- | --- | --- | --- |
+| **macOS (Darwin)** | Full (POSIX `sh`) | Full | Full (POSIX) | Full | Partial (Bash runner; launchd pending verification) |
+| **Linux (Debian/Ubuntu/RHEL)** | Full (POSIX `sh`) | Full | Full (POSIX) | Full | Full (systemd / background daemon + proxy) |
+| **Windows (Native PowerShell)** | Full (Chunked b64 PowerShell) | Full | Unsupported (Requires POSIX streaming) | Full (PowerShell) | Unsupported (Requires bash/Linux runner environment) |
+| **WSL2 (Windows Subsystem)** | Full (`wsl.exe` / SSH) | Full | Full (via WSL SSH target) | Full (POSIX) | Partial (Runs inside Linux distro) |
+
+> Detailed architectural contracts and design proposals: see [docs/requirements.md](docs/requirements.md) and [docs/adr/ADR-001-operation-modes.md](docs/adr/ADR-001-operation-modes.md).
+
 ## CLI
 
 From `backend/` (or prefix any command with `PYTHONPATH=backend` at the repo
@@ -275,53 +307,80 @@ root):
 
 ## Security
 
-Inventory/configuration scanning and Paseo observation are read-only. Explicit
-upgrade and coding-task execution actions use the target user's permissions.
+Agent Fleet enforces a defense-in-depth architecture covering network access,
+execution boundaries, authentication, and data sanitization:
 
-* Only whitelisted, known config paths are read; `.ssh/`, private keys,
-  `.gnupg/`, `.aws/credentials`, `.npmrc`, `.netrc`, `.docker/config.json`,
-  `.kube/config`, `/etc/shadow`, keychain files and similar are on a hard deny
-  list in the probe generator.
-* `~/.pi/agent/auth.json` and `~/.hermes/.env` are never requested.
-* Imported quota credentials live in `data/quota_accounts.json` with mode
-  `0600`, outside SQLite; the API never returns the credential, and the fleet
-  export never contains it. Credentials are only used for the vendor usage
-  request.
-  Magpie-linked accounts store a source reference instead of credentials.
-* Antigravity OAuth client secrets are not stored in source. Put them in
-  `data/antigravity_clients.json` (mode `0600`, gitignored) as a JSON object
-  mapping `client_id` to `client_secret`, or pass the same object through
-  `AGENT_FLEET_ANTIGRAVITY_CLIENTS`. Only the public client IDs live in
-  `antigravity_quota.py`.
-* `~/.gemini/agy-swap/accounts.json` is read for quota display only. The
-  adapter copies an explicit whitelist (email, name, aliases, tier, quota
-  buckets), so `token_data`, `token_hash`, `secret_ref` and every other
-  credential field are dropped; the raw file is never persisted.
-* By default the API is unauthenticated for seamless local loopback development.
-  When binding to shared or untrusted networks, configure `AGENT_FLEET_API_SECRET` in `.env`
-  (with optional strict mode `AGENT_FLEET_ALLOW_ANONYMOUS_READONLY=false`).
-* Output is sanitized three ways: field whitelists, recursive dropping of
-  credential-named keys, and redaction of credential-looking values.
-* URLs keep scheme + host + port + path; query strings, embedded credentials
-  and secret-looking path segments are stripped.
-* Environment blocks (user settings and per-server MCP `env`/`headers`) are
-  reported as key names only.
-* Raw remote config lives in memory during a scan only; it is never written to
-  disk. The database stores the sanitized structure.
-* Every configuration carries a `resolution`:
+### 1. Operational Dual Nature & Trust Boundaries
+* **Read-Only Discovery by Default:** Fleet inventory scanning, configuration
+  probing, version inspection, and daemon observation are strictly read-only.
+  Probes run stateless scripts that never write to disk or alter environment variables.
+* **Controlled Remote Operations:** Explicit actions (upgrades, runner lifecycle,
+  task handoff) execute only upon explicit user invocation.
+* **Target User Privilege Boundary:** Remote operations execute strictly under
+  the permissions of the configured SSH user account on the target machine. Root or
+  `sudo` privileges are never requested or assumed.
+* **Zero Arbitrary Remote Execution:** The backend rejects arbitrary client-supplied
+  shell commands. All operational scripts are synthesized on the server from strict
+  whitelists (`UPGRADE_RULES`) and parameterless templates run through `PATH_BOOTSTRAP`
+  with per-runtime concurrency locks.
 
-  * `declared` - at least one scope file existed but could not be read or
-    parsed, so stored values are "as written in the files that were readable"
-    and may miss an override. A warning names the unreadable file.
-  * `effective` - every file in the agent's precedence chain was readable or
-    definitively absent, so the merged values reflect all declared scopes
-    (for example project settings overriding user settings for Claude).
-    A project-scope file that was never probed because the second pass failed
-    does not lower this verdict; the scope table shows `not_probed` in that
-    case.
+### 2. API Authentication & Network Access Control
+* **Loopback Development Mode:** By default, the API is unauthenticated for seamless
+  local loopback development.
+* **Bearer Token Authentication (`AGENT_FLEET_API_SECRET`):** When binding to shared
+  networks or exposing the UI:
+  * *Default (Anonymous Read-Only):* `AGENT_FLEET_ALLOW_ANONYMOUS_READONLY=true` allows
+    unauthenticated reads while requiring Bearer authorization for write operations
+    (sync, scan triggers, upgrades, runner actions).
+  * *Strict Mode:* Setting `AGENT_FLEET_ALLOW_ANONYMOUS_READONLY=false` enforces Bearer
+    token authentication across all API endpoints.
+* **WebUI Bearer Injection (Fixes #49):** Frontend requests route through a unified `authFetch`
+  layer that persists access tokens and handles authentication challenges.
 
-  Even an `effective` answer only covers files: environment variables and CLI
-  flags are outside what the probe can see, and that is never claimed.
+### 3. Safe OpenSSH Practices & Process Isolation
+* **Preserving OpenSSH Alias Semantics (Fixes #50):** The runner pipeline prioritizes configured
+  SSH aliases as the destination operand while specifying `-o HostName=<address>`,
+  guaranteeing that host-specific directives in `~/.ssh/config` (`IdentityFile`,
+  `ProxyJump`, ports, users) are preserved without conflict.
+* **Windows & WSL Runtime Topology (Fixes #51):** First-run inventory seeding retains Windows
+  native transport contracts and preserves declared `wsl:` child runtimes.
+* **Controller Public Key Diagnostics (Fixes #47):** The controller provides safe, read-only
+  inspection of its local SSH public key (`GET /api/inventory/controller-ssh-key`)
+  along with structured connectivity diagnostics and remediation suggestions for
+  remote targets.
+* **Process Slot & Path Isolation (Fixes #52, #53):** GitHub Actions runner management enforces
+  exact slot name matching (`slot-0` vs legacy instances) and path-boundary
+  isolated termination (`pkill -f "<path>/"`), preventing cross-slot or collateral
+  process termination.
+* **Outbound-Only Runners:** GitHub Actions runners communicate with GitHub
+  exclusively via outbound HTTPS/WSS long polling. Nodes require zero inbound open ports.
+
+### 4. Multi-Layer Sanitization & Secrecy
+* **Hard Path Deny List:** The probe generator unconditionally refuses to inspect
+  `.ssh/`, private keys, `.aws/credentials`, `.npmrc`, `.netrc`, `.kube/config`,
+  `/etc/shadow`, keychain files, `~/.pi/agent/auth.json`, and `~/.hermes/.env`.
+* **Three-Layer Sanitization (`sanitize.py`):**
+  1. *Field Whitelisting:* Adapters emit only recognized fields; unknown keys are
+     recorded by name with values discarded.
+  2. *Recursive Name Dropping:* Keys matching credential patterns (`apiKey`, `token`,
+     `password`, `Authorization`) are removed recursively at any nesting level.
+  3. *Pattern Redaction:* Values resembling secrets (`sk-...`, `ghp_...`, JWTs,
+     `Bearer <token>`) are replaced with masked placeholders.
+* **URL & Environment Scrubbing:** URLs keep only scheme, host, port, and path;
+  query parameters and secrets are stripped. Environment blocks list variable
+  names only, never values.
+* **Memory-Only Raw Config:** Raw remote configuration streams exist only in memory
+  during active parsing and are never persisted to disk or SQLite.
+
+### 5. Credential Store Isolation
+* **Quota Account Store:** Imported quota credentials live in `data/quota_accounts.json`
+  with restricted mode `0600`, outside SQLite. The API never outputs raw credentials.
+* **Antigravity OAuth Secrets:** Client secrets are stored in `data/antigravity_clients.json`
+  (mode `0600`) or via `AGENT_FLEET_ANTIGRAVITY_CLIENTS`, masked in API responses
+  and UI views.
+* **AGY Swap Whitelist:** Host quota snapshots read from `~/.gemini/agy-swap/accounts.json`
+  copy only whitelisted quota metrics (tier, bucket limits, reset times), dropping all
+  token hashes and secret references.
 
 ## Configuration (.env and environment variables)
 

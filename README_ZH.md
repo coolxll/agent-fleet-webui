@@ -13,12 +13,17 @@
 
 ## 🌟 核心特性概览
 
+- **操作双轨制（只读观测 + 受控运维）**：
+  - **只读探测与状态观测**：探针扫描零副作用，非侵入式探测跨机 Agent 安装、多层配置、版本差异及配额水位，无需在远端安装常驻 Daemon。
+  - **受控远端写操作**：支持白名单约束的受控运维能力（Agent 一键版本升级、Runner Fleet 编排与任务流转），严禁执行任意客户端拼接指令。
 - **跨平台多 Agent 深度探测与配置分析**：
   - 支持 **Codex CLI、Claude Code、OpenCode、Pi、Hermes、Antigravity (AGY)、CodeBuddy、Qoder (QoderCN)** 等主流代码智能体。
   - 自动识别并结构化解析系统级、用户级、项目级多层级配置，提供精确的 `resolution`（有效配置生效判定），敏感凭证三层物理脱敏。
 - **全局舰队大盘与 Agent 矩阵 (Matrix)**：
   - 矩阵式呈现跨主机与跨 Agent 的安装分布、版本差异、配置漂移与运行健康度。
   - 支持任意两台机器或同一机器不同历史快照间的字段级可视化 Diff 对比。
+- **受控 Agent 一键升级 (One-Click Upgrades)**：
+  - 支持在 WebUI 针对单实例、按机器或全网批量发起 Agent 自动升级，优先调用官方 CLI 升级器（如 `claude update`、`opencode upgrade`、`agy update`），兜底调用包管理器。
 - **额度查询中心 (Quotas) & 认证配置中心**：
   - 集中监控 Codex、ChatGPT、Antigravity (Google Quota Pools)、QoderCN、Trae CN、WorkBuddy 等平台模型剩余配额、5 小时/周维度使用水位及重置倒计时。
   - 内置**认证配置中心（Auth Settings）**：支持在 WebUI 页面直接查看与更新 Antigravity OAuth Client Secrets，采用 0600 权限原子落盘与严格掩码脱敏，杜绝私钥泄漏。
@@ -227,20 +232,64 @@ cp .env.example .env
 
 ---
 
+## 📊 平台 × Agent × 能力支持矩阵 (Capability Matrix)
+
+跨平台系统、支持的 AI 编码智能体与平台能力矩阵：
+
+### 1. Agent 能力矩阵
+
+| Agent 标识 | 智能体名称 | 探针发现 (Probe) | 额度监控 (Quota) | 任务看板调度 (Handoff) | 一键远程升级 (Upgrade) |
+| --- | --- | --- | --- | --- | --- |
+| `claude` | Claude Code | **完整支持 (Full)** | 不适用 (控制台直接计费) | **完整支持 (Full)** (仅限 POSIX) | **完整支持 (Full)** (`claude update` / `npm`) |
+| `codex` | Codex CLI | **完整支持 (Full)** | **完整支持 (Full)** (OAuth / Magpie) | **完整支持 (Full)** (仅限 POSIX) | **完整支持 (Full)** (`npm`) |
+| `agy` | Antigravity (AGY) | **完整支持 (Full)** | **完整支持 (Full)** (Google 配额池) | 规划中 (Roadmap) | **完整支持 (Full)** (`agy update`) |
+| `opencode` | OpenCode | **完整支持 (Full)** | 不适用 (多模型 BYOK) | 规划中 (Roadmap) | **完整支持 (Full)** (`opencode upgrade` / `npm`) |
+| `pi` | Pi Coding Agent | **完整支持 (Full)** | 不适用 (多模型 BYOK) | 规划中 (Roadmap) | **完整支持 (Full)** (`pi update` / `npm`) |
+| `hermes` | Hermes Agent | **完整支持 (Full)** | 不适用 (多模型 BYOK) | 规划中 (Roadmap) | **完整支持 (Full)** (`hermes update` / 安装脚本) |
+| `codebuddy` | CodeBuddy / WorkBuddy | **完整支持 (Full)** | **完整支持 (Full)** (Token / 本地扩展) | 规划中 (Roadmap) | **完整支持 (Full)** (`npm`) |
+| `qoder` | Qoder / QoderCN | **完整支持 (Full)** | **完整支持 (Full)** (OpenAPI / 资源包) | 规划中 (Roadmap) | **完整支持 (Full)** (`qodercli update` / `npm`) |
+
+### 2. 操作系统与平台环境支持
+
+| 操作系统 / 运行环境 | 探针发现 (Probe) | 额度监控采集 | 任务看板调度 (Handoff) | 远程升级执行 | Runner Fleet 编排 |
+| --- | --- | --- | --- | --- | --- |
+| **macOS (Darwin)** | **完整支持 (Full)** (POSIX `sh`) | **完整支持 (Full)** | **完整支持 (Full)** (本地/SSH) | **完整支持 (Full)** | **部分支持 (Partial)** (Bash 运行器; launchd 守护待验证) |
+| **Linux (Debian/Ubuntu/RHEL)** | **完整支持 (Full)** (POSIX `sh`) | **完整支持 (Full)** | **完整支持 (Full)** (本地/SSH) | **完整支持 (Full)** | **完整支持 (Full)** (systemd / 后台常驻 + 代理出口) |
+| **Windows (原生 PowerShell)** | **完整支持 (Full)** (分片 Base64) | **完整支持 (Full)** | 不支持 (需 POSIX 流式会话) | **完整支持 (Full)** (PowerShell 脚本) | 不支持 (依赖 Bash/Linux 运行环境) |
+| **WSL2 (Windows 子系统)** | **完整支持 (Full)** (`wsl.exe` / SSH) | **完整支持 (Full)** | **完整支持 (Full)** (需 WSL SSH 目标) | **完整支持 (Full)** | **部分支持 (Partial)** (运行于 Linux 发行版内) |
+
+> 详细架构决策与技术契约请参阅：[docs/requirements.md](docs/requirements.md) 与 [docs/adr/ADR-001-operation-modes.md](docs/adr/ADR-001-operation-modes.md)。
+
+---
+
 ## 🔒 安全性设计与凭证防泄露
 
-系统在架构上贯彻最高级别的安全边界：
+系统在架构上贯彻最高级别的安全边界与纵深防御体系：
 
-1. **探针扫描纯只读**：
-   - 机器探针扫描仅收集版本、模型名、MCP 与配置生效范围，严禁修改任何远端配置。
-   - 严格的黑名单过滤：`.ssh/`、各类私钥、`.aws/credentials`、`.npmrc`、`.kube/config`、`/etc/shadow` 等均在探针底层被硬编码拒绝读取。
-2. **三层脱敏与无凭据持久化**：
-   - 远程机器的原始配置文件仅在内存分析时短暂驻留，落盘数据库与 API 返回结构均经过字段白名单过滤、敏感 Key 递归移除及模式掩码脱敏。
-   - 导入的配额凭证存放在 `data/quota_accounts.json`（`0600` 权限），API 绝不返回明文秘钥。
-3. **网络通信与接口安全**：
-   - 默认模式下 API 面向本地回环（Loopback）免密开放，适合本机开发。
-   - 当服务需暴露或共享至局域网/Tailnet 时，可通过配置 `AGENT_FLEET_API_SECRET` 启用 Bearer Token 访问控制（并可通过 `AGENT_FLEET_ALLOW_ANONYMOUS_READONLY=false` 开启全站严格认证）。
-   - Runner 仅通过长轮询出站，内网主机无需对外开放任何端口，杜绝网络攻击面。
+1. **操作双轨制与信任边界 (Operational Trust Boundaries)**：
+   - **日常探测与状态观测绝对只读**：机器探针扫描、配置解析、版本采集与守护进程观测使用无状态脚本流，严禁修改任何远端配置与系统文件。
+   - **受控远端操作**：Agent 升级、Runner 编排与任务调度必须由用户在前端或通过 API 显式触发，执行前展示预览。
+   - **目标机用户权限边界**：所有远端操作均严格限制在目标机器配置的 SSH 用户权限内，系统**绝不申请亦不依赖 root/sudo 特权**。
+   - **零任意命令注入**：后端完全拒绝客户端传入的任意 Shell 字符串；所有操作脚本均由服务端基于白名单规则（`UPGRADE_RULES`）与无参模板合成，经由 `PATH_BOOTSTRAP` 运行并受并发锁保护。
+2. **接口鉴权与访问控制 (API Access Control)**：
+   - 默认模式下 API 绑定本地回环（Loopback）免密开放，适合单人本机开发。
+   - 当服务需暴露或共享至局域网/Tailnet 时，可通过配置 `AGENT_FLEET_API_SECRET` 启用 Bearer Token 访问控制：
+     - *默认匿名只读 (`AGENT_FLEET_ALLOW_ANONYMOUS_READONLY=true`)*：读接口免密，写接口（升级、调度、同步）强制鉴权；
+     - *严格全站认证 (`AGENT_FLEET_ALLOW_ANONYMOUS_READONLY=false`)*：所有 API 请求均必须携带 Bearer Token。
+   - 前端 WebUI 统一接入 `authFetch` 模块，支持 Token 安全持久化、401 自动拦截与全局未授权状态广播 (修复 #49)。
+3. **OpenSSH 安全实践与进程隔离 (SSH Safety & Isolation)**：
+   - **保留 OpenSSH 别名连接语义 (修复 #50)**：优先以 `ssh_alias` 作为 OpenSSH 目的操作数并附加 `-o HostName=<address>`，确保用户在 `~/.ssh/config` 中配置的 `IdentityFile`、`ProxyJump` 与端口策略无损生效。
+   - **保留 Windows 传输契约与 WSL 运行时拓扑 (修复 #51)**：首次导入保留 Windows 机器协议与声明的 WSL 拓扑。
+   - **Controller 公钥安全只读探测 (修复 #47)**：系统提供 Controller 宿主机公钥查看与连通性排错诊断接口（`GET /api/inventory/controller-ssh-key`），仅读取公钥（`.pub`），严禁触碰私钥。
+   - **Runner 槽位精确匹配与路径边界隔离 (修复 #52, #53)**：GitHub Actions 编排严格区分槽位名称（如 `slot-0` 与 legacy 实例），进程停止与清理增加目录末尾斜杠严格匹配（`pkill -f "<path>/"`），杜绝跨槽位误杀。
+   - **纯出站长轮询架构**：Runner 仅主动向 GitHub 发起 HTTPS/WSS 长轮询，目标主机对公网保持 0 端口开放。
+4. **敏感路径黑名单与三层物理脱敏**：
+   - 底层探针生成器硬编码拒绝读取 `.ssh/`、各类私钥、`.aws/credentials`、`.npmrc`、`.kube/config`、`/etc/shadow`、`auth.json` 等敏感文件。
+   - 三层脱敏过滤：白名单字段筛选、敏感 Key 递归剥离（`apiKey`、`token`、`password` 等）与敏感模式正则掩码。
+   - 远程机器原始配置文件仅在内存分析时短暂驻留，落盘数据库与 API 返回结构均为脱敏后的数据。
+5. **凭证隔离存储与零明文持久化**：
+   - 导入的配额凭证存放在 `data/quota_accounts.json`（`0600` 文件权限），与主业务 SQLite 分离，API 绝不返回明文私钥。
+   - Antigravity OAuth Client Secret 存放在 `data/antigravity_clients.json`（`0600` 权限），前端与接口全量掩码展示。
 
 ---
 
