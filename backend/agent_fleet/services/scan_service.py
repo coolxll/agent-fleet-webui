@@ -260,3 +260,60 @@ def _finish(run_id):
         entry["status"] = "done"
         entry["skipped"] = skipped
         entry["finished_at"] = time.time()
+
+
+def recover_interrupted_scans() -> list[str]:
+    """Recover dangling scan runs and tasks on process startup.
+
+    When the application restarts while a scan run is in progress:
+    - ScanRun records in 'running' or 'pending' state are marked as 'interrupted'.
+    - Associated ScanTask records in 'running' or 'pending' state are marked as 'interrupted'.
+    - Any completed ScanTasks (ok, failed, skipped) remain unchanged.
+    - Idempotent: repeated calls produce no further mutations.
+    """
+    with session_scope() as s:
+        runs = s.execute(
+            select(models.ScanRun).where(models.ScanRun.status.in_(["running", "pending"]))
+        ).scalars().all()
+        now = models.utcnow()
+        recovered_ids = []
+        for run in runs:
+            run.status = "interrupted"
+            if not run.error:
+                run.error = "Process restarted while scan was in progress"
+            if run.finished_at is None:
+                run.finished_at = now
+            recovered_ids.append(run.id)
+
+        # Mark all dangling tasks as interrupted
+        tasks = s.execute(
+            select(models.ScanTask).where(models.ScanTask.status.in_(["running", "pending"]))
+        ).scalars().all()
+        affected_run_ids = set(recovered_ids)
+        for task in tasks:
+            task.status = "interrupted"
+            if not task.error:
+                task.error = "Process restarted while scan was in progress"
+            if task.finished_at is None:
+                task.finished_at = now
+            affected_run_ids.add(task.run_id)
+
+        for rid in affected_run_ids:
+            run = s.get(models.ScanRun, rid)
+            if run:
+                all_tasks = s.execute(
+                    select(models.ScanTask).where(models.ScanTask.run_id == rid)
+                ).scalars().all()
+                run.succeeded = sum(1 for t in all_tasks if t.status == "ok")
+                run.failed = sum(1 for t in all_tasks if t.status == "failed")
+                if all_tasks:
+                    run.total = len(all_tasks)
+
+        s.commit()
+
+        for rid in affected_run_ids:
+            if rid in _registry:
+                _registry[rid]["status"] = "interrupted"
+
+        return recovered_ids
+

@@ -16,6 +16,7 @@ import yaml
 from sqlalchemy import select, delete
 from agent_fleet import models
 from agent_fleet.db import session_scope
+from agent_fleet.remotes.ssh import build_ssh_command, resolve_ssh_target
 from agent_fleet.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ def host_to_dict(h: models.Host, include_runtimes: bool = True) -> dict[str, Any
         "tags": h.tags or {},
         "ssh_host": h.ssh_host or h.hostname,
         "ssh_port": h.ssh_port or 22,
-        "ssh_user": h.ssh_user or "lynn",
+        "ssh_user": h.ssh_user or "",
         "proxy": h.proxy or "",
         "runner_enabled": bool(h.runner_enabled),
         "runner_max_concurrency": h.runner_max_concurrency or 2,
@@ -54,6 +55,9 @@ def host_to_dict(h: models.Host, include_runtimes: bool = True) -> dict[str, Any
                 "reachable": r.reachable,
                 "last_seen_at": models.iso_utc(r.last_seen_at),
                 "last_error": r.last_error,
+                "ssh_host": r.ssh_host,
+                "ssh_port": r.ssh_port,
+                "collect_user": r.collect_user,
             }
             for r in (h.runtimes or [])
         ]
@@ -233,7 +237,8 @@ def create_host(payload: dict[str, Any]) -> dict[str, Any]:
         if existing:
             raise ValueError(f"主机已存在: {name}")
 
-        user = str(payload.get("ssh_user") or "lynn").strip()
+        raw_user = payload.get("ssh_user")
+        user = str(raw_user).strip() if raw_user is not None and str(raw_user).strip() else None
         h = models.Host(
             id=models.new_id(),
             name=name,
@@ -313,6 +318,17 @@ def update_host(id_or_name: str, payload: dict[str, Any]) -> dict[str, Any]:
             for rt in h.runtimes:
                 rt.enabled = h.enabled
 
+        # Synchronize SSH connection parameters to native / primary runtimes
+        if any(k in payload for k in ("ssh_host", "ssh_port", "ssh_user")):
+            for rt in (h.runtimes or []):
+                if rt.key in ("native", "primary"):
+                    if "ssh_host" in payload:
+                        rt.ssh_host = h.ssh_host
+                    if "ssh_port" in payload:
+                        rt.ssh_port = h.ssh_port
+                    if "ssh_user" in payload:
+                        rt.collect_user = h.ssh_user
+
         h.updated_at = models.utcnow()
         s.flush()
         return host_to_dict(h)
@@ -356,17 +372,33 @@ def export_as_yaml() -> str:
     return yaml.dump(doc, allow_unicode=True, sort_keys=False)
 
 
-def test_ssh_connectivity(id_or_name: str) -> dict[str, Any]:
+def test_host_connectivity(id_or_name: str) -> dict[str, Any]:
     """Test SSH connectivity for a given host."""
     host_data = get_host(id_or_name)
     if not host_data:
         return {"ok": False, "error": f"主机不存在: {id_or_name}"}
 
-    target = host_data["name"]
+    ssh_host = host_data.get("ssh_host") or host_data.get("hostname") or host_data.get("name")
+    ssh_port = host_data.get("ssh_port")
+    ssh_user = host_data.get("ssh_user")
+
+    target = resolve_ssh_target(
+        ssh_host=host_data.get("ssh_host"),
+        ssh_alias=host_data.get("hostname"),
+        host_name=host_data.get("name"),
+        ssh_user=ssh_user,
+    )
+    cmd = build_ssh_command(
+        target=ssh_host,
+        port=ssh_port,
+        user=ssh_user,
+        connect_timeout=5,
+        remote_command="uname -srm",
+    )
     start_time = time.time()
     try:
         res = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", target, "uname -srm"],
+            cmd,
             capture_output=True,
             text=True,
             timeout=8,
@@ -393,3 +425,6 @@ def test_ssh_connectivity(id_or_name: str) -> dict[str, Any]:
             "latency_ms": int((time.time() - start_time) * 1000),
             "error": str(exc),
         }
+
+
+test_ssh_connectivity = test_host_connectivity
