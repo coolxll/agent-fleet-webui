@@ -692,6 +692,7 @@ def overview():
                     "total": r.total,
                     "succeeded": r.succeeded,
                     "failed": r.failed,
+                    "error": r.error,
                 }
                 for r in runs
             ],
@@ -1464,6 +1465,8 @@ def get_scan(run_id: str):
             select(models.ScanTask).where(models.ScanTask.run_id == run_id)
         ).scalars().all()
         live = scan_service.run_status(run_id) or {}
+        interrupted = sum(1 for t in tasks if t.status == "interrupted")
+        skipped = sum(1 for t in tasks if t.status == "skipped")
         out = {
             "id": run.id,
             "status": run.status,
@@ -1473,12 +1476,16 @@ def get_scan(run_id: str):
             "total": run.total,
             "succeeded": run.succeeded,
             "failed": run.failed,
+            "skipped": skipped,
+            "interrupted": interrupted,
+            "error": run.error,
             "concurrency": run.concurrency,
             "live": {
                 "done": live.get("done", 0),
                 "ok": live.get("ok", 0),
                 "failed": live.get("failed", 0),
-                "status": live.get("status"),
+                "interrupted": live.get("interrupted", interrupted if run.status == "interrupted" else 0),
+                "status": live.get("status", run.status if run.status in ("interrupted", "failed", "completed", "partial") else None),
             },
             "tasks": [
                 {
@@ -1503,6 +1510,18 @@ def list_scans(limit: int = Query(20)):
         runs = s.execute(
             select(models.ScanRun).order_by(models.ScanRun.started_at.desc()).limit(limit)
         ).scalars().all()
+        run_ids = [r.id for r in runs]
+        task_stats: dict[str, dict[str, int]] = {}
+        if run_ids:
+            tasks = s.execute(
+                select(models.ScanTask.run_id, models.ScanTask.status).where(
+                    models.ScanTask.run_id.in_(run_ids)
+                )
+            ).all()
+            for r_id, st in tasks:
+                stats = task_stats.setdefault(r_id, {"interrupted": 0, "skipped": 0})
+                if st in stats:
+                    stats[st] += 1
         return {
             "runs": [
                 {
@@ -1513,6 +1532,9 @@ def list_scans(limit: int = Query(20)):
                     "total": r.total,
                     "succeeded": r.succeeded,
                     "failed": r.failed,
+                    "skipped": task_stats.get(r.id, {}).get("skipped", 0),
+                    "interrupted": task_stats.get(r.id, {}).get("interrupted", 0),
+                    "error": r.error,
                 }
                 for r in runs
             ]

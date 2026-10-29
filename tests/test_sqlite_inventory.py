@@ -1,8 +1,10 @@
+import subprocess
 import pytest
 
 from agent_fleet import models
 from agent_fleet.db import session_scope
 from agent_fleet.services import sqlite_inventory
+from agent_fleet.services.scanner import RuntimeRef
 
 
 def test_seed_from_legacy_files(fleet_db):
@@ -346,3 +348,142 @@ pools:
     fallback_data = json.loads(res_fallback.stdout.strip())
     assert "node-deleted" in fallback_data["hosts"], "SQLite 为空时应正常回退至 YAML"
     assert "org/deleted-repo" in fallback_data["pools"]
+
+
+def test_update_host_ssh_fields_sync_to_runtime(fleet_db):
+    """Test updating host ssh_host, ssh_port, ssh_user synchronizes to primary runtime."""
+    host_name = "test-ssh-sync-node"
+    sqlite_inventory.delete_host(host_name)
+
+    # 1. Create host with initial SSH connection fields
+    created = sqlite_inventory.create_host(
+        {
+            "name": host_name,
+            "hostname": "old.local",
+            "ssh_host": "old.local",
+            "ssh_port": 22,
+            "ssh_user": "initialuser",
+        }
+    )
+    assert created["runtimes_count"] == 1
+    rt = created["runtimes"][0]
+    assert rt["ssh_host"] == "old.local"
+    assert rt["ssh_port"] == 22
+    assert rt["collect_user"] == "initialuser"
+
+    # 2. Update SSH fields on Host
+    updated = sqlite_inventory.update_host(
+        host_name,
+        {
+            "ssh_host": "192.168.10.55",
+            "ssh_port": 22022,
+            "ssh_user": "syncedadmin",
+        },
+    )
+    assert updated["ssh_host"] == "192.168.10.55"
+    assert updated["ssh_port"] == 22022
+    assert updated["ssh_user"] == "syncedadmin"
+
+    # Verify native runtime in returned dict is synchronized
+    rt_updated = updated["runtimes"][0]
+    assert rt_updated["ssh_host"] == "192.168.10.55"
+    assert rt_updated["ssh_port"] == 22022
+    assert rt_updated["collect_user"] == "syncedadmin"
+
+    # 3. Verify persistence from fresh DB read
+    refetched = sqlite_inventory.get_host(host_name)
+    assert refetched is not None
+    db_rt = refetched["runtimes"][0]
+    assert db_rt["ssh_host"] == "192.168.10.55"
+    assert db_rt["ssh_port"] == 22022
+    assert db_rt["collect_user"] == "syncedadmin"
+
+    sqlite_inventory.delete_host(host_name)
+
+
+def test_host_connectivity_with_custom_ssh_params(fleet_db, monkeypatch):
+    """Test test_host_connectivity correctly builds ssh argv with custom host, port, user."""
+    host_name = "test-custom-connect-host"
+    sqlite_inventory.delete_host(host_name)
+
+    created = sqlite_inventory.create_host(
+        {
+            "name": host_name,
+            "hostname": "bastion-alias",
+            "ssh_host": "10.200.1.5",
+            "ssh_port": 8022,
+            "ssh_user": "fleetdeployer",
+        }
+    )
+
+    captured_commands = []
+
+    def mock_subprocess_run(cmd, *args, **kwargs):
+        captured_commands.append(cmd)
+        class CompletedProcess:
+            returncode = 0
+            stdout = "Linux 6.6.0-test x86_64\n"
+            stderr = ""
+        return CompletedProcess()
+
+    monkeypatch.setattr(subprocess, "run", mock_subprocess_run)
+
+    # Test connectivity with custom SSH parameters
+    res = sqlite_inventory.test_host_connectivity(host_name)
+    assert res["ok"] is True
+    assert res["host"] == "fleetdeployer@10.200.1.5"
+    assert res["uname"] == "Linux 6.6.0-test x86_64"
+
+    assert len(captured_commands) == 1
+    cmd = captured_commands[0]
+    assert cmd[0] == "ssh"
+    assert "-p" in cmd
+    p_idx = cmd.index("-p")
+    assert cmd[p_idx + 1] == "8022"
+    assert "fleetdeployer@10.200.1.5" in cmd
+    assert "uname -srm" in cmd
+
+    # Also test alias compatibility (no custom port, no custom user)
+    alias_host_name = "test-alias-connect-host"
+    sqlite_inventory.delete_host(alias_host_name)
+    sqlite_inventory.create_host(
+        {
+            "name": alias_host_name,
+            "hostname": alias_host_name,
+            "ssh_host": alias_host_name,
+            "ssh_port": 22,
+            "ssh_user": "",
+        }
+    )
+    res_alias = sqlite_inventory.test_host_connectivity(alias_host_name)
+    assert res_alias["ok"] is True
+    cmd_alias = captured_commands[-1]
+    assert "-p" not in cmd_alias
+    assert alias_host_name in cmd_alias
+
+    sqlite_inventory.delete_host(host_name)
+    sqlite_inventory.delete_host(alias_host_name)
+
+
+def test_runtime_ref_target_and_runner_ssh_resolution():
+    """Test RuntimeRef target resolution and runner parameter construction."""
+    ref_custom = RuntimeRef(
+        id="rt-custom",
+        host_name="node-1",
+        ssh_alias="node-1",
+        ssh_host="172.20.0.10",
+        ssh_port=3022,
+        collect_user="deploy",
+    )
+    assert ref_custom.target == "deploy@172.20.0.10"
+
+    ref_alias = RuntimeRef(
+        id="rt-alias",
+        host_name="openssh-alias",
+        ssh_alias="openssh-alias",
+        ssh_host="",
+        ssh_port=22,
+        collect_user="",
+    )
+    assert ref_alias.target == "openssh-alias"
+

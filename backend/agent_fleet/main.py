@@ -20,7 +20,7 @@ from agent_fleet.db import create_all, init_engine
 from agent_fleet.services.inventory_sync import add_local_runtime
 from agent_fleet.services import sqlite_inventory
 from agent_fleet.services.scheduler import get_schedule
-from agent_fleet.services import task_service, magpie_quota
+from agent_fleet.services import task_service, magpie_quota, scan_service
 from agent_fleet.settings import ROOT, get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -41,6 +41,12 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning("sqlite inventory migration failed: %s", exc)
     task_service.recover_interrupted()
+    try:
+        recovered = scan_service.recover_interrupted_scans()
+        if recovered:
+            log.info("recovered %d interrupted scan run(s): %s", len(recovered), recovered)
+    except Exception as exc:
+        log.warning("scan recovery failed: %s", exc)
     if settings.include_local_runtime:
         try:
             add_local_runtime(settings)

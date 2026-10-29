@@ -29,6 +29,7 @@ from agent_fleet.remotes.probe import (
 )
 from agent_fleet.remotes.probe import _safe_path
 from agent_fleet.remotes.probe_win import build_windows_probe_script
+from agent_fleet.remotes.ssh import resolve_ssh_target
 
 
 @dataclass
@@ -50,7 +51,12 @@ class RuntimeRef:
 
     @property
     def target(self) -> str:
-        return self.ssh_alias or self.ssh_host or self.host_name or ""
+        return resolve_ssh_target(
+            ssh_host=self.ssh_host,
+            ssh_alias=self.ssh_alias,
+            host_name=self.host_name,
+            ssh_user=self.collect_user,
+        )
 
 
 def to_ref(rt) -> RuntimeRef:
@@ -104,14 +110,15 @@ def detect_kind(facts) -> str:
 
 def build_runner(rt, settings):
     """Create the runner for a runtime (RuntimeRef or ORM row)."""
+    port = rt.ssh_port if (rt.ssh_port and int(rt.ssh_port) != 22) else None
     if rt.transport == "local":
         return LocalRunner()
     if rt.transport == "wsl":
-        parent = WindowsRunner(rt.target, rt.ssh_port, settings.ssh_connect_timeout)
+        parent = WindowsRunner(rt.target, port, settings.ssh_connect_timeout)
         return WslRunner(parent, rt.wsl_distro or "", rt.wsl_user)
     if rt.transport == "windows":
-        return WindowsRunner(rt.target, rt.ssh_port, settings.ssh_connect_timeout)
-    return SSHRunner(rt.target, rt.ssh_port, settings.ssh_connect_timeout)
+        return WindowsRunner(rt.target, port, settings.ssh_connect_timeout)
+    return SSHRunner(rt.target, port, settings.ssh_connect_timeout)
 
 
 def _fallback_kind_from_error(stderr: str) -> str:
@@ -257,7 +264,8 @@ async def scan_runtime(rt, settings) -> RuntimeScanResult:
 
 
 async def _discover_wsl(rt, settings):
-    parent = CommandRunner(rt.target, rt.ssh_port, settings.ssh_connect_timeout)
+    port = rt.ssh_port if (rt.ssh_port and int(rt.ssh_port) != 22) else None
+    parent = CommandRunner(rt.target, port, settings.ssh_connect_timeout)
     res = await parent.run_command(["wsl.exe", "-l", "-q"], min(20, settings.command_timeout))
     if not res.ok or not res.stdout:
         return []
