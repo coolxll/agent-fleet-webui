@@ -298,3 +298,147 @@ async def test_missing_transcript_blocks_handoff(fleet_db, tmp_path, monkeypatch
     monkeypatch.setattr(service, 'get_session_transcript', missing)
     with pytest.raises(service.TaskError, match='unavailable'):
         await service.preview_handoff(task_id, target(runtime_id, tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_handoff_stage_startup_and_native_session_linkage(fleet_db, tmp_path):
+    """Handoff stage startup immediately links session_id if native session is known/resumed."""
+    task_id, runtime_id, source_id = seed(tmp_path)
+    service.link_session(task_id, source_id)
+    executable, _ = fake_agent(tmp_path, claude=True, resume=True)
+    with session_scope() as db:
+        db.add(models.AgentInstallation(runtime_id=runtime_id, agent_id='claude', exec_path=executable))
+
+    draft = target(runtime_id, tmp_path, agent_id='claude', session_mode='auto')
+    preview = await service.preview_handoff(task_id, draft)
+    assert preview['resume_session_id'] == 'source-native'
+
+    result = await service.start_handoff(task_id, {**draft, 'preview_hash': preview['preview_hash']})
+    starting_stage = result['stages'][-1]
+    assert starting_stage['status'] == 'starting'
+    assert starting_stage['native_session_id'] == 'source-native'
+    assert starting_stage['session_id'] == source_id
+
+    # Clean up background job
+    job = service._jobs.get(starting_stage['id'])
+    if job and not job.done():
+        job.cancel()
+        await asyncio.gather(job, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_native_event_arrival_and_session_backfill(fleet_db, tmp_path):
+    """Event arrival links session_id immediately if present, or backfills after delayed sync."""
+    task_id, runtime_id, source_id = seed(tmp_path)
+    stage_id = execution_stage(task_id, runtime_id, tmp_path, agent='codex')
+
+    # Case 1: Session already exists in DB when event arrives
+    with session_scope() as db:
+        codex_session = models.Session(
+            runtime_id=runtime_id, agent_id='codex', session_key='codex-native-1',
+            title='Codex 1', project_path=str(tmp_path), updated_at=models.utcnow()
+        )
+        db.add(codex_session)
+
+    service._update_stage(stage_id, native_session_id='codex-native-1', status='completed')
+    task = service.get_task(task_id)
+    assert task['stages'][-1]['native_session_id'] == 'codex-native-1'
+    assert task['stages'][-1]['session_id'] == codex_session.id
+
+    # Case 2: Session does NOT exist yet when event arrives (delayed sync)
+    stage_id_2 = execution_stage(task_id, runtime_id, tmp_path, agent='codex')
+    service._update_stage(stage_id_2, native_session_id='codex-delayed-sync', status='completed')
+    task = service.get_task(task_id)
+    assert task['stages'][-1]['native_session_id'] == 'codex-delayed-sync'
+    assert task['stages'][-1]['session_id'] is None
+
+    # Simulate session sync completing later
+    with session_scope() as db:
+        delayed_session = models.Session(
+            runtime_id=runtime_id, agent_id='codex', session_key='codex-delayed-sync',
+            title='Codex Delayed', project_path=str(tmp_path), updated_at=models.utcnow()
+        )
+        db.add(delayed_session)
+
+    # Resolution occurs automatically upon get_task / backfill
+    with session_scope() as db:
+        backfilled = service.backfill_stage_sessions(db, task_id)
+        assert backfilled == 1
+
+    task = service.get_task(task_id)
+    assert task['stages'][-1]['session_id'] == delayed_session.id
+
+
+@pytest.mark.asyncio
+async def test_next_hop_handoff_prioritizes_latest_confirmed_session(fleet_db, tmp_path):
+    """Next hop handoff prefers the latest valid completed session over stale initial session."""
+    task_id, runtime_id, source_id = seed(tmp_path)
+    service.link_session(task_id, source_id)
+
+    # Add intermediate completed Codex session
+    with session_scope() as db:
+        codex_session = models.Session(
+            runtime_id=runtime_id, agent_id='codex', session_key='codex-mid-key',
+            title='Codex Mid', project_path=str(tmp_path), updated_at=models.utcnow()
+        )
+        db.add(codex_session); db.flush()
+        db.add(models.SessionTranscript(session_id=codex_session.id, turns=[
+            {'role': 'user', 'content': 'Do intermediate work'},
+            {'role': 'assistant', 'content': 'Codex intermediate turn evidence'}
+        ]))
+        codex_stage = TaskStage(
+            task_id=task_id, runtime_id=runtime_id, session_id=codex_session.id,
+            host_name='test-host', agent_id='codex', native_session_id='codex-mid-key',
+            project_path=str(tmp_path), kind='handoff', status='completed',
+            output='Codex completed turn', started_at=models.utcnow()
+        )
+        db.add(codex_stage)
+
+    # Preview next hop to Claude (session_mode='new')
+    preview = await service.preview_handoff(task_id, target(runtime_id, tmp_path, agent_id='claude', session_mode='new'))
+    assert preview['source_session_id'] == codex_session.id
+    assert 'Codex intermediate turn evidence' in preview['prompt']
+    assert 'Visible progress' not in preview['prompt']
+    assert 'test-host / codex' in preview['prompt']
+
+
+@pytest.mark.asyncio
+async def test_defense_against_failed_or_invalid_native_handles(fleet_db, tmp_path):
+    """Failed, transcriptless, or invalid handles are strictly barred from resume and source selection."""
+    task_id, runtime_id, source_id = seed(tmp_path)
+    service.link_session(task_id, source_id)
+
+    with session_scope() as db:
+        # Failed stage with handle
+        db.add(TaskStage(
+            task_id=task_id, runtime_id=runtime_id, agent_id='codex', native_session_id='broken-handle',
+            project_path=str(tmp_path), kind='handoff', status='failed', error='Process crashed',
+            started_at=models.utcnow()
+        ))
+        # Stage with invalid / null handle
+        db.add(TaskStage(
+            task_id=task_id, runtime_id=runtime_id, agent_id='codex', native_session_id='null',
+            project_path=str(tmp_path), kind='handoff', status='completed', output='',
+            started_at=models.utcnow()
+        ))
+        # Stage linked to empty transcript session
+        empty_session = models.Session(
+            runtime_id=runtime_id, agent_id='codex', session_key='empty-session-key',
+            project_path=str(tmp_path), message_count=0, updated_at=models.utcnow()
+        )
+        db.add(empty_session); db.flush()
+        db.add(models.SessionTranscript(session_id=empty_session.id, turns=[]))
+        db.add(TaskStage(
+            task_id=task_id, runtime_id=runtime_id, session_id=empty_session.id,
+            agent_id='codex', native_session_id='empty-session-key',
+            project_path=str(tmp_path), kind='handoff', status='completed', output='',
+            started_at=models.utcnow()
+        ))
+
+    # None of these broken stages should be resumable
+    preview = await service.preview_handoff(task_id, target(runtime_id, tmp_path, agent_id='codex'))
+    assert preview['resume_session_id'] is None
+
+    # Next hop should bypass the failed/empty stages and fall back to the valid source_id
+    assert preview['source_session_id'] == source_id
+    assert 'Visible progress' in preview['prompt']

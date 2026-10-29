@@ -37,8 +37,102 @@ def _task(db, task_id):
     return task
 
 
+def resolve_stage_session(db, stage: TaskStage) -> bool:
+    """Resolve and link stage.session_id from local Session table if available."""
+    if stage.session_id:
+        if db.get(Session, stage.session_id) is not None:
+            return False
+        stage.session_id = None
+    if not stage.native_session_id or not stage.runtime_id or not stage.agent_id:
+        return False
+    matched = db.scalar(
+        select(Session).where(
+            Session.runtime_id == stage.runtime_id,
+            Session.agent_id == stage.agent_id,
+            Session.session_key == stage.native_session_id,
+        )
+    )
+    if matched:
+        stage.session_id = matched.id
+        stage.updated_at = utcnow()
+        return True
+    return False
+
+
+def backfill_stage_sessions(db, task_id: str | None = None) -> int:
+    """Backfill missing session_id on TaskStages where local Session now exists."""
+    stmt = select(TaskStage).where(
+        TaskStage.session_id.is_(None),
+        TaskStage.native_session_id.is_not(None),
+    )
+    if task_id:
+        stmt = stmt.where(TaskStage.task_id == task_id)
+    count = 0
+    for stage in db.scalars(stmt):
+        if resolve_stage_session(db, stage):
+            count += 1
+    if count:
+        db.flush()
+    return count
+
+
+def _is_valid_source_stage(stage: TaskStage, db) -> bool:
+    """Check if stage provides a valid, usable session for subsequent handoff."""
+    if not stage.session_id:
+        return False
+    if stage.status in ('failed', 'interrupted'):
+        return False
+    if stage.error:
+        return False
+    session = db.get(Session, stage.session_id)
+    if not session:
+        return False
+    if session.transcript is not None and not session.transcript.turns and session.message_count == 0:
+        return False
+    return True
+
+
+def _is_stage_resumable(stage: TaskStage, db) -> bool:
+    """Check if stage native session can be safely resumed.
+
+    Strictly rejects failed executions, missing transcripts, or invalid native handles.
+    """
+    native_id = (stage.native_session_id or '').strip()
+    if not native_id or native_id.lower() in ('none', 'null'):
+        return False
+    if stage.status in ('failed', 'interrupted'):
+        return False
+    if stage.error:
+        return False
+    if stage.kind != 'linked' and stage.status not in ('completed', 'review', 'running'):
+        return False
+
+    if stage.session_id:
+        session = db.get(Session, stage.session_id)
+        if not session:
+            return False
+        if session.transcript is not None:
+            turns = session.transcript.turns or []
+            if len(turns) == 0 and not (stage.output or '').strip():
+                return False
+        elif session.message_count == 0 and not (stage.output or '').strip():
+            return False
+    else:
+        if not (stage.output or '').strip():
+            return False
+
+    return True
+
+
 def _stages(db, task_id):
-    return list(db.scalars(select(TaskStage).where(TaskStage.task_id == task_id).order_by(TaskStage.created_at, TaskStage.id)))
+    stages = list(db.scalars(select(TaskStage).where(TaskStage.task_id == task_id).order_by(TaskStage.created_at, TaskStage.id)))
+    changed = False
+    for stage in stages:
+        if resolve_stage_session(db, stage):
+            changed = True
+    if changed:
+        db.flush()
+    return stages
 
 
 def stage_dict(stage):
@@ -135,19 +229,33 @@ async def preview_handoff(task_id, data):
         if source_id and not any(stage.session_id == source_id for stage in stages):
             raise TaskError('Source session must first be linked to this task')
         latest = stages[-1] if stages else None
-        source_id = source_id or next((stage.session_id for stage in reversed(stages) if stage.session_id), None)
+        if not source_id:
+            for stage in reversed(stages):
+                if _is_valid_source_stage(stage, db):
+                    source_id = stage.session_id
+                    break
         title, goal = task.title, task.goal
-        resumable = [stage for stage in stages if stage.runtime_id == ref.id and stage.agent_id == data['agent_id'] and stage.project_path == data['project_path'] and stage.native_session_id and (stage.kind == 'linked' or stage.started_at)]
+        resumable = [
+            stage for stage in stages
+            if stage.runtime_id == ref.id
+            and stage.agent_id == data['agent_id']
+            and stage.project_path == data['project_path']
+            and _is_stage_resumable(stage, db)
+        ]
         resume_stage = resumable[-1] if resumable and data.get('session_mode', 'auto') == 'auto' else None
         resume_id = resume_stage.native_session_id if resume_stage else None
         delta_stages = [stage for stage in stages if not resume_stage or stage.created_at > resume_stage.created_at]
         recent = '\n\n'.join(f"{stage.host_name} / {stage.agent_id} [{stage.status}]\n{stage.output}" for stage in delta_stages if stage.output)
+        source_stage = next((s for s in reversed(stages) if s.session_id == source_id), None) if source_id else latest
         source_path = db.get(Session, source_id).project_path if source_id and db.get(Session, source_id) else None
-        source_description = f'{latest.host_name} / {latest.agent_id} / {latest.project_path}' if latest else 'No linked session'
+        source_description = f'{source_stage.host_name} / {source_stage.agent_id} / {source_stage.project_path}' if source_stage else 'No linked session'
         transcript_text = ''
         if source_id and not (resume_stage and resume_stage.session_id == source_id):
             source = db.get(Session, source_id)
-            if source and source.transcript and source.updated_at and source.transcript.cached_at < source.updated_at:
+            if source and source.transcript and (
+                not source.transcript.turns
+                or (source.updated_at and source.transcript.cached_at and source.transcript.cached_at < source.updated_at)
+            ):
                 source.transcript = None
                 db.flush()
             transcript = await get_session_transcript(db, source_id)
@@ -203,9 +311,18 @@ async def start_handoff(task_id, data):
     with session_scope() as db:
         task = _task(db, task_id)
         ref, executable = _target(db, data)
-        stage = TaskStage(task_id=task_id, active_task_id=task_id, runtime_id=ref.id,
-            source_session_id=preview['source_session_id'], host_name=ref.host_name,
-            agent_id=data['agent_id'], project_path=data['project_path'], prompt=preview['prompt'])
+        stage = TaskStage(
+            task_id=task_id,
+            active_task_id=task_id,
+            runtime_id=ref.id,
+            source_session_id=preview['source_session_id'],
+            host_name=ref.host_name,
+            agent_id=data['agent_id'],
+            project_path=data['project_path'],
+            prompt=preview['prompt'],
+            native_session_id=preview.get('resume_session_id'),
+        )
+        resolve_stage_session(db, stage)
         db.add(stage)
         task.updated_at = utcnow()
         try:
@@ -227,6 +344,7 @@ def _update_stage(stage_id, **values):
             return
         for key, value in values.items():
             setattr(stage, key, value)
+        resolve_stage_session(db, stage)
         stage.updated_at = utcnow()
         if stage.status not in ACTIVE:
             stage.active_task_id = None
