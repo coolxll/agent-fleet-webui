@@ -60,7 +60,7 @@ class Schedule:
                     s.add(row)
                 else:
                     row.value = value
-                    row.updated_at = datetime.utcnow()
+                    row.updated_at = models.utcnow()
             s.commit()
 
     # ---- state ---------------------------------------------------------
@@ -93,14 +93,14 @@ class Schedule:
         if self.enabled:
             if not was_enabled:
                 # Flipping the switch on starts a run now, like a manual scan.
-                self._arm(datetime.utcnow())
+                self._arm(models.utcnow())
             elif self.interval_seconds != old_interval:
                 # Next run still counts from the last run, but an interval that
                 # is already past fires immediately instead of waiting another
                 # full cycle.
-                base = self._last_run_at or datetime.utcnow()
+                base = self._last_run_at or models.utcnow()
                 self._arm(
-                    max(datetime.utcnow(), base + timedelta(seconds=self.interval_seconds))
+                    max(models.utcnow(), base + timedelta(seconds=self.interval_seconds))
                 )
             # The loop keeps the timeout it is sleeping with until woken. If it
             # has not started yet, it picks the deadline set above.
@@ -115,12 +115,13 @@ class Schedule:
         if self._arm_deadline is None:
             # A schedule that is already due (backend was down past its next
             # run) fires now instead of waiting another whole interval.
-            base = self._last_run_at or datetime.utcnow()
+            base = self._last_run_at or models.utcnow()
             self._arm(
-                max(datetime.utcnow(), base + timedelta(seconds=self.interval_seconds))
+                max(models.utcnow(), base + timedelta(seconds=self.interval_seconds))
             )
         try:
-            self._task = asyncio.create_task(self._loop())
+            loop = asyncio.get_running_loop()
+            self._task = loop.create_task(self._loop())
         except RuntimeError:
             # no running loop (sync context): the app lifespan will start it
             self._task = None
@@ -128,7 +129,7 @@ class Schedule:
     def _arm(self, at: datetime = None) -> datetime:
         """Set the next due time (default: one interval from now)."""
         self._arm_deadline = at or (
-            datetime.utcnow() + timedelta(seconds=self.interval_seconds)
+            models.utcnow() + timedelta(seconds=self.interval_seconds)
         )
         return self._arm_deadline
 
@@ -143,7 +144,7 @@ class Schedule:
             if self._arm_deadline is None:
                 self._arm()
             remaining = max(
-                0.0, (self._arm_deadline - datetime.utcnow()).total_seconds()
+                0.0, (self._arm_deadline - models.utcnow()).total_seconds()
             )
             try:
                 await asyncio.wait_for(self._wakeup.wait(), timeout=remaining)
@@ -151,7 +152,7 @@ class Schedule:
                 # Woken by update(): it saved the new interval and re-armed the
                 # deadline. Only run if that deadline has actually passed; a
                 # later one is waited out again.
-                if not self.enabled or datetime.utcnow() < self._arm_deadline:
+                if not self.enabled or models.utcnow() < self._arm_deadline:
                     if not self.enabled:
                         self._arm()  # park until re-enabled
                     continue
@@ -189,7 +190,7 @@ class Schedule:
         # interval after this one began, not after it finished.
         run_id = await scan_service.start_scan(ids, "schedule", get_settings())
         self._last_run_id = run_id
-        self._last_run_at = datetime.utcnow()
+        self._last_run_at = models.utcnow()
         log.info("scheduled scan %s started (%d runtimes)", run_id, len(ids))
 
 

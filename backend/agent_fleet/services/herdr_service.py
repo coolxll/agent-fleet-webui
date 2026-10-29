@@ -206,7 +206,7 @@ async def observe(ref, settings):
 
 
 def _persist(runtime_id, result):
-    now = datetime.utcnow()
+    now = models.utcnow()
     with session_scope() as s:
         if s.get(models.Runtime, runtime_id) is None:
             return
@@ -258,7 +258,7 @@ async def refresh(runtime_ids, settings):
 
 
 def list_observations(runtime_ids=None):
-    now = datetime.utcnow()
+    now = models.utcnow()
     try:
         from agent_fleet.services.updates import compare_versions, latest_available
         latest_info = latest_available("herdr")

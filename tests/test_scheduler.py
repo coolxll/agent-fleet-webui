@@ -13,7 +13,9 @@ from agent_fleet.services.scheduler import Schedule
 
 @pytest.fixture()
 def schedule(fleet_db):
-    return Schedule()
+    s = Schedule()
+    yield s
+    s.stop()
 
 
 def _add_runtime(settings, name="sched-box"):
@@ -168,7 +170,7 @@ def test_interval_change_rearms_the_sleeping_loop(schedule, fleet_db, monkeypatc
 
         schedule.enabled = True
         schedule.interval_seconds = 24 * 3600
-        schedule._last_run_at = datetime.utcnow() - timedelta(minutes=30)
+        schedule._last_run_at = models.utcnow() - timedelta(minutes=30)
         schedule.start()
         task = schedule._task
         await asyncio.sleep(0.05)
@@ -192,7 +194,7 @@ def test_status_reports_the_armed_deadline(schedule):
     async def main():
         schedule.enabled = True
         schedule.interval_seconds = 3600
-        schedule._last_run_at = datetime.utcnow() - timedelta(minutes=5)
+        schedule._last_run_at = models.utcnow() - timedelta(minutes=5)
         schedule.start()
         task = schedule._task
         await asyncio.sleep(0.02)

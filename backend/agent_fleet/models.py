@@ -12,7 +12,7 @@ Remote raw config text is never stored; only sanitized, normalized values are.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
@@ -35,7 +35,8 @@ def new_id() -> str:
 
 
 def utcnow() -> datetime:
-    return datetime.utcnow()
+    """Return naive UTC datetime (safe for SQLite and standard ISO serialization)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def iso_utc(value) -> str | None:

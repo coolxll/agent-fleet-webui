@@ -1013,7 +1013,7 @@ fi
     if not isinstance(raw_sessions, list):
         return 0
 
-    now = datetime.utcnow()
+    now = models.utcnow()
     upserted_count = 0
 
     for item in raw_sessions:
@@ -2449,7 +2449,7 @@ print('___HIST_JSON___' + json.dumps(turns))
             total_masked += count2
 
     # Save to SessionTranscript cache
-    now = datetime.utcnow()
+    now = models.utcnow()
     tr = models.SessionTranscript(
         id=models.new_id(),
         session_id=session_id,

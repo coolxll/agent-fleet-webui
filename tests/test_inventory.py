@@ -101,7 +101,7 @@ def test_kind_hint_does_not_override_a_probe(fleet_db):
             key="native",
             kind="wsl",
             transport="ssh",
-            last_scan_at=_dt.datetime.utcnow(),
+            last_scan_at=models.utcnow(),
         )
         s.add(rt)
         s.commit()

@@ -325,7 +325,7 @@ def test_removed_distro_with_history_is_disabled_not_deleted(fleet_db, monkeypat
             kind="wsl",
             transport="wsl",
             wsl_distro="Old",
-            last_success_at=datetime.utcnow(),
+            last_success_at=models.utcnow(),
         )
         s.add(rt)
         s.flush()
@@ -355,7 +355,7 @@ def test_live_wsl_runtime_survives_a_missing_scan(fleet_db, monkeypatch):
             kind="wsl",
             transport="wsl",
             wsl_distro="Ubuntu",
-            last_success_at=datetime.utcnow(),
+            last_success_at=models.utcnow(),
         )
         s.add(rt)
         s.flush()
