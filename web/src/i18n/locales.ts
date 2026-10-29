@@ -391,7 +391,46 @@ export const translations = {
     'quotas.snapshotsHint': 'one per agent installation',
     'quotas.lowestHint': 'across every account',
     'quotas.healthyRate': 'Ready Rate',
-    'quotas.healthyRateHint': '{ok} of {total} accounts healthy'
+    'quotas.healthyRateHint': '{ok} of {total} accounts healthy',
+
+    // Error Boundary
+    'error.boundary.title': 'Something went wrong',
+    'error.boundary.subtitle': 'An unexpected error crashed the UI view. You can reload or reset your browser state.',
+    'error.boundary.details': 'Error Details & Stack Trace',
+    'error.boundary.reload': 'Reload Application',
+    'error.boundary.clearAndReload': 'Clear Cache & Reload',
+    'error.boundary.copied': 'Error details copied to clipboard',
+    'error.boundary.copy': 'Copy Error Details',
+
+    // Onboarding / Getting Started
+    'onboarding.title': 'Getting Started with Agent Fleet',
+    'onboarding.subtitle': 'Manage coding agents across multiple machines, WSL distributions, and local dev environments from a single dashboard.',
+    'onboarding.step1.title': '1. Add Remote Host',
+    'onboarding.step1.desc': 'Define host SSH connection and credentials in inventory.yaml. Agent Fleet is completely agentless.',
+    'onboarding.step2.title': '2. Test Connectivity',
+    'onboarding.step2.desc': 'Ensure controller can reach target machines via OpenSSH with key or password authentication.',
+    'onboarding.step3.title': '3. Run Fleet Probe',
+    'onboarding.step3.desc': 'Trigger fleet probe scan to automatically discover installed Claude Code, Codex, Cursor, and runtime status.',
+    'onboarding.cta.addHost': 'Add Host / Edit Inventory',
+    'onboarding.cta.viewInventory': 'View Inventory YAML',
+    'onboarding.cta.runScan': 'Scan All Hosts',
+    'onboarding.banner.tip': 'Only local controller is active. Add remote hosts in inventory to unlock full multi-machine capabilities.',
+    'onboarding.banner.dismiss': 'Dismiss',
+
+    // Task Board Columns & Execution
+    'tasks.column.todo': 'To Do',
+    'tasks.column.in_progress': 'In Progress',
+    'tasks.column.waiting': 'Waiting for Input',
+    'tasks.column.review': 'In Review',
+    'tasks.column.done': 'Completed',
+
+    'tasks.exec.unknown': 'Unknown',
+    'tasks.exec.starting': 'Connecting',
+    'tasks.exec.running': 'Running',
+    'tasks.exec.completed': 'Completed',
+    'tasks.exec.failed': 'Failed',
+    'tasks.exec.interrupted': 'Interrupted',
+    'tasks.exec.blocked': 'Needs Input / Blocked'
   },
   zh: {
     // Navigation & header
@@ -783,7 +822,46 @@ export const translations = {
     'quotas.snapshotsHint': '每个 Agent 安装一条',
     'quotas.lowestHint': '所有账号中的最低值',
     'quotas.healthyRate': '账号就绪率',
-    'quotas.healthyRateHint': '{ok} / {total} 个账号正常就绪'
+    'quotas.healthyRateHint': '{ok} / {total} 个账号正常就绪',
+
+    // Error Boundary
+    'error.boundary.title': '页面发生未预期异常',
+    'error.boundary.subtitle': '前端界面运行时捕获到未处理错误。您可以尝试重新加载或清空本地缓存。',
+    'error.boundary.details': '查看错误堆栈与上下文',
+    'error.boundary.reload': '重新加载页面',
+    'error.boundary.clearAndReload': '清空缓存并重载',
+    'error.boundary.copied': '已复制错误详情到剪贴板',
+    'error.boundary.copy': '复制错误详情',
+
+    // Onboarding / Getting Started
+    'onboarding.title': 'Agent Fleet 新手机群快速指引',
+    'onboarding.subtitle': '在一个统一面板中管理跨多机、WSL 环境与本地控制器的 AI Coding Agent 工具与会话。',
+    'onboarding.step1.title': '1. 添加远端主机',
+    'onboarding.step1.desc': '在 inventory.yaml 中配置目标主机的 SSH 连接及凭据。无须在受控端安装任何额外守护进程。',
+    'onboarding.step2.title': '2. 验证 SSH 连通性',
+    'onboarding.step2.desc': '确保本机 Controller 能通过密钥或密码免密登录远端节点，支持 Linux、macOS 与 Windows。',
+    'onboarding.step3.title': '3. 执行探针扫描',
+    'onboarding.step3.desc': '触发集群探针扫描，自动探测已安装的 Claude Code、Codex、Cursor、Gemini 环境及配额。',
+    'onboarding.cta.addHost': '添加主机 / 配置 Inventory',
+    'onboarding.cta.viewInventory': '查看 Inventory YAML',
+    'onboarding.cta.runScan': '开始全网探针扫描',
+    'onboarding.banner.tip': '当前仅运行本地控制器。配置远端机器以开启多机协同管理能力。',
+    'onboarding.banner.dismiss': '收起指引',
+
+    // Task Board Columns & Execution
+    'tasks.column.todo': '待办',
+    'tasks.column.in_progress': '进行中',
+    'tasks.column.waiting': '等待我',
+    'tasks.column.review': '待验收',
+    'tasks.column.done': '已完成',
+
+    'tasks.exec.unknown': '活动未知',
+    'tasks.exec.starting': '正在连接',
+    'tasks.exec.running': '执行中',
+    'tasks.exec.completed': '本轮已结束',
+    'tasks.exec.failed': '执行失败',
+    'tasks.exec.interrupted': '执行已中断',
+    'tasks.exec.blocked': '需要处理权限或输入'
   }
 } as const
 

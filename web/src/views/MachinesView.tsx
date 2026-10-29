@@ -3,7 +3,7 @@ import { api, type InstallationDetail } from '../api'
 import AgentIcon, { agentLabel, agentColor } from '../components/AgentIcon'
 import AgentDetail from '../components/AgentDetail'
 import UpgradeModal, { UpgradeIcon, UpgradeTarget } from '../components/UpgradeModal'
-import { useI18n } from '../i18n'
+import { useI18n, type TranslationKey } from '../i18n'
 import { useUpgrades } from '../context/UpgradesContext'
 import { RuntimeDaemonsSummary } from './DaemonsView'
 import InventoryModal from '../components/InventoryModal'
@@ -16,6 +16,218 @@ function ago(iso: string | null, t: any): string {
   if (secs < 3600) return t('time.ago.m', { n: Math.floor(secs / 60) })
   if (secs < 86400) return t('time.ago.h', { n: Math.floor(secs / 3600) })
   return t('time.ago.d', { n: Math.floor(secs / 86400) })
+}
+
+function GettingStartedCard({
+  isBanner = false,
+  onDismiss,
+  onOpenInventory,
+  onScanFleet,
+  scanningFleet,
+  t,
+  language,
+}: {
+  isBanner?: boolean
+  onDismiss?: () => void
+  onOpenInventory: () => void
+  onScanFleet: () => void
+  scanningFleet: boolean
+  t: (k: TranslationKey) => string
+  language: string
+}) {
+  const isZh = language === 'zh'
+  return (
+    <div
+      style={{
+        backgroundColor: 'var(--panel, #161b22)',
+        border: '1px solid var(--border, #2a3140)',
+        borderRadius: 10,
+        padding: isBanner ? '16px 20px' : '36px 32px',
+        marginBottom: isBanner ? 16 : 0,
+        boxShadow: isBanner ? 'none' : '0 4px 20px rgba(0, 0, 0, 0.25)',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div
+            style={{
+              width: isBanner ? 32 : 40,
+              height: isBanner ? 32 : 40,
+              borderRadius: 8,
+              backgroundColor: 'rgba(76, 154, 255, 0.15)',
+              border: '1px solid rgba(76, 154, 255, 0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: isBanner ? 16 : 20,
+            }}
+          >
+            🚀
+          </div>
+          <div>
+            <h3 style={{ margin: 0, fontSize: isBanner ? 15 : 18, fontWeight: 700, color: '#f0f6fc' }}>
+              {t('onboarding.title')}
+            </h3>
+            <p style={{ margin: '3px 0 0', fontSize: 13, color: 'var(--muted, #8b95a6)', maxWidth: 700 }}>
+              {isBanner ? t('onboarding.banner.tip') : t('onboarding.subtitle')}
+            </p>
+          </div>
+        </div>
+
+        {isBanner && onDismiss && (
+          <button
+            type="button"
+            className="btn small"
+            onClick={onDismiss}
+            style={{ fontSize: 12, padding: '2px 8px', color: 'var(--muted)' }}
+            title={t('onboarding.banner.dismiss')}
+          >
+            ✕ {t('onboarding.banner.dismiss')}
+          </button>
+        )}
+      </div>
+
+      {/* 3 Steps Grid */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: 14,
+          margin: '18px 0',
+        }}
+      >
+        <div
+          style={{
+            background: 'var(--panel-2, #1c2230)',
+            border: '1px solid var(--border, #2a3140)',
+            borderRadius: 8,
+            padding: 14,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <span
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: '50%',
+                backgroundColor: 'var(--accent, #4c9aff)',
+                color: '#fff',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              1
+            </span>
+            <strong style={{ fontSize: 13, color: '#f0f6fc' }}>{t('onboarding.step1.title')}</strong>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted, #8b95a6)', lineHeight: 1.45 }}>
+            {t('onboarding.step1.desc')}
+          </div>
+        </div>
+
+        <div
+          style={{
+            background: 'var(--panel-2, #1c2230)',
+            border: '1px solid var(--border, #2a3140)',
+            borderRadius: 8,
+            padding: 14,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <span
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: '50%',
+                backgroundColor: 'var(--accent, #4c9aff)',
+                color: '#fff',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              2
+            </span>
+            <strong style={{ fontSize: 13, color: '#f0f6fc' }}>{t('onboarding.step2.title')}</strong>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted, #8b95a6)', lineHeight: 1.45 }}>
+            {t('onboarding.step2.desc')}
+          </div>
+        </div>
+
+        <div
+          style={{
+            background: 'var(--panel-2, #1c2230)',
+            border: '1px solid var(--border, #2a3140)',
+            borderRadius: 8,
+            padding: 14,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <span
+              style={{
+                width: 22,
+                height: 22,
+                borderRadius: '50%',
+                backgroundColor: 'var(--accent, #4c9aff)',
+                color: '#fff',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              3
+            </span>
+            <strong style={{ fontSize: 13, color: '#f0f6fc' }}>{t('onboarding.step3.title')}</strong>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted, #8b95a6)', lineHeight: 1.45 }}>
+            {t('onboarding.step3.desc')}
+          </div>
+        </div>
+      </div>
+
+      {/* Action CTAs */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginTop: 12 }}>
+        <button
+          type="button"
+          className="btn primary"
+          onClick={onOpenInventory}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <span>➕</span>
+          <span>{t('onboarding.cta.addHost')}</span>
+        </button>
+
+        <button
+          type="button"
+          className="btn"
+          onClick={onOpenInventory}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <span>📄</span>
+          <span>{t('onboarding.cta.viewInventory')}</span>
+        </button>
+
+        <button
+          type="button"
+          className="btn"
+          onClick={onScanFleet}
+          disabled={scanningFleet}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        >
+          <span>{scanningFleet ? '⏳' : '🔄'}</span>
+          <span>{scanningFleet ? (isZh ? '正在扫描...' : 'Scanning...') : t('onboarding.cta.runScan')}</span>
+        </button>
+      </div>
+    </div>
+  )
 }
 
 export default function MachinesView({
@@ -211,6 +423,41 @@ export default function MachinesView({
     localStorage.setItem('agent_fleet_machines_layout', mode)
   }
 
+  const [onboardingDismissed, setOnboardingDismissed] = useState(() => {
+    try {
+      return localStorage.getItem('agent_fleet_onboarding_dismissed') === 'true'
+    } catch {
+      return false
+    }
+  })
+  const [scanningFleet, setScanningFleet] = useState(false)
+
+  const remoteHosts = useMemo(() => {
+    return hosts.filter((h) => {
+      const rts = h.runtimes || []
+      const isLocal =
+        h.name.includes('local') ||
+        rts.some((r: any) => r.transport === 'local')
+      return !isLocal
+    })
+  }, [hosts])
+  const hasNoRemoteHosts = remoteHosts.length === 0
+
+  const handleScanFleet = useCallback(async () => {
+    if (scanningFleet) return
+    setScanningFleet(true)
+    try {
+      await api.startScan(null)
+      setTimeout(() => {
+        loadHosts()
+        setScanningFleet(false)
+      }, 3000)
+    } catch (err: any) {
+      setError(String(err.message || err))
+      setScanningFleet(false)
+    }
+  }, [scanningFleet, loadHosts])
+
   // Filter hosts
   const filteredHosts = useMemo(() => {
     let list = [...hosts]
@@ -368,34 +615,15 @@ export default function MachinesView({
       </div>
 
       {hosts.length === 0 ? (
-        <div
-          style={{
-            padding: '60px 20px',
-            textAlign: 'center',
-            backgroundColor: 'var(--card-bg, #161b22)',
-            border: '1px dashed #30363d',
-            borderRadius: 8,
-            marginTop: 20
-          }}
-        >
-          <div style={{ fontSize: 36, marginBottom: 12 }}>🖥️</div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: '#f0f6fc', marginBottom: 8 }}>
-            {language === 'zh' ? '尚未发现配置的集群机器' : 'No fleet machines configured yet'}
-          </div>
-          <div style={{ fontSize: 13, color: '#8b949e', maxWidth: 480, margin: '0 auto 20px' }}>
-            {language === 'zh'
-              ? 'Agent Fleet 通过声明式 YAML 文件管理您的多机集群。请配置 inventory.yaml 以发现并管理更多节点。'
-              : 'Agent Fleet manages your fleet via a declarative inventory YAML. Configure inventory.yaml to discover your machines.'}
-          </div>
-          <button
-            type="button"
-            className="btn primary"
-            onClick={() => setInventoryModalOpen(true)}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, margin: '0 auto' }}
-          >
-            <span>⚙️</span>
-            <span>{language === 'zh' ? '立即配置 Inventory' : 'Configure Inventory Now'}</span>
-          </button>
+        <div style={{ marginTop: 20 }}>
+          <GettingStartedCard
+            isBanner={false}
+            onOpenInventory={() => setInventoryModalOpen(true)}
+            onScanFleet={handleScanFleet}
+            scanningFleet={scanningFleet}
+            t={t}
+            language={language}
+          />
         </div>
       ) : viewMode === 'workbench' ? (
         // Mode 1: Workbench Layout (Left Sidebar + Right Machine Control Plane)
@@ -486,6 +714,24 @@ export default function MachinesView({
 
           {/* Right Machine Control Plane */}
           <div className="workbench-content">
+            {hasNoRemoteHosts && !onboardingDismissed && (
+              <GettingStartedCard
+                isBanner={true}
+                onDismiss={() => {
+                  setOnboardingDismissed(true)
+                  try {
+                    localStorage.setItem('agent_fleet_onboarding_dismissed', 'true')
+                  } catch {
+                    // ignore
+                  }
+                }}
+                onOpenInventory={() => setInventoryModalOpen(true)}
+                onScanFleet={handleScanFleet}
+                scanningFleet={scanningFleet}
+                t={t}
+                language={language}
+              />
+            )}
             {!hostDetail ? (
               <div className="muted" style={{ padding: 24 }}>{t('common.loading')}</div>
             ) : (
@@ -729,7 +975,26 @@ export default function MachinesView({
         </div>
       ) : (
         // Mode 2: Full-Width Table View
-        <div className="panel" style={{ overflow: 'hidden' }}>
+        <div>
+          {hasNoRemoteHosts && !onboardingDismissed && (
+            <GettingStartedCard
+              isBanner={true}
+              onDismiss={() => {
+                setOnboardingDismissed(true)
+                try {
+                  localStorage.setItem('agent_fleet_onboarding_dismissed', 'true')
+                } catch {
+                  // ignore
+                }
+              }}
+              onOpenInventory={() => setInventoryModalOpen(true)}
+              onScanFleet={handleScanFleet}
+              scanningFleet={scanningFleet}
+              t={t}
+              language={language}
+            />
+          )}
+          <div className="panel" style={{ overflow: 'hidden' }}>
           <div className="body" style={{ padding: 0 }}>
             <table className="ts-table">
               <thead>
@@ -958,7 +1223,8 @@ export default function MachinesView({
             </table>
           </div>
         </div>
-      )}
+      </div>
+    )}
 
       {upgradeTarget && (
         <UpgradeModal

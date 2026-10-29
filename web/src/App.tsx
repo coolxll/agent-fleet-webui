@@ -9,6 +9,7 @@ import TaskBoardView from './views/TaskBoardView'
 import DaemonsView from './views/DaemonsView'
 import SettingsModal from './components/SettingsModal'
 import TasksDrawer from './components/TasksDrawer'
+import ErrorBoundary from './components/ErrorBoundary'
 import { useI18n } from './i18n'
 import { UpgradesProvider, useUpgrades } from './context/UpgradesContext'
 
@@ -263,9 +264,11 @@ export default function App() {
   }, [])
 
   return (
-    <UpgradesProvider onToast={showToast}>
-      <AppShell toast={toast} setToast={setToast} />
-    </UpgradesProvider>
+    <ErrorBoundary>
+      <UpgradesProvider onToast={showToast}>
+        <AppShell toast={toast} setToast={setToast} />
+      </UpgradesProvider>
+    </ErrorBoundary>
   )
 }
 

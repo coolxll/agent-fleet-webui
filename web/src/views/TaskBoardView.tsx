@@ -8,25 +8,48 @@ import {
   GitHubIssue,
   GitHubPullRequest,
 } from '../taskApi'
-import { useI18n } from '../i18n'
+import { useI18n, type TranslationKey } from '../i18n'
 import './taskBoard.css'
 
-const localColumns: { id: TaskStatus; label: string }[] = [
-  { id: 'todo', label: '待办' },
-  { id: 'in_progress', label: '进行中' },
-  { id: 'waiting', label: '等待我' },
-  { id: 'review', label: '待验收' },
-  { id: 'done', label: '已完成' },
+const localColumns: { id: TaskStatus; labelKey: TranslationKey; fallbackZh: string; fallbackEn: string }[] = [
+  { id: 'todo', labelKey: 'tasks.column.todo', fallbackZh: '待办', fallbackEn: 'To Do' },
+  { id: 'in_progress', labelKey: 'tasks.column.in_progress', fallbackZh: '进行中', fallbackEn: 'In Progress' },
+  { id: 'waiting', labelKey: 'tasks.column.waiting', fallbackZh: '等待我', fallbackEn: 'Waiting for Input' },
+  { id: 'review', labelKey: 'tasks.column.review', fallbackZh: '待验收', fallbackEn: 'In Review' },
+  { id: 'done', labelKey: 'tasks.column.done', fallbackZh: '已完成', fallbackEn: 'Completed' },
 ]
 
-const executionLabel: Record<string, string> = {
-  unknown: '活动未知',
-  starting: '正在连接',
-  running: '执行中',
-  completed: '本轮已结束',
-  failed: '执行失败',
-  interrupted: '执行已中断',
-  blocked: '需要处理权限或输入',
+const getExecutionLabel = (
+  status: string,
+  t: (key: TranslationKey) => string,
+  zh: boolean
+): string => {
+  const key = `tasks.exec.${status}` as TranslationKey
+  try {
+    const val = t(key)
+    if (val && val !== key) return val
+  } catch {
+    // fallback
+  }
+  const fallbackZh: Record<string, string> = {
+    unknown: '活动未知',
+    starting: '正在连接',
+    running: '执行中',
+    completed: '本轮已结束',
+    failed: '执行失败',
+    interrupted: '执行已中断',
+    blocked: '需要处理权限或输入',
+  }
+  const fallbackEn: Record<string, string> = {
+    unknown: 'Unknown',
+    starting: 'Connecting',
+    running: 'Running',
+    completed: 'Completed',
+    failed: 'Failed',
+    interrupted: 'Interrupted',
+    blocked: 'Needs Input / Blocked',
+  }
+  return zh ? fallbackZh[status] || status : fallbackEn[status] || status
 }
 
 const empty: TaskDraft = { title: '', goal: '', project_path: '', status: 'todo' }
@@ -57,7 +80,7 @@ export default function TaskBoardView({
   refreshSignal?: number
   setToast?: (message: string) => void
 }) {
-  const { language } = useI18n()
+  const { t, language } = useI18n()
   const zh = language === 'zh'
 
   const [boardMode, setBoardMode] = useState<'github' | 'local'>('github')
@@ -852,7 +875,7 @@ export default function TaskBoardView({
               }}
             >
               <h3>
-                {column.label}
+                {t(column.labelKey)}
                 <span>{tasks.filter((task) => task.status === column.id).length}</span>
               </h3>
               {tasks
@@ -868,7 +891,7 @@ export default function TaskBoardView({
                       onClick={() => openLocal(task)}
                     >
                       <strong>{task.title}</strong>
-                      <p>{task.goal || '尚未填写任务目标'}</p>
+                      <p>{task.goal || (zh ? '尚未填写任务目标' : 'No task goal specified')}</p>
                       {task.project_path && <small title={task.project_path}>{task.project_path}</small>}
                       {latest ? (
                         <>
@@ -876,17 +899,19 @@ export default function TaskBoardView({
                             {latest.host_name} · {latest.agent_id}
                           </div>
                           <small>
-                            {executionLabel[latest.status] ?? latest.status} ·{' '}
+                            {getExecutionLabel(latest.status, t, zh)} ·{' '}
                             {new Date(latest.updated_at).toLocaleString()}
                           </small>
                         </>
                       ) : (
-                        <small>尚未关联 Agent 会话</small>
+                        <small>{zh ? '尚未关联 Agent 会话' : 'No associated agent session'}</small>
                       )}
                     </button>
                   )
                 })}
-              {!tasks.some((task) => task.status === column.id) && <div className="task-empty">拖动卡片到这里</div>}
+              {!tasks.some((task) => task.status === column.id) && (
+                <div className="task-empty">{zh ? '拖动卡片到这里' : 'Drag card here'}</div>
+              )}
             </section>
           ))}
         </div>
@@ -904,13 +929,13 @@ export default function TaskBoardView({
             className="task-modal"
             role="dialog"
             aria-modal="true"
-            aria-label={selected ? '任务详情' : '创建任务'}
+            aria-label={selected ? (zh ? '任务详情' : 'Task Details') : (zh ? '创建任务' : 'New Task')}
             onClick={(event) => event.stopPropagation()}
           >
             <div className="task-board-heading">
-              <h2>{selected ? '任务详情' : '新建任务'}</h2>
+              <h2>{selected ? (zh ? '任务详情' : 'Task Details') : (zh ? '新建任务' : 'New Task')}</h2>
               <button className="btn" disabled={busy} onClick={() => setDraft(null)}>
-                关闭
+                {zh ? '关闭' : 'Close'}
               </button>
             </div>
             {error && (
@@ -927,11 +952,11 @@ export default function TaskBoardView({
                     const task = await taskApi.create(draft)
                     setSelectedId(task.id)
                   }
-                }, '任务已保存')
+                }, zh ? '任务已保存' : 'Task saved')
               }}
             >
               <label>
-                标题
+                {zh ? '标题' : 'Title'}
                 <input
                   required
                   maxLength={200}
@@ -940,7 +965,7 @@ export default function TaskBoardView({
                 />
               </label>
               <label>
-                任务目标
+                {zh ? '任务目标' : 'Goal'}
                 <textarea
                   maxLength={20000}
                   rows={3}
@@ -950,28 +975,28 @@ export default function TaskBoardView({
               </label>
               <div className="task-fields">
                 <label>
-                  项目目录
+                  {zh ? '项目目录' : 'Project Path'}
                   <input
                     value={draft.project_path}
                     onChange={(event) => setDraft({ ...draft, project_path: event.target.value })}
                   />
                 </label>
                 <label>
-                  任务状态
+                  {zh ? '任务状态' : 'Status'}
                   <select
                     value={draft.status}
                     onChange={(event) => setDraft({ ...draft, status: event.target.value as TaskStatus })}
                   >
                     {localColumns.map((column) => (
                       <option key={column.id} value={column.id}>
-                        {column.label}
+                        {t(column.labelKey)}
                       </option>
                     ))}
                   </select>
                 </label>
               </div>
               <button className="btn primary" disabled={busy || !draft.title.trim()} type="submit">
-                保存任务
+                {zh ? '保存任务' : 'Save Task'}
               </button>
             </form>
           </section>
