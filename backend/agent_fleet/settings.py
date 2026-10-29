@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     inventory_paths: list[Path] = [
         ROOT / "inventory.yaml",
     ]
+    auto_seed_legacy: bool = True
     workspace_root: Path = ROOT.parent
 
     @property

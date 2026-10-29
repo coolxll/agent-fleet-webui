@@ -18,6 +18,7 @@ from agent_fleet.api.task_routes import router as task_router
 from agent_fleet.api.quota_source_routes import router as quota_source_router
 from agent_fleet.db import create_all, init_engine
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
+from agent_fleet.services import sqlite_inventory
 from agent_fleet.services.scheduler import get_schedule
 from agent_fleet.services import task_service, magpie_quota
 from agent_fleet.settings import ROOT, get_settings
@@ -33,6 +34,12 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     init_engine(settings.db_path)
     create_all()
+    try:
+        migrated = sqlite_inventory.seed_from_legacy_files_if_needed()
+        if migrated.get("created", 0) > 0 or migrated.get("updated", 0) > 0:
+            log.info("sqlite inventory migration: %s", migrated)
+    except Exception as exc:
+        log.warning("sqlite inventory migration failed: %s", exc)
     task_service.recover_interrupted()
     if settings.include_local_runtime:
         try:

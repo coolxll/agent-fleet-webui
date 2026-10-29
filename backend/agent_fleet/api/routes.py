@@ -24,6 +24,7 @@ from agent_fleet.services.updates import (
 )
 from agent_fleet.services.scheduler import get_schedule
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
+from agent_fleet.services import sqlite_inventory
 from agent_fleet.inventory.loader import validate_inventory_yaml
 from agent_fleet.settings import ROOT, get_settings
 
@@ -540,6 +541,105 @@ def save_inventory_raw(payload: InventoryContentPayload):
         "summary": summary,
         "sync_result": sync_result,
     }
+
+
+# --------------------------------------------------------------------------
+# SQLite-backed Host & Runner Fleet CRUD API
+# --------------------------------------------------------------------------
+
+
+class HostCreatePayload(BaseModel):
+    name: str
+    hostname: str | None = None
+    description: str | None = ""
+    group: str | None = ""
+    tags: dict | None = None
+    ssh_host: str | None = None
+    ssh_port: int | None = 22
+    ssh_user: str | None = "lynn"
+    proxy: str | None = ""
+    runner_enabled: bool = False
+    runner_max_concurrency: int = 2
+    runner_labels: list[str] | None = None
+    target_repos: list[str] | None = None
+    enabled: bool = True
+
+
+class HostUpdatePayload(BaseModel):
+    hostname: str | None = None
+    description: str | None = None
+    group: str | None = None
+    tags: dict | None = None
+    ssh_host: str | None = None
+    ssh_port: int | None = None
+    ssh_user: str | None = None
+    proxy: str | None = None
+    runner_enabled: bool | None = None
+    runner_max_concurrency: int | None = None
+    runner_labels: list[str] | None = None
+    target_repos: list[str] | None = None
+    enabled: bool | None = None
+
+
+@router.get("/inventory/hosts")
+def list_inventory_hosts():
+    # 保证数据已无损入库
+    sqlite_inventory.seed_from_legacy_files_if_needed()
+    hosts = sqlite_inventory.list_hosts()
+    return {"ok": True, "hosts": hosts, "total": len(hosts)}
+
+
+@router.get("/inventory/hosts/{id_or_name}")
+def get_inventory_host(id_or_name: str):
+    h = sqlite_inventory.get_host(id_or_name)
+    if not h:
+        raise HTTPException(404, f"Host not found: {id_or_name}")
+    return {"ok": True, "host": h}
+
+
+@router.post("/inventory/hosts")
+def create_inventory_host(payload: HostCreatePayload):
+    try:
+        data = sqlite_inventory.create_host(payload.model_dump())
+        return {"ok": True, "host": data}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@router.put("/inventory/hosts/{id_or_name}")
+def update_inventory_host(id_or_name: str, payload: HostUpdatePayload):
+    try:
+        updated = sqlite_inventory.update_host(
+            id_or_name, payload.model_dump(exclude_unset=True)
+        )
+        return {"ok": True, "host": updated}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@router.delete("/inventory/hosts/{id_or_name}")
+def delete_inventory_host(id_or_name: str):
+    success = sqlite_inventory.delete_host(id_or_name)
+    if not success:
+        raise HTTPException(404, f"Host not found: {id_or_name}")
+    return {"ok": True, "deleted": True}
+
+
+@router.post("/inventory/hosts/{id_or_name}/test-ssh")
+def test_host_ssh(id_or_name: str):
+    return sqlite_inventory.test_ssh_connectivity(id_or_name)
+
+
+@router.get("/inventory/export-yaml")
+def export_inventory_yaml_route():
+    yaml_text = sqlite_inventory.export_as_yaml()
+    return {"ok": True, "content": yaml_text}
+
+
+@router.post("/inventory/seed")
+def seed_inventory_route():
+    result = sqlite_inventory.seed_from_legacy_files_if_needed(force=True)
+    return {"ok": True, "migration": result}
 
 
 # --------------------------------------------------------------------------
