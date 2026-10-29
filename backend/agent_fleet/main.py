@@ -16,6 +16,7 @@ from agent_fleet.api.daemon_routes import router as daemon_router
 from agent_fleet.api.paseo_routes import router as paseo_router
 from agent_fleet.api.task_routes import router as task_router
 from agent_fleet.api.quota_source_routes import router as quota_source_router
+from agent_fleet.api.auth import router as auth_router, APIAuthMiddleware
 from agent_fleet.db import create_all, init_engine
 from agent_fleet.services.inventory_sync import add_local_runtime
 from agent_fleet.services import sqlite_inventory
@@ -70,6 +71,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Agent Fleet Explorer", version="0.1.0", lifespan=lifespan)
 
+app.add_middleware(APIAuthMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -83,6 +86,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router, prefix="/api")
 app.include_router(router, prefix="/api")
 app.include_router(daemon_router, prefix="/api")
 app.include_router(paseo_router, prefix="/api")
