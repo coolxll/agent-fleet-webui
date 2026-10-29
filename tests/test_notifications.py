@@ -11,14 +11,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agent_fleet.main import app
-from agent_fleet.services import notification_service
+from agent_fleet.services import attention_service, notification_service
 from agent_fleet.services.notification_service import (
     NotificationService,
+    WebhookValidationError,
     build_details_url,
     build_event_payload,
     generate_event_id,
+    mask_url_credentials,
     sanitize_error,
     sanitize_url,
+    validate_webhook_url,
 )
 from agent_fleet.settings import Settings
 
@@ -314,3 +317,264 @@ def test_url_and_secret_sanitization():
     clean_msg = sanitize_error(err, secret="my-confidential-token-999")
     assert "my-confidential-token-999" not in clean_msg
     assert "***" in clean_msg
+
+
+def test_pagination_decoupling_prevents_false_resolved():
+    """Verify that paginated GET requests (limit < total) never falsely resolve items beyond the limit."""
+    service = notification_service.get_notification_service()
+    service.settings.webhook_enabled = True
+    service.settings.webhook_url = "https://hooks.example.com/alerts"
+
+    # Create 25 mock attention items
+    mock_items = [
+        {
+            "id": f"host:node-{i}:scan_failed",
+            "type": "scan_failed",
+            "severity": "error",
+            "message": f"Scan failed on node {i}",
+            "first_detected_at": "2026-10-29T10:00:00Z",
+        }
+        for i in range(25)
+    ]
+
+    mock_resp = httpx.Response(200, json={"status": "ok"})
+
+    with patch.object(attention_service, "_collect_attention_items", return_value=list(mock_items)):
+        with patch.object(httpx.Client, "post", return_value=mock_resp) as mock_post:
+            # Poll 1: Fetch with limit=10 (only 10 of 25 returned in items list)
+            summary1 = attention_service.get_attention_summary(limit=10)
+            assert summary1["total"] == 25
+            assert len(summary1["items"]) == 10
+
+            # Pass paginated items list directly (simulating routes.py behavior)
+            events1 = service.process_attention_items(summary1["items"])
+            # All 25 active items must be processed and tracked, not just 10
+            assert len(events1) == 25
+            assert len(service._active_items) == 25
+
+            # Poll 2: Fetch with smaller limit=5
+            mock_post.reset_mock()
+            summary2 = attention_service.get_attention_summary(limit=5)
+            assert summary2["total"] == 25
+            assert len(summary2["items"]) == 5
+
+            # Process again: items 6..25 must NOT be marked resolved!
+            events2 = service.process_attention_items(summary2["items"])
+            assert len(events2) == 0  # Zero new events, zero false resolves
+            assert len(service._active_items) == 25
+            mock_post.assert_not_called()
+
+            # Poll 3: Use helper process_attention_summary
+            events3 = attention_service.process_attention_summary(summary2)
+            assert len(events3) == 0
+            assert len(service._active_items) == 25
+
+    # Poll 4: Node 0 actually recovers (genuine resolution of 1 item)
+    recovered_items = [it for it in mock_items if it["id"] != "host:node-0:scan_failed"]
+    assert len(recovered_items) == 24
+
+    with patch.object(attention_service, "_collect_attention_items", return_value=list(recovered_items)):
+        with patch.object(httpx.Client, "post", return_value=mock_resp) as mock_post:
+            summary4 = attention_service.get_attention_summary(limit=5)
+            assert summary4["total"] == 24
+            assert len(summary4["items"]) == 5
+
+            events4 = service.process_attention_items(summary4["items"])
+            # Exactly 1 event should be dispatched: attention_resolved for node-0!
+            assert len(events4) == 1
+            assert events4[0]["event_type"] == "attention_resolved"
+            assert events4[0]["item"]["id"] == "host:node-0:scan_failed"
+            assert len(service._active_items) == 24
+            assert "host:node-0:scan_failed" not in service._active_items
+
+
+def test_non_blocking_background_dispatch():
+    """Verify non-blocking background dispatch returns immediately without blocking caller."""
+    service = notification_service.get_notification_service()
+    service.settings.webhook_enabled = True
+    service.settings.webhook_url = "https://hooks.example.com/webhook"
+
+    item = {
+        "id": "host:bg-test:scan_failed",
+        "type": "scan_failed",
+        "severity": "error",
+        "message": "SSH failure",
+        "first_detected_at": "2026-10-29T12:00:00Z",
+    }
+
+    mock_resp = httpx.Response(200, json={"status": "ok"})
+
+    with patch.object(httpx.Client, "post", return_value=mock_resp) as mock_post:
+        # Calling with background=True must return events immediately
+        events = service.process_attention_items([item], background=True)
+        assert len(events) == 1
+        event_id = events[0]["event_id"]
+
+        # Wait for background task to complete
+        service.wait_for_background_tasks(timeout=3.0)
+
+        assert mock_post.call_count == 1
+        outbox = service.get_outbox()
+        assert event_id in outbox
+        assert outbox[event_id]["status"] == "sent"
+
+
+def test_outbox_failure_persistence_and_safe_retries_without_storms():
+    """Verify failed deliveries are recorded in persistent outbox with backoff and safe retries."""
+    service = notification_service.get_notification_service()
+    service.settings.webhook_enabled = True
+    service.settings.webhook_url = "https://hooks.example.com/outbox-fail"
+
+    item = {
+        "id": "host:fail-node:scan_failed",
+        "type": "scan_failed",
+        "severity": "error",
+        "message": "Timeout to agent",
+        "first_detected_at": "2026-10-29T12:00:00Z",
+    }
+
+    # Simulate HTTP failure
+    with patch.object(
+        httpx.Client,
+        "post",
+        side_effect=httpx.ConnectTimeout("Connection to hook timed out"),
+    ) as mock_post:
+        events = service.process_attention_items([item], background=False)
+        assert len(events) == 1
+        event_id = events[0]["event_id"]
+
+        # Outbox must record the event and failure state
+        outbox = service.get_outbox()
+        assert event_id in outbox
+        entry = outbox[event_id]
+        assert entry["status"] == "failed"
+        assert entry["retry_count"] == 1
+        assert "Connection to hook timed out" in entry["last_error"]
+        assert entry["next_retry_at"] is not None
+
+        # Verify persisted file on disk
+        assert service.outbox_file.exists()
+
+        # Re-poll with the same anomaly active
+        mock_post.reset_mock()
+        events_repoll = service.process_attention_items([item], background=False)
+        assert len(events_repoll) == 0
+        # No extra network call during ordinary polling
+        mock_post.assert_not_called()
+
+        # Retry with force=False before next_retry_at arrives -> must be skipped (no storm)
+        retry_res1 = service.retry_outbox(force=False)
+        assert len(retry_res1) == 0
+        mock_post.assert_not_called()
+
+    # Now simulated recovery of webhook endpoint
+    mock_success = httpx.Response(200, json={"received": True})
+    with patch.object(httpx.Client, "post", return_value=mock_success) as mock_post:
+        # Force retry to simulate retry after backoff elapsed
+        retry_res2 = service.retry_outbox(force=True)
+        assert len(retry_res2) == 1
+        assert retry_res2[0]["ok"] is True
+        assert mock_post.call_count == 1
+
+        # Outbox status updated to sent
+        updated_entry = service.get_outbox()[event_id]
+        assert updated_entry["status"] == "sent"
+        assert updated_entry["last_error"] is None
+        assert updated_entry["next_retry_at"] is None
+
+
+def test_ssrf_validation_and_url_security(client: TestClient):
+    """Verify SSRF protection blocks private, loopback, and cloud metadata destinations."""
+    # 1. Direct validation checks
+    assert validate_webhook_url("ftp://example.com/hook")[0] is False
+    assert validate_webhook_url("javascript:alert(1)")[0] is False
+    assert validate_webhook_url("http://127.0.0.1:8080/hook")[0] is False
+    assert validate_webhook_url("http://localhost:8080/hook")[0] is False
+    assert validate_webhook_url("http://sub.localhost:8080/hook")[0] is False
+    assert validate_webhook_url("http://[::1]:8080/hook")[0] is False
+    assert validate_webhook_url("http://169.254.169.254/latest/meta-data")[0] is False
+    assert validate_webhook_url("http://10.0.0.1/hook")[0] is False
+    assert validate_webhook_url("http://192.168.1.1/hook")[0] is False
+    assert validate_webhook_url("http://172.16.0.1/hook")[0] is False
+
+    # Valid external URLs allowed
+    assert validate_webhook_url("https://hooks.example.com/alerts")[0] is True
+    assert validate_webhook_url("https://alerts.corp.internal/webhook")[0] is True
+
+    # allow_local flag allows local in test environments
+    assert validate_webhook_url("http://127.0.0.1:8080/hook", allow_local=True)[0] is True
+
+    # 2. PUT /api/notifications/config blocks SSRF URLs with 400
+    res_loopback = client.put(
+        "/api/notifications/config",
+        json={"webhook_url": "http://127.0.0.1:8000/internal-admin"},
+    )
+    assert res_loopback.status_code == 400
+    assert "Invalid webhook URL" in res_loopback.json()["detail"]
+
+    res_metadata = client.put(
+        "/api/notifications/config",
+        json={"webhook_url": "http://169.254.169.254/latest/meta-data"},
+    )
+    assert res_metadata.status_code == 400
+    assert "cloud metadata" in res_metadata.json()["detail"]
+
+    # 3. POST /api/notifications/test-webhook with SSRF URL returns 400
+    res_test = client.post(
+        "/api/notifications/test-webhook",
+        json={"webhook_url": "http://127.0.0.1:8000/evil"},
+    )
+    assert res_test.status_code == 400
+
+
+def test_credential_masking_in_config(client: TestClient):
+    """Verify that credentials and tokens embedded in URLs are masked in config representations."""
+    # 1. URL masking unit checks
+    basic_auth_url = "https://user:mypassword123@hooks.example.com/webhook"
+    masked1 = mask_url_credentials(basic_auth_url)
+    assert "mypassword123" not in masked1
+    assert "user" not in masked1
+    assert "***:***@hooks.example.com/webhook" in masked1
+
+    query_token_url = "https://hooks.example.com/alert?token=my-secret-key-456&env=prod"
+    masked2 = mask_url_credentials(query_token_url)
+    assert "my-secret-key-456" not in masked2
+    assert "token=***" in masked2
+    assert "env=prod" in masked2
+
+    slack_url = "https://hooks.slack.com/services/T12345678/B12345678/abcdefghijklmnopqrstuvwxyz"
+    masked3 = mask_url_credentials(slack_url)
+    assert "abcdefghijklmnopqrstuvwxyz" not in masked3
+    assert "https://hooks.slack.com/services/T12345678/B12345678/***" == masked3
+
+    # 2. Configure via API and verify GET response masks URL
+    res_put = client.put(
+        "/api/notifications/config",
+        json={
+            "webhook_enabled": True,
+            "webhook_url": "https://hooks.example.com/alert?token=super-secret-key-999",
+            "webhook_secret": "my-hmac-secret",
+        },
+    )
+    assert res_put.status_code == 200
+    data = res_put.json()
+    assert data["has_url"] is True
+    assert "super-secret-key-999" not in json.dumps(data)
+    assert "token=***" in data["masked_url"]
+    assert data["has_secret"] is True
+    assert data["webhook_secret_masked"] == "******"
+
+    # 3. Updating with masked URL retained does not corrupt stored URL
+    res_reput = client.put(
+        "/api/notifications/config",
+        json={
+            "webhook_enabled": True,
+            "webhook_url": data["masked_url"],
+            "webhook_secret": "******",
+        },
+    )
+    assert res_reput.status_code == 200
+    service = notification_service.get_notification_service()
+    assert service.settings.webhook_url == "https://hooks.example.com/alert?token=super-secret-key-999"
+    assert service.settings.webhook_secret == "my-hmac-secret"
+

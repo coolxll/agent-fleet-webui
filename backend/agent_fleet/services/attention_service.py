@@ -242,10 +242,49 @@ def _collect_attention_items(
     return items
 
 
+class TrackedAttentionItems(list):
+    """List subclass preserving all unpaginated attention items for decoupled notifications."""
+
+    def __init__(
+        self,
+        items: list[dict[str, Any]],
+        all_items: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(items)
+        self._all_items = list(all_items) if all_items is not None else list(items)
+
+
+def get_all_attention_items(
+    db=None,
+    stale_threshold_seconds: int = DEFAULT_STALE_THRESHOLD_SECONDS,
+) -> list[dict[str, Any]]:
+    """Return all active attention items across the fleet without pagination."""
+    if db is not None:
+        return _collect_attention_items(db, stale_threshold_seconds)
+    with session_scope() as session:
+        return _collect_attention_items(session, stale_threshold_seconds)
+
+
+def process_attention_summary(
+    summary: dict[str, Any],
+    settings: Any = None,
+    background: bool = False,
+) -> list[dict[str, Any]]:
+    """Process notifications using all items from summary, completely decoupling from pagination."""
+    from agent_fleet.services import notification_service
+
+    all_items = summary.get("_all_items") or summary.get("all_items") or summary.get("items", [])
+    if hasattr(all_items, "_all_items"):
+        all_items = getattr(all_items, "_all_items")
+    return notification_service.process_attention_items(
+        all_items, settings=settings, background=background
+    )
+
+
 def get_attention_summary(
     db=None,
     stale_threshold_seconds: int = DEFAULT_STALE_THRESHOLD_SECONDS,
-    limit: int = 50,
+    limit: int | None = 50,
 ) -> dict[str, Any]:
     """Return aggregated attention items and anomaly counts across the fleet."""
     if db is not None:
@@ -257,9 +296,15 @@ def get_attention_summary(
     err_count = sum(1 for it in all_items if it["severity"] == "error")
     warn_count = sum(1 for it in all_items if it["severity"] == "warning")
 
+    paginated_items = TrackedAttentionItems(
+        all_items[:limit] if limit is not None else all_items,
+        all_items=all_items,
+    )
+
     return {
         "total": len(all_items),
-        "items": all_items[:limit] if limit is not None else all_items,
+        "items": paginated_items,
+        "_all_items": all_items,
         "counts": {
             "error": err_count,
             "warning": warn_count,
