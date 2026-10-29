@@ -560,6 +560,21 @@ export type SystemVersion = {
   is_release: boolean
 }
 
+export type NotificationConfig = {
+  webhook_enabled: boolean
+  webhook_url: string | null
+  has_secret: boolean
+  webhook_secret_masked: string | null
+  base_url: string
+}
+
+export type NotificationConfigUpdate = {
+  webhook_enabled?: boolean
+  webhook_url?: string | null
+  webhook_secret?: string | null
+  base_url?: string | null
+}
+
 export const api = {
   agents: () => get<{ agents: AgentMeta[] }>('/agents'),
   overview: () => get<Overview>('/overview'),
@@ -807,6 +822,11 @@ export const api = {
     get<{ found: boolean; public_key?: string }>('/inventory/controller-ssh-key'),
   verifyToken: (token?: string) => verifyApiToken(token),
   getAttention: (limit = 50) => get<AttentionSummary>('/attention?limit=' + limit),
+  getNotificationConfig: () => get<NotificationConfig>('/notifications/config'),
+  updateNotificationConfig: (patch: NotificationConfigUpdate) =>
+    post<NotificationConfig>('/notifications/config', patch, 'PUT'),
+  sendTestWebhook: (payload?: { webhook_url?: string; webhook_secret?: string; base_url?: string }) =>
+    post<{ ok: boolean; message: string; event_id?: string }>('/notifications/test-webhook', payload),
   getVersion: () => get<SystemVersion>('/system/version'),
   version: () => get<SystemVersion>('/system/version')
 }

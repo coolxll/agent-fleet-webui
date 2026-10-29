@@ -463,6 +463,25 @@ export const translations = {
     'version.commitCopied': 'Commit SHA copied',
     'version.unknown': 'Unknown',
 
+    // Notifications & Webhook
+    'notifications.title': 'Webhook Notifications',
+    'notifications.desc': 'Receive real-time webhook alerts when attention anomalies (such as scan failures or blocked tasks) are detected or resolved.',
+    'notifications.enabled': 'Enable Webhook notifications',
+    'notifications.statusConfigured': 'Configured',
+    'notifications.statusNone': 'Disabled / Not configured',
+    'notifications.url': 'Webhook URL',
+    'notifications.urlPlaceholder': 'https://example.com/api/webhook',
+    'notifications.secret': 'Secret Token (HMAC-SHA256 / Bearer)',
+    'notifications.secretPlaceholder': 'Optional secret token or signature key',
+    'notifications.baseUrl': 'Fleet WebUI Base URL',
+    'notifications.baseUrlPlaceholder': 'http://localhost:8000',
+    'notifications.save': 'Save Configuration',
+    'notifications.saved': 'Notification configuration saved.',
+    'notifications.test': 'Send Test Webhook',
+    'notifications.testing': 'Sending test webhook...',
+    'notifications.testSuccess': 'Test webhook delivered successfully.',
+    'notifications.testFailed': 'Test webhook delivery failed',
+
     // Attention items & drawer
     'attention.title': 'Fleet Attention',
     'attention.subtitle': 'Pending scan failures, stale probe records, and blocked tasks across the fleet',
@@ -942,6 +961,25 @@ export const translations = {
     'version.copyCommit': '复制提交哈希',
     'version.commitCopied': '提交哈希已复制',
     'version.unknown': '未知',
+
+    // Notifications & Webhook
+    'notifications.title': 'Webhook 状态通知推送',
+    'notifications.desc': '当检测到待处理异常状态（如主机扫描失败、任务阻塞）或异常恢复时，向指定 Webhook 发送实时通知。',
+    'notifications.enabled': '启用 Webhook 状态通知',
+    'notifications.statusConfigured': '已配置推送',
+    'notifications.statusNone': '未启用 / 未配置',
+    'notifications.url': 'Webhook 地址',
+    'notifications.urlPlaceholder': 'https://example.com/api/webhook',
+    'notifications.secret': '密钥令牌 (HMAC-SHA256 / Bearer)',
+    'notifications.secretPlaceholder': '可选的签名密钥或认证 Token',
+    'notifications.baseUrl': 'WebUI 访问基地址 (Base URL)',
+    'notifications.baseUrlPlaceholder': 'http://localhost:8000',
+    'notifications.save': '保存配置',
+    'notifications.saved': 'Webhook 通知配置已保存。',
+    'notifications.test': '发送测试 Webhook',
+    'notifications.testing': '正在发送测试 Webhook...',
+    'notifications.testSuccess': '测试 Webhook 推送成功！',
+    'notifications.testFailed': '测试 Webhook 推送失败',
 
     // Attention items & drawer
     'attention.title': '待处理事项',

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from sqlalchemy import delete, select
 from agent_fleet import models
 from agent_fleet.adapters.registry import agent_ids, agent_meta
 from agent_fleet.db import session_scope
-from agent_fleet.services import attention_service
+from agent_fleet.services import attention_service, notification_service
 from agent_fleet.services import diff
 from agent_fleet.services import persist as _persist  # noqa: F401
 from agent_fleet.services import scan_service
@@ -29,6 +30,8 @@ from agent_fleet.services import sqlite_inventory, ssh_key_service
 from agent_fleet.inventory.loader import validate_inventory_yaml
 from agent_fleet.settings import ROOT, get_settings
 from agent_fleet.version import get_version_info
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -247,7 +250,66 @@ def list_updates():
 def get_attention(limit: int = Query(50, ge=1)):
     """Return aggregated attention items across the fleet."""
     with session_scope() as s:
-        return attention_service.get_attention_summary(db=s, limit=limit)
+        summary = attention_service.get_attention_summary(db=s, limit=limit)
+        try:
+            notification_service.process_attention_items(summary.get("items", []))
+        except Exception as exc:
+            logger.warning("Failed to process attention notifications: %s", exc)
+        return summary
+
+
+# --------------------------------------------------------------------------
+# notifications & webhooks
+# --------------------------------------------------------------------------
+
+
+class NotificationConfigUpdate(BaseModel):
+    webhook_enabled: bool | None = None
+    webhook_url: str | None = None
+    webhook_secret: str | None = None
+    base_url: str | None = None
+
+
+class TestWebhookRequest(BaseModel):
+    webhook_url: str | None = None
+    webhook_secret: str | None = None
+    base_url: str | None = None
+
+
+@router.get("/notifications/config")
+def get_notification_configuration():
+    """Return sanitized notification config (masks secret)."""
+    return notification_service.get_notification_config()
+
+
+@router.put("/notifications/config")
+def update_notification_configuration(body: NotificationConfigUpdate):
+    """Update notification configuration and persist settings."""
+    return notification_service.update_notification_config(
+        webhook_enabled=body.webhook_enabled,
+        webhook_url=body.webhook_url,
+        webhook_secret=body.webhook_secret,
+        base_url=body.base_url,
+    )
+
+
+@router.post("/notifications/test-webhook")
+def post_test_webhook(body: TestWebhookRequest | None = None):
+    """Dispatch a synthetic test webhook event to verify configuration."""
+    url = body.webhook_url if body else None
+    secret = body.webhook_secret if body else None
+    base_url = body.base_url if body else None
+
+    result = notification_service.dispatch_test_webhook(
+        url=url,
+        secret=secret,
+        base_url=base_url,
+    )
+    if not result.get("ok"):
+        err = result.get("error", "Failed to dispatch test webhook")
+        status_code = 400 if "No webhook URL" in err else 502
+        raise HTTPException(status_code=status_code, detail=err)
+    return result
 
 
 # --------------------------------------------------------------------------

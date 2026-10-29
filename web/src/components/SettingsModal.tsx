@@ -42,6 +42,17 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
   const [sysVersion, setSysVersion] = useState<SystemVersion | null>(null)
   const [copiedCommit, setCopiedCommit] = useState(false)
 
+  // Webhook notification state
+  const [webhookEnabled, setWebhookEnabled] = useState(false)
+  const [webhookUrl, setWebhookUrl] = useState('')
+  const [webhookSecret, setWebhookSecret] = useState('')
+  const [webhookBaseUrl, setWebhookBaseUrl] = useState('http://localhost:8000')
+  const [hasWebhookSecret, setHasWebhookSecret] = useState(false)
+  const [showWebhookSecret, setShowWebhookSecret] = useState(false)
+  const [webhookTesting, setWebhookTesting] = useState(false)
+  const [webhookSaving, setWebhookSaving] = useState(false)
+  const [webhookStatusMsg, setWebhookStatusMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null)
+
   useEffect(() => {
     const handleAuthReq = () => {
       setAuthRequired(true)
@@ -52,7 +63,7 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
 
   const loadData = useCallback(async () => {
     try {
-      const [rRes, ovRes, schRes, verRes] = await Promise.all([
+      const [rRes, ovRes, schRes, verRes, notifRes] = await Promise.all([
         api.runtimes(false, true).catch((e: any) => {
           const errMsg = String(e.message || e)
           if (errMsg.includes('401') || errMsg.toLowerCase().includes('unauthorized')) {
@@ -62,12 +73,20 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
         }),
         api.overview().catch(() => null),
         api.getSchedule().catch(() => null),
-        api.getVersion().catch(() => null)
+        api.getVersion().catch(() => null),
+        api.getNotificationConfig().catch(() => null)
       ])
       setRuntimes(rRes.runtimes)
       if (ovRes) setOverview(ovRes)
       if (schRes) setSchedule(schRes)
       if (verRes) setSysVersion(verRes)
+      if (notifRes) {
+        setWebhookEnabled(notifRes.webhook_enabled)
+        setWebhookUrl(notifRes.webhook_url || '')
+        setWebhookSecret(notifRes.has_secret ? '******' : '')
+        setHasWebhookSecret(notifRes.has_secret)
+        setWebhookBaseUrl(notifRes.base_url || 'http://localhost:8000')
+      }
       setAuthRequired(false)
       setError(null)
     } catch (e: any) {
@@ -224,6 +243,52 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
       setTimeout(() => setCopiedCommit(false), 2000)
     } catch {
       // ignore clipboard error
+    }
+  }
+
+  const handleSaveWebhookConfig = async () => {
+    setWebhookSaving(true)
+    setWebhookStatusMsg(null)
+    try {
+      const res = await api.updateNotificationConfig({
+        webhook_enabled: webhookEnabled,
+        webhook_url: webhookUrl.trim() || null,
+        webhook_secret: webhookSecret,
+        base_url: webhookBaseUrl.trim() || null,
+      })
+      setWebhookEnabled(res.webhook_enabled)
+      setWebhookUrl(res.webhook_url || '')
+      setHasWebhookSecret(res.has_secret)
+      setWebhookSecret(res.has_secret ? '******' : '')
+      setWebhookBaseUrl(res.base_url || 'http://localhost:8000')
+      setWebhookStatusMsg({ type: 'ok', text: t('notifications.saved') })
+    } catch (err: any) {
+      setWebhookStatusMsg({ type: 'err', text: String(err.message || err) })
+    } finally {
+      setWebhookSaving(false)
+    }
+  }
+
+  const handleTestWebhook = async () => {
+    setWebhookTesting(true)
+    setWebhookStatusMsg(null)
+    try {
+      const res = await api.sendTestWebhook({
+        webhook_url: webhookUrl.trim() || undefined,
+        webhook_secret: webhookSecret && webhookSecret !== '******' ? webhookSecret.trim() : undefined,
+        base_url: webhookBaseUrl.trim() || undefined,
+      })
+      setWebhookStatusMsg({
+        type: 'ok',
+        text: res.message || t('notifications.testSuccess'),
+      })
+    } catch (err: any) {
+      setWebhookStatusMsg({
+        type: 'err',
+        text: String(err.message || err),
+      })
+    } finally {
+      setWebhookTesting(false)
     }
   }
 
@@ -543,6 +608,145 @@ export default function SettingsModal({ isOpen, onClose, onDataChanged }: Props)
                     {tokenStatusMsg.text}
                   </div>
                 )}
+              </div>
+
+              {/* Webhook Notifications Section */}
+              <div className="settings-sub-panel" style={{ marginTop: 14 }}>
+                <div
+                  className="settings-sub-title"
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+                >
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <span>🔔</span>
+                    <span>{t('notifications.title')}</span>
+                  </span>
+                  <span
+                    className={'tag ' + (webhookEnabled && webhookUrl ? 'ok' : 'unknown')}
+                    style={{ fontSize: 11, fontWeight: 500 }}
+                  >
+                    {webhookEnabled && webhookUrl
+                      ? t('notifications.statusConfigured')
+                      : t('notifications.statusNone')}
+                  </span>
+                </div>
+                <p className="muted small" style={{ margin: '6px 0 12px', lineHeight: 1.5 }}>
+                  {t('notifications.desc')}
+                </p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={webhookEnabled}
+                      onChange={(e) => setWebhookEnabled(e.target.checked)}
+                    />
+                    <span style={{ fontSize: 13, fontWeight: 500 }}>{t('notifications.enabled')}</span>
+                  </label>
+
+                  <div>
+                    <label className="muted small" style={{ display: 'block', marginBottom: 4 }}>
+                      {t('notifications.url')}
+                    </label>
+                    <input
+                      type="text"
+                      value={webhookUrl}
+                      onChange={(e) => setWebhookUrl(e.target.value)}
+                      placeholder={t('notifications.urlPlaceholder')}
+                      style={{
+                        width: '100%',
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="muted small" style={{ display: 'block', marginBottom: 4 }}>
+                      {t('notifications.secret')}
+                    </label>
+                    <div style={{ position: 'relative' }}>
+                      <input
+                        type={showWebhookSecret ? 'text' : 'password'}
+                        value={webhookSecret}
+                        onChange={(e) => setWebhookSecret(e.target.value)}
+                        placeholder={
+                          hasWebhookSecret && !webhookSecret
+                            ? (language === 'zh' ? '已配置密钥 (留空保持不变)' : 'Configured (leave blank to keep)')
+                            : t('notifications.secretPlaceholder')
+                        }
+                        style={{
+                          width: '100%',
+                          paddingRight: 64,
+                          fontFamily: 'monospace',
+                          fontSize: 13,
+                          boxSizing: 'border-box',
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="btn small"
+                        onClick={() => setShowWebhookSecret(!showWebhookSecret)}
+                        style={{
+                          position: 'absolute',
+                          right: 4,
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          padding: '2px 8px',
+                          fontSize: 11,
+                          height: 24,
+                        }}
+                        title={showWebhookSecret ? t('auth.hide') : t('auth.show')}
+                      >
+                        {showWebhookSecret ? t('auth.hide') : t('auth.show')}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="muted small" style={{ display: 'block', marginBottom: 4 }}>
+                      {t('notifications.baseUrl')}
+                    </label>
+                    <input
+                      type="text"
+                      value={webhookBaseUrl}
+                      onChange={(e) => setWebhookBaseUrl(e.target.value)}
+                      placeholder={t('notifications.baseUrlPlaceholder')}
+                      style={{
+                        width: '100%',
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                    <button
+                      className="btn primary small"
+                      onClick={handleSaveWebhookConfig}
+                      disabled={webhookSaving}
+                    >
+                      💾 {webhookSaving ? t('common.loading') : t('notifications.save')}
+                    </button>
+                    <button
+                      className="btn small"
+                      onClick={handleTestWebhook}
+                      disabled={webhookTesting || (!webhookUrl && !webhookEnabled)}
+                    >
+                      {webhookTesting ? t('notifications.testing') : `⚡ ${t('notifications.test')}`}
+                    </button>
+                  </div>
+
+                  {webhookStatusMsg && (
+                    <div
+                      className={webhookStatusMsg.type === 'ok' ? 'tag ok' : 'err'}
+                      style={{ display: 'block', padding: '6px 10px', marginTop: 4 }}
+                    >
+                      {webhookStatusMsg.text}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="settings-sub-panel" style={{ marginTop: 14 }}>

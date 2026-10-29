@@ -124,6 +124,12 @@ class Settings(BaseSettings):
     api_secret: str | None = None
     allow_anonymous_readonly: bool = True
 
+    # Notifications & Webhooks
+    webhook_url: str | None = None
+    webhook_secret: str | None = None
+    webhook_enabled: bool = False
+    base_url: str = "http://localhost:8000"
+
     @property
     def is_auth_enabled(self) -> bool:
         return bool(self.api_secret and self.api_secret.strip())
@@ -144,6 +150,9 @@ class Settings(BaseSettings):
             "local_host_label",
             "api_prefix",
             "allow_anonymous_readonly",
+            "webhook_enabled",
+            "webhook_url",
+            "base_url",
         ]
         data = {}
         for f in fields:
@@ -160,8 +169,8 @@ class Settings(BaseSettings):
     def __repr__(self) -> str:
         attrs = []
         for k in type(self).model_fields:
-            if k == "api_secret":
-                val = "'***'" if self.api_secret else "None"
+            if k in ("api_secret", "webhook_secret"):
+                val = "'***'" if getattr(self, k) else "None"
             else:
                 val = repr(getattr(self, k))
             attrs.append(f"{k}={val}")
