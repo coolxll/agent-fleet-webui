@@ -24,7 +24,7 @@ from agent_fleet.services.updates import (
 )
 from agent_fleet.services.scheduler import get_schedule
 from agent_fleet.services.inventory_sync import add_local_runtime, sync_inventory
-from agent_fleet.services import sqlite_inventory
+from agent_fleet.services import sqlite_inventory, ssh_key_service
 from agent_fleet.inventory.loader import validate_inventory_yaml
 from agent_fleet.settings import ROOT, get_settings
 
@@ -626,9 +626,21 @@ def delete_inventory_host(id_or_name: str):
     return {"ok": True, "deleted": True}
 
 
+@router.get("/inventory/controller-ssh-key")
+def get_controller_ssh_key():
+    return ssh_key_service.get_controller_public_key()
+
+
 @router.post("/inventory/hosts/{id_or_name}/test-ssh")
 def test_host_ssh(id_or_name: str):
-    return sqlite_inventory.test_ssh_connectivity(id_or_name)
+    res = sqlite_inventory.test_ssh_connectivity(id_or_name)
+    if isinstance(res, dict) and not res.get("ok"):
+        raw_error = res.get("error")
+        diag = ssh_key_service.diagnose_ssh_failure(raw_error)
+        res["suggestion"] = diag["suggestion"]
+        if "category" in diag:
+            res["failure_category"] = diag["category"]
+    return res
 
 
 @router.get("/inventory/export-yaml")
