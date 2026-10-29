@@ -267,7 +267,7 @@ export default function TaskBoardView({
           <p style={{ margin: '6px 0 0' }}>
             {boardMode === 'github'
               ? zh
-                ? `以 GitHub Issues 需求为源头，贯穿分支研发、自建 Runner (corp172-dev) CI 验证、PR Review 到合并闭环。`
+                ? `以 GitHub Issues 需求为源头，贯穿分支研发、自建 Runner CI 验证、PR Review 到合并闭环。`
                 : 'Driven by GitHub Issues, pull requests, and GitHub Actions CI workflow runs.'
               : zh
               ? '一项任务关联多次 Agent 执行。任务进度由你管理，执行状态来自连接事件。'

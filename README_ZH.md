@@ -28,9 +28,9 @@
 - **服务监控 (Daemons & Supervisors)**：
   - 实时透视各节点上 **Paseo** 与 **Herdr** 守护进程状态、监听端口、工作区及 Agent 会话。
 - **声明式 GitHub Actions Runner Fleet 编排**：
-  - 基于统一的 `config/runner_fleet.yaml` 声明式清单，一键将内网大算力机（如 `corp172-dev`、`x13` 等）池化为 GitHub Actions 执行节点。
+  - 基于统一的 `config/runner_fleet.yaml` 声明式清单，一键将内网算力节点（如 `runner-node-01`、`runner-node-02` 等）池化为 GitHub Actions 执行节点。
   - **纯出站安全（Outbound Only）**：Runner 仅主动向 GitHub 长轮询任务，**对公网 0 端口暴露**，极致安全。
-  - **集中出站代理共享**：支持各节点共享中心节点的 Tailscale SOCKS5（`100.93.132.98:1080`）或内网 HTTP 代理出口。
+  - **集中出站代理共享**：支持各节点共享中心节点的 Tailscale SOCKS5（`100.64.0.1:1080`）或内网 HTTP 代理出口。
   - 提供 `overview`（全网大盘）、`sync`（声明式一键自愈对齐）与 `prune`（失联僵尸 Runner 自动清理）。
 
 ---
@@ -56,8 +56,8 @@ flowchart TD
 
     subgraph NodePool ["🖥 异构分布式算力节点池 (Host Pool)"]
         Local["Local Controller (macOS / Linux)"]
-        Corp["corp172-dev (24c/64G 大算力机 - 代理出口)"]
-        Workstation["x13 / r9u / pve 等工作站与虚拟机"]
+        Corp["runner-node-01 (大算力机 - 代理出口)"]
+        Workstation["runner-node-02 / 虚拟机 / 工作站"]
         WSLNode["Windows / WSL2 实例"]
     end
 
@@ -147,24 +147,22 @@ npm run dev        # 开发者热重载模式
 1. **配置文件**：[`config/runner_fleet.yaml`](config/runner_fleet.yaml)
    ```yaml
    hosts:
-     corp172-dev:
-       user: "lynn"
+     runner-node-01:
+       user: "devuser"
        proxy: "http://127.0.0.1:8118"
-       labels: ["self-hosted", "Linux", "X64", "corp172-dev"]
+       labels: ["self-hosted", "Linux", "X64", "runner-node-01"]
        max_runners: 6
 
-     x13:
-       user: "lynns"
-       proxy: "socks5://100.93.132.98:1080"  # 复用 corp172-dev 代理出口
-       labels: ["self-hosted", "Linux", "X64", "x13"]
+     runner-node-02:
+       user: "devuser"
+       proxy: "socks5://100.64.0.1:1080"  # 复用代理出口
+       labels: ["self-hosted", "Linux", "X64", "runner-node-02"]
        max_runners: 2
 
    pools:
-     coolxll/agent-fleet-webui:
-       - corp172-dev
-       - x13
-     coolxll/EmbyMetaInfo:
-       - corp172-dev
+     sample-org/sample-repo:
+       - runner-node-01
+       - runner-node-02
    ```
 
 2. **常用管理命令**：

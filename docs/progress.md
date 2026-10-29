@@ -87,31 +87,31 @@ Requirements source: `requirements.md` (IDs such as `CFG-3` referenced below).
 | Machine | Runtime | Result |
 | --- | --- | --- |
 | local-controller (macOS 26.5 arm64) | macos | all 5 agents, config parsed |
-| rn-direct (Ubuntu 24.04) | linux | codex 0.117.0, claude 2.1.187, opencode 1.19.0, hermes 0.21.7; pi absent |
-| x13 (Ubuntu) | linux | codex 0.162.1, claude 2.1.302, opencode 1.2.0 |
-| k14 | wsl | codex 0.153.4, opencode 1.18.20, pi 1.3.0, hermes 0.21.7 |
-| corp172-dev | linux | codex 0.154.0, claude 2.1.226, opencode 1.18.18, pi 1.2.0 |
-| la-tri | linux | reachable, no agents installed |
-| r9kp-win | windows | Windows 11; codex 0.162.1, claude 2.1.226, opencode 1.18.4, pi 1.1.0, hermes config-only |
-| r9kp-win | wsl:Ubuntu-22.04 | probed through `wsl.exe` |
-| wujie-win | windows | 4 agents + WSL distro |
-| k14-win | windows | reachable, no agents installed; WSL archlinux probed |
-| r9u | - | unreachable: connection timed out (reported, not crashed) |
+| linux-srv-01 (Ubuntu 24.04) | linux | codex 0.117.0, claude 2.1.187, opencode 1.19.0, hermes 0.21.7; pi absent |
+| linux-srv-02 (Ubuntu) | linux | codex 0.162.1, claude 2.1.302, opencode 1.2.0 |
+| wsl-node-01 | wsl | codex 0.153.4, opencode 1.18.20, pi 1.3.0, hermes 0.21.7 |
+| runner-node-01 | linux | codex 0.154.0, claude 2.1.226, opencode 1.18.18, pi 1.2.0 |
+| vps-edge-01 | linux | reachable, no agents installed |
+| win-workstation-01 | windows | Windows 11; codex 0.162.1, claude 2.1.226, opencode 1.18.4, pi 1.1.0, hermes config-only |
+| win-workstation-01 | wsl:Ubuntu-22.04 | probed through `wsl.exe` |
+| win-workstation-02 | windows | 4 agents + WSL distro |
+| win-desktop-01 | windows | reachable, no agents installed; WSL archlinux probed |
+| offline-srv-01 | - | unreachable: connection timed out (reported, not crashed) |
 
-Two-host end-to-end: **local-controller + rn-direct**, plus a full 27-runtime
+Two-host end-to-end: **local-controller + linux-srv-01**, plus a full 27-runtime
 fleet scan.
 
 ## WSL policy (changed 2026-10-18, after user feedback)
 
-WSL distros are reached through their own SSH endpoints (wujie, r9kp-wsl, ...),
+WSL distros are reached through their own SSH endpoints (`wsl-node-01`, `win-workstation-01-wsl`, ...),
 which the SSH config already provides. Auto-discovery through the Windows host
-(wsl.exe -l -q) duplicated those, so it is now off by default
-(AGENT_FLEET_DISCOVER_WSL=false). The duplicated rows were removed and the two
-distros without a direct connection (docker-desktop, k14-win archlinux) were
+(`wsl.exe -l -q`) duplicated those, so it is now off by default
+(`AGENT_FLEET_DISCOVER_WSL=false`). The duplicated rows were removed and the two
+distros without a direct connection (docker-desktop, `win-desktop-01` archlinux) were
 disabled with a reason rather than deleted.
 
-Also fixed in the same pass: a kind hint in inventory.yaml was overwriting the
-kind observed by a probe on every restart, so wujie showed "linux" although it
+Also fixed in the same pass: a kind hint in `inventory.yaml` was overwriting the
+kind observed by a probe on every restart, so `wsl-node-01` showed "linux" although it
 is a WSL distro. Hints now only apply before the first scan.
 
 ### 9. Antigravity (AGY) and CodeBuddy (done)
@@ -138,21 +138,20 @@ Agent count is now 7, all with config parsing.
 
 ## Fleet scope (2026-10-18, updated after user feedback)
 
-The fleet is now declaratively scoped in inventory.yaml with an exclude:
-list. Hosts that used to leak in from ~/.ssh/config (corp172, ddrk, jph2,
-la-tri, pve, r9u, racknerd) are excluded outright and their rows were removed
+The fleet is now declaratively scoped in inventory with an exclude
+list. Hosts that used to leak in from SSH config (`vps-01`, `vps-02`,
+`edge-01`, `nas-01`, `backup-01`, etc.) are excluded outright and their rows were removed
 from the database - the earlier host-level disable flag is kept for ad-hoc
 exclusion from the UI, but the config is the source of truth.
 
 The fleet now contains exactly the machines the user asked for. Everything
-else that used to leak in from ~/.ssh/config (corp172, ddrk, jph2, la-tri, pve,
-r9u, racknerd) is excluded at the host level rather than deleted, so its
+else that used to leak in from SSH config is excluded at the host level rather than deleted, so its
 history is still there and the Overview has a "show excluded hosts" checkbox.
 
-k14 turned out to be the WSL side of k14-win (kernel
+`wsl-node-01` turned out to be the WSL side of `win-desktop-01` (kernel
 6.6.114.1-microsoft-standard-WSL2, /mnt/c present), the same relationship as
-wujie/wujie-win and r9kp-wsl/r9kp-win. The two auto-discovered distros with no
-direct SSH endpoint (k14-win/wsl:archlinux, r9kp-win/wsl:docker-desktop) were
+`win-workstation-02` and `win-workstation-01`. The two auto-discovered distros with no
+direct SSH endpoint (`win-desktop-01/wsl:archlinux`, `win-workstation-01/wsl:docker-desktop`) were
 removed with the new DELETE /api/runtimes/{id} endpoint.
 
 ## Known limitations / not done

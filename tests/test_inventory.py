@@ -15,13 +15,15 @@ from agent_fleet.inventory import (
 
 
 def test_ansible_yaml_inventory():
+    from pathlib import Path
+
     hosts = load_ansible_inventory(Path("tests/fixtures/inventory/ansible_hosts.yaml"))
     by_name = {h.name: h for h in hosts}
-    assert set(by_name) == {"rn-direct", "la-tri", "wujie"}
-    assert by_name["rn-direct"].hostname == "64.188.31.181"
-    assert by_name["rn-direct"].user == "coolxll"
-    assert by_name["rn-direct"].port == 22
-    assert by_name["la-tri"].user == "root"
+    assert set(by_name) == {"vps-srv-01", "vps-srv-02", "node-wsl-01"}
+    assert by_name["vps-srv-01"].hostname == "198.51.100.1"
+    assert by_name["vps-srv-01"].user == "testuser"
+    assert by_name["vps-srv-01"].port == 22
+    assert by_name["vps-srv-02"].user == "root"
     assert all(h.source == "ansible" for h in hosts)
 
 
@@ -49,10 +51,10 @@ def test_ssh_config_parsing():
 
     hosts = load_ssh_config(Path("tests/fixtures/inventory/ssh_config"))
     by_name = {h.name: h for h in hosts}
-    assert set(by_name) == {"la-tri", "racknerd", "ddrk"}
-    assert by_name["ddrk"].port == 22222
-    assert by_name["ddrk"].user == "lynn"
-    assert by_name["la-tri"].hostname == "38.244.63.166"
+    assert set(by_name) == {"vps-srv-02", "vps-srv-03", "vps-srv-04"}
+    assert by_name["vps-srv-04"].port == 22222
+    assert by_name["vps-srv-04"].user == "testuser"
+    assert by_name["vps-srv-02"].hostname == "203.0.113.1"
     # glob patterns are not hosts
     assert "wildcard-*" not in by_name
 

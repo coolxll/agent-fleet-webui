@@ -181,7 +181,7 @@ cmd_status() {
 
 cmd_start() {
   local repo="${1:-$(detect_current_repo)}"
-  local host="${2:-corp172-dev}"
+  local host="${2:-runner-node-01}"
 
   if [ -z "$repo" ]; then
     echo "❌ 请指定仓库名" >&2
@@ -300,7 +300,7 @@ ENVEOF
 
 cmd_stop() {
   local repo="${1:-$(detect_current_repo)}"
-  local host="${2:-corp172-dev}"
+  local host="${2:-runner-node-01}"
 
   if [ -z "$repo" ]; then
     echo "❌ 请指定仓库名" >&2
@@ -337,7 +337,7 @@ cmd_stop() {
 
 cmd_logs() {
   local repo="${1:-$(detect_current_repo)}"
-  local host="${2:-corp172-dev}"
+  local host="${2:-runner-node-01}"
 
   local safe_repo
   safe_repo=$(safe_name "$repo")
