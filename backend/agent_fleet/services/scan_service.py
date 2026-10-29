@@ -54,7 +54,7 @@ async def start_scan(runtime_ids, triggered_by, settings) -> str:
             target_runtime_ids=list(runtime_ids),
             total=len(runtime_ids),
             concurrency=settings.scan_concurrency,
-            started_at=datetime.utcnow(),
+            started_at=models.utcnow(),
         )
         s.add(run)
         for rid in runtime_ids:
@@ -227,7 +227,7 @@ def _mark_task(run_id, runtime_id, status, error, agents_found=0, duration_ms=0)
         task.error = error
         task.agents_found = agents_found
         task.duration_ms = duration_ms
-        task.finished_at = datetime.utcnow()
+        task.finished_at = models.utcnow()
         if task.started_at is None:
             task.started_at = task.finished_at
         s.commit()
@@ -247,7 +247,7 @@ def _finish(run_id):
         run.succeeded = ok
         run.failed = failed
         run.total = len(tasks)
-        run.finished_at = datetime.utcnow()
+        run.finished_at = models.utcnow()
         if failed and ok:
             run.status = "partial"
         elif failed and not ok:

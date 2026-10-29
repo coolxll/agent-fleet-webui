@@ -16,7 +16,7 @@ from agent_fleet.services.scanner import RuntimeScanResult
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return models.utcnow()
 
 
 def persist_result(runtime_id, result: RuntimeScanResult, run_id, settings) -> dict:

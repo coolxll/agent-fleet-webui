@@ -33,12 +33,13 @@ router = APIRouter()
 STALE_GRACE = 60  # seconds of slack before a snapshot counts as stale
 
 _iso = models.iso_utc
+_utcnow = models.utcnow
 
 
 def _age(dt):
     if not dt:
         return None
-    return int((datetime.utcnow() - dt).total_seconds())
+    return int((_utcnow() - dt).total_seconds())
 
 
 def _visible(s, include_disabled: bool):
@@ -218,7 +219,7 @@ def _inst_detail(inst, include_config=True):
 
 @router.get("/health")
 def health():
-    return {"ok": True, "service": "agent-fleet", "ts": datetime.utcnow().isoformat() + "Z"}
+    return {"ok": True, "service": "agent-fleet", "ts": _utcnow().isoformat() + "Z"}
 
 
 @router.get("/agents")
@@ -916,7 +917,7 @@ def list_quotas(include_disabled_hosts: bool = Query(False)):
             "providers": sorted(
                 provider_counts.values(), key=lambda x: x["name"].lower()
             ),
-            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "generated_at": _utcnow().isoformat() + "Z",
         }
 
 
