@@ -38,13 +38,12 @@ jobs:
 
       - name: Install Backend Dependencies
         run: |
-          uv venv .venv
           uv pip install -r backend/requirements.txt
 
       - name: Run Backend Tests (Parallel via pytest-xdist)
         run: |
           export PYTHONPATH=backend
-          .venv/bin/python -m pytest tests/ -n auto --dist=loadscope -q
+          uv run pytest tests/ -n auto --dist=loadscope -q
 
   frontend:
     name: Frontend Typecheck & Build
