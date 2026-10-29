@@ -710,6 +710,15 @@ def get_controller_ssh_key():
 
 @router.post("/inventory/hosts/{id_or_name}/test-ssh")
 def test_host_ssh(id_or_name: str):
+    from agent_fleet.services import operation_service
+
+    op = operation_service.record_operation(
+        operation_type="ssh_test",
+        target_type="host",
+        target_id=id_or_name,
+        target_name=id_or_name,
+        status="running",
+    )
     res = sqlite_inventory.test_ssh_connectivity(id_or_name)
     if isinstance(res, dict) and not res.get("ok"):
         raw_error = res.get("error")
@@ -717,6 +726,19 @@ def test_host_ssh(id_or_name: str):
         res["suggestion"] = diag["suggestion"]
         if "category" in diag:
             res["failure_category"] = diag["category"]
+        operation_service.update_operation_status(
+            op["id"],
+            status="failed",
+            error=str(raw_error),
+            details=res,
+        )
+    else:
+        operation_service.update_operation_status(
+            op["id"],
+            status="succeeded",
+            verification_evidence={"verified": True, "res": res if isinstance(res, dict) else {}},
+            details=res if isinstance(res, dict) else {},
+        )
     return res
 
 
@@ -1081,14 +1103,63 @@ async def upgrade_installation_route(inst_id: str, wait: bool = Query(False)):
         start_upgrade_task,
         upgrade_agent_installation,
     )
+    from agent_fleet.services import operation_service
+
+    target_id = inst_id
+    target_name = None
+    agent_id = "unknown"
+    with session_scope() as s:
+        inst = s.get(models.AgentInstallation, inst_id)
+        if inst:
+            agent_id = inst.agent_id
+            host_label = inst.runtime.host.name if inst.runtime and inst.runtime.host else "local"
+            target_name = f"{host_label}:{agent_id}"
+            target_id = inst.runtime_id or inst_id
+
+    op = operation_service.record_operation(
+        operation_type="agent_upgrade",
+        target_type="runtime",
+        target_id=target_id,
+        target_name=target_name,
+        status="running" if not wait else "accepted",
+        details={"installation_id": inst_id, "agent": agent_id, "wait": wait},
+    )
 
     try:
         if wait:
-            return await upgrade_agent_installation(inst_id)
-        return start_upgrade_task(inst_id)
+            res = await upgrade_agent_installation(inst_id)
+            if res.get("ok"):
+                operation_service.update_operation_status(
+                    op["id"],
+                    status="succeeded",
+                    verification_evidence={
+                        "scan_refreshed": res.get("scan_refreshed"),
+                        "new_version": res.get("new_version"),
+                        "exit_code": res.get("exit_code"),
+                    },
+                    details=res,
+                )
+            else:
+                operation_service.update_operation_status(
+                    op["id"],
+                    status="failed",
+                    error=res.get("error") or res.get("stderr") or "Upgrade failed",
+                    details=res,
+                )
+            return res
+
+        task = start_upgrade_task(inst_id)
+        operation_service.update_operation_status(
+            op["id"],
+            status="running",
+            details={"task_id": task.get("task_id"), "installation_id": inst_id},
+        )
+        return task
     except ValueError as exc:
+        operation_service.update_operation_status(op["id"], status="failed", error=str(exc))
         raise HTTPException(400, str(exc))
     except Exception as exc:
+        operation_service.update_operation_status(op["id"], status="failed", error=str(exc))
         raise HTTPException(500, f"Upgrade execution error: {exc}")
 
 
@@ -1100,6 +1171,7 @@ async def upgrade_runtime_agent_route(
         start_upgrade_task,
         upgrade_agent_installation,
     )
+    from agent_fleet.services import operation_service
 
     with session_scope() as s:
         inst = s.execute(
@@ -1113,14 +1185,53 @@ async def upgrade_runtime_agent_route(
                 404, f"No installation of {agent_id} found on runtime {runtime_id}"
             )
         inst_id = inst.id
+        host_label = inst.runtime.host.name if inst.runtime and inst.runtime.host else "local"
+        target_name = f"{host_label}:{agent_id}"
+
+    op = operation_service.record_operation(
+        operation_type="agent_upgrade",
+        target_type="runtime",
+        target_id=runtime_id,
+        target_name=target_name,
+        status="running" if not wait else "accepted",
+        details={"installation_id": inst_id, "agent": agent_id, "wait": wait},
+    )
 
     try:
         if wait:
-            return await upgrade_agent_installation(inst_id)
-        return start_upgrade_task(inst_id)
+            res = await upgrade_agent_installation(inst_id)
+            if res.get("ok"):
+                operation_service.update_operation_status(
+                    op["id"],
+                    status="succeeded",
+                    verification_evidence={
+                        "scan_refreshed": res.get("scan_refreshed"),
+                        "new_version": res.get("new_version"),
+                        "exit_code": res.get("exit_code"),
+                    },
+                    details=res,
+                )
+            else:
+                operation_service.update_operation_status(
+                    op["id"],
+                    status="failed",
+                    error=res.get("error") or res.get("stderr") or "Upgrade failed",
+                    details=res,
+                )
+            return res
+
+        task = start_upgrade_task(inst_id)
+        operation_service.update_operation_status(
+            op["id"],
+            status="running",
+            details={"task_id": task.get("task_id"), "installation_id": inst_id},
+        )
+        return task
     except ValueError as exc:
+        operation_service.update_operation_status(op["id"], status="failed", error=str(exc))
         raise HTTPException(400, str(exc))
     except Exception as exc:
+        operation_service.update_operation_status(op["id"], status="failed", error=str(exc))
         raise HTTPException(500, f"Upgrade execution error: {exc}")
 
 
@@ -1155,36 +1266,115 @@ class BatchUpgradeRequest(BaseModel):
 @router.post("/upgrades/batch")
 def batch_upgrade_route(payload: BatchUpgradeRequest):
     from agent_fleet.services.action_service import start_batch_upgrade
+    from agent_fleet.services import operation_service
 
     tasks = start_batch_upgrade(payload.installation_ids)
+    for t in tasks:
+        inst_id = t.get("installation_id")
+        operation_service.record_operation(
+            operation_type="agent_upgrade",
+            target_type="runtime",
+            target_id=t.get("runtime_id") or inst_id or "unknown",
+            target_name=f"{t.get('host', 'local')}:{t.get('agent', 'unknown')}",
+            status="running",
+            details={"task_id": t.get("task_id"), "installation_id": inst_id, "batch": True},
+        )
     return {"tasks": tasks, "queued": len(tasks)}
 
 
 @router.post("/machines/{host_id}/upgrade-all")
 def upgrade_machine_all_route(host_id: str):
     from agent_fleet.services.action_service import find_outdated_installations, start_batch_upgrade
+    from agent_fleet.services import operation_service
 
     outdated_ids = find_outdated_installations(host_id=host_id)
     tasks = start_batch_upgrade(outdated_ids)
+    for t in tasks:
+        inst_id = t.get("installation_id")
+        operation_service.record_operation(
+            operation_type="agent_upgrade",
+            target_type="runtime",
+            target_id=t.get("runtime_id") or inst_id or "unknown",
+            target_name=f"{t.get('host', 'local')}:{t.get('agent', 'unknown')}",
+            status="running",
+            details={"task_id": t.get("task_id"), "installation_id": inst_id, "host_id": host_id},
+        )
     return {"tasks": tasks, "queued": len(tasks), "host_id": host_id}
 
 
 @router.post("/agents/{agent_id}/upgrade-all")
 def upgrade_agent_all_route(agent_id: str):
     from agent_fleet.services.action_service import find_outdated_installations, start_batch_upgrade
+    from agent_fleet.services import operation_service
 
     outdated_ids = find_outdated_installations(agent_id=agent_id)
     tasks = start_batch_upgrade(outdated_ids)
+    for t in tasks:
+        inst_id = t.get("installation_id")
+        operation_service.record_operation(
+            operation_type="agent_upgrade",
+            target_type="runtime",
+            target_id=t.get("runtime_id") or inst_id or "unknown",
+            target_name=f"{t.get('host', 'local')}:{t.get('agent', 'unknown')}",
+            status="running",
+            details={"task_id": t.get("task_id"), "installation_id": inst_id, "agent_id": agent_id},
+        )
     return {"tasks": tasks, "queued": len(tasks), "agent_id": agent_id}
 
 
 @router.post("/fleet/upgrade-all")
 def upgrade_fleet_all_route():
     from agent_fleet.services.action_service import find_outdated_installations, start_batch_upgrade
+    from agent_fleet.services import operation_service
 
     outdated_ids = find_outdated_installations()
     tasks = start_batch_upgrade(outdated_ids)
+    for t in tasks:
+        inst_id = t.get("installation_id")
+        operation_service.record_operation(
+            operation_type="agent_upgrade",
+            target_type="runtime",
+            target_id=t.get("runtime_id") or inst_id or "unknown",
+            target_name=f"{t.get('host', 'local')}:{t.get('agent', 'unknown')}",
+            status="running",
+            details={"task_id": t.get("task_id"), "installation_id": inst_id, "fleet_wide": True},
+        )
     return {"tasks": tasks, "queued": len(tasks)}
+
+
+# --------------------------------------------------------------------------
+# Operation Audit Log
+# --------------------------------------------------------------------------
+
+
+@router.get("/operations")
+def list_operations_route(
+    limit: int = Query(50, ge=1, le=500),
+    target_type: str | None = Query(None),
+    target_id: str | None = Query(None),
+    status: str | None = Query(None),
+    operation_type: str | None = Query(None),
+):
+    from agent_fleet.services import operation_service
+
+    ops = operation_service.list_operations(
+        limit=limit,
+        target_type=target_type,
+        target_id=target_id,
+        status=status,
+        operation_type=operation_type,
+    )
+    return {"operations": ops, "total": len(ops)}
+
+
+@router.get("/operations/{op_id}")
+def get_operation_route(op_id: str):
+    from agent_fleet.services import operation_service
+
+    op = operation_service.get_operation(op_id)
+    if not op:
+        raise HTTPException(404, f"Operation '{op_id}' not found")
+    return {"operation": op}
 
 
 @router.get("/snapshots")

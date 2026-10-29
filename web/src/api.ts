@@ -37,6 +37,28 @@ export type Runtime = {
 
 export type AgentMeta = { id: string; name: string; config_supported: boolean }
 
+export type OperationStatus = 'accepted' | 'running' | 'succeeded' | 'failed' | 'unknown'
+export type OperationTargetType = 'host' | 'runner' | 'task' | 'runtime'
+
+export interface OperationLog {
+  id: string
+  operation_type: string
+  target_type: OperationTargetType | string
+  target_id: string
+  target_name: string | null
+  status: OperationStatus
+  requested_by: string | null
+  started_at: string
+  finished_at: string | null
+  error: string | null
+  details: Record<string, any>
+}
+
+export interface OperationsResponse {
+  operations: OperationLog[]
+  total: number
+}
+
 export type AttentionItemType = 'scan_failed' | 'scan_stale' | 'task_blocked'
 export type AttentionSeverity = 'error' | 'warning'
 export type AttentionTargetType = 'host' | 'task'
@@ -828,7 +850,24 @@ export const api = {
   sendTestWebhook: (payload?: { webhook_url?: string; webhook_secret?: string; base_url?: string }) =>
     post<{ ok: boolean; message: string; event_id?: string }>('/notifications/test-webhook', payload),
   getVersion: () => get<SystemVersion>('/system/version'),
-  version: () => get<SystemVersion>('/system/version')
+  version: () => get<SystemVersion>('/system/version'),
+  listOperations: (params?: {
+    limit?: number
+    target_type?: string
+    target_id?: string
+    status?: string
+    operation_type?: string
+  }) => {
+    const q = new URLSearchParams()
+    if (params?.limit) q.set('limit', String(params.limit))
+    if (params?.target_type) q.set('target_type', params.target_type)
+    if (params?.target_id) q.set('target_id', params.target_id)
+    if (params?.status) q.set('status', params.status)
+    if (params?.operation_type) q.set('operation_type', params.operation_type)
+    const qs = q.toString() ? '?' + q.toString() : ''
+    return get<OperationsResponse>('/operations' + qs)
+  },
+  getOperation: (opId: string) => get<{ operation: OperationLog }>('/operations/' + encodeURIComponent(opId))
 }
 
 export type SessionSummary = {
@@ -1181,6 +1220,21 @@ export async function getSystemVersion(): Promise<SystemVersion> {
 export async function getVersion(): Promise<SystemVersion> {
   return api.getVersion()
 }
+
+export async function listOperations(params?: {
+  limit?: number
+  target_type?: string
+  target_id?: string
+  status?: string
+  operation_type?: string
+}): Promise<OperationsResponse> {
+  return api.listOperations(params)
+}
+
+export async function getOperation(opId: string): Promise<{ operation: OperationLog }> {
+  return api.getOperation(opId)
+}
+
 
 
 

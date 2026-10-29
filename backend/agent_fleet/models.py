@@ -358,3 +358,31 @@ class SessionTranscript(Base):
 
     session: Mapped["Session"] = relationship(back_populates="transcript")
 
+
+def new_op_id() -> str:
+    return f"op-{uuid.uuid4().hex}"
+
+
+class OperationLog(Base):
+    """Persistent audit log of operational actions (upgrades, runner actions, task dispatches, etc.)."""
+
+    __tablename__ = "operation_logs"
+    __table_args__ = (
+        Index("ix_op_target", "target_type", "target_id"),
+        Index("ix_op_status", "status"),
+        Index("ix_op_started_at", "started_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_op_id)
+    operation_type: Mapped[str] = mapped_column(String, index=True)
+    target_type: Mapped[str] = mapped_column(String, index=True)  # "host", "runner", "task", "runtime"
+    target_id: Mapped[str] = mapped_column(String, index=True)
+    target_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="accepted", index=True)  # "accepted", "running", "succeeded", "failed", "unknown"
+    requested_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
