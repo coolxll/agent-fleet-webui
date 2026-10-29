@@ -22,3 +22,8 @@ scratch_*.py
 # local inventory (private host configuration)
 inventory.yaml
 inventory.yml
+
+# environment variables
+.env
+.env*.local
+!.env.example

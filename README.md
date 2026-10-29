@@ -20,7 +20,7 @@ Supported targets: macOS, Linux, Windows (PowerShell) and WSL distros,
 reached through your existing SSH configuration. The machine list itself comes
 only from inventory files; `~/.ssh/config` is not imported automatically.
 
-Requirements: Python 3.13, Node 20+, and the `ssh` client on the controller.
+Requirements: Python 3.11+ (Python 3.13 is tested and recommended), Node 20+, and the `ssh` client on the controller.
 
 ## Quick start
 
@@ -54,7 +54,7 @@ is reachable from the tailnet — `http://<tailscale-ip>:5173` or
 falls back to `127.0.0.1`. `/api` requests are proxied server-side, so the backend
 stays on `127.0.0.1` and is never exposed directly.
 
-Note: the API has no authentication. Only bind `0.0.0.0` on networks you trust.
+Note: By default, the API operates in loopback development mode. For external exposure, configure `AGENT_FLEET_API_SECRET` in `.env` for bearer token authentication.
 
 ---
 
@@ -65,7 +65,7 @@ The backend and CLI import the `agent_fleet` package, so run them from
 
     # from the repo root
     cd backend
-    uv venv ../.venv --python 3.13
+    uv venv ../.venv --python 3.13   # or: python3 -m venv ../.venv (Python 3.11+)
     uv pip install --python ../.venv/bin/python -r requirements.txt
 
     # backend (proxied by the dev UI; serves the built UI when web/dist exists)
@@ -78,13 +78,13 @@ The backend and CLI import the `agent_fleet` package, so run them from
     npm run dev        # http://localhost:5173 local-only; set FRONTEND_HOST=<ip> to expose
     npm run build      # writes web/dist, served by the backend
 
-First run (from `backend/`):
+When starting via `./start.sh` or launching the backend service, initialization (database setup, inventory migration, and local controller discovery) happens automatically. Open the WebUI at `http://127.0.0.1:8000` and click **Scan all** to trigger fleet discovery.
 
-    ../.venv/bin/python -m agent_fleet.cli sync              # load inventory
+Optional: the CLI is also available for headless management (from `backend/`):
+
+    ../.venv/bin/python -m agent_fleet.cli sync              # reload inventory
     ../.venv/bin/python -m agent_fleet.cli runtimes          # list what was found
     ../.venv/bin/python -m agent_fleet.cli scan --host <name> # probe one machine
-
-Then open the UI and press **Scan all**.
 
 ## Where the machine list comes from
 
@@ -282,8 +282,9 @@ upgrade and coding-task execution actions use the target user's permissions.
   adapter copies an explicit whitelist (email, name, aliases, tier, quota
   buckets), so `token_data`, `token_hash`, `secret_ref` and every other
   credential field are dropped; the raw file is never persisted.
-* The API has no authentication and is meant to bind to loopback; do not
-  expose it to untrusted networks.
+* By default the API is unauthenticated for seamless local loopback development.
+  When binding to shared or untrusted networks, configure `AGENT_FLEET_API_SECRET` in `.env`
+  (with optional strict mode `AGENT_FLEET_ALLOW_ANONYMOUS_READONLY=false`).
 * Output is sanitized three ways: field whitelists, recursive dropping of
   credential-named keys, and redaction of credential-looking values.
 * URLs keep scheme + host + port + path; query strings, embedded credentials
@@ -307,16 +308,31 @@ upgrade and coding-task execution actions use the target user's permissions.
   Even an `effective` answer only covers files: environment variables and CLI
   flags are outside what the probe can see, and that is never claimed.
 
-## Configuration (env vars)
+## Configuration (.env and environment variables)
+
+Agent Fleet supports out-of-the-box configuration using a `.env` file in the repository root or via standard environment variables. Copy the example file to get started:
+
+```bash
+cp .env.example .env
+```
+
+Settings defined in `.env` are automatically loaded on startup (prefixed with `AGENT_FLEET_`). Shell environment variables take precedence over values defined in `.env`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `AGENT_FLEET_DB_PATH` | `<repo>/data/fleet.db` | SQLite location |
-| `AGENT_FLEET_INVENTORY_PATHS` | `["<repo>/inventory.yaml"]` | extra inventory files/dirs (absolute default) |
+| `AGENT_FLEET_HOST` | `127.0.0.1` | server bind host address |
+| `AGENT_FLEET_PORT` | `8000` | server HTTP port |
+| `AGENT_FLEET_DATA_DIR` | `<repo>/data` | runtime data directory (database, quota tokens, logs) |
+| `AGENT_FLEET_DB_PATH` | `<repo>/data/fleet.db` | SQLite database file location |
+| `AGENT_FLEET_INVENTORY_PATHS` | `["<repo>/inventory.yaml"]` | inventory files/dirs (comma-separated or JSON list) |
+| `AGENT_FLEET_API_SECRET` | `None` | optional bearer secret/token for API access control |
+| `AGENT_FLEET_ALLOW_ANONYMOUS_READONLY` | `true` | allow unauthenticated read requests when `API_SECRET` is set |
+| `AGENT_FLEET_AUTO_SCAN_ENABLED` | `false` | automatically start scheduled scanning loop on startup |
+| `AGENT_FLEET_AUTO_SCAN_INTERVAL_MINUTES` | `60` | interval in minutes between automated scans |
 | `AGENT_FLEET_SCAN_CONCURRENCY` | `4` | concurrent runtimes per run (hard ceiling 8) |
 | `AGENT_FLEET_COMMAND_TIMEOUT` | `25` | per-probe timeout (s); Windows chunks share it |
 | `AGENT_FLEET_SSH_CONNECT_TIMEOUT` | `10` | ssh connect timeout (s) |
-| `AGENT_FLEET_SCAN_TTL_SECONDS` | `21600` | snapshot staleness threshold |
+| `AGENT_FLEET_SCAN_TTL_SECONDS` | `21600` | snapshot staleness threshold (6 hours) |
 | `AGENT_FLEET_INCLUDE_LOCAL_RUNTIME` | `true` | also probe the controller machine |
 | `AGENT_FLEET_LOCAL_HOST_LABEL` | `local-controller` | host name that maps to the local runner |
 

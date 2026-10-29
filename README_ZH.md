@@ -78,7 +78,7 @@ flowchart TD
 ## 🚀 快速上手
 
 ### 环境准备
-- **后端**：Python 3.13+，操作系统自带原生 `ssh` 客户端
+- **后端**：Python 3.11+（推荐并经过完整测试的为 Python 3.13），操作系统自带原生 `ssh` 客户端
 - **前端**：Node 20+，npm
 
 ---
@@ -110,9 +110,9 @@ flowchart TD
 ### 2. 手动分步启动
 
 ```bash
-# 1. 激活虚拟环境并安装依赖
+# 1. 激活虚拟环境并安装依赖 (Python 3.11+; 推荐 3.13)
 cd backend
-uv venv ../.venv --python 3.13
+uv venv ../.venv --python 3.13   # 或: python3 -m venv ../.venv
 uv pip install --python ../.venv/bin/python -r requirements.txt
 
 # 2. 启动 FastAPI 后端服务
@@ -124,6 +124,39 @@ npm install
 npm run build      # 静态产物输出至 web/dist
 npm run dev        # 开发者热重载模式
 ```
+
+> **提示**：通过 `./start.sh` 或启动后端服务时，系统会自动完成 SQLite 数据库初始化、历史清单迁移以及本机 Controller 探测，无需在启动前手动运行 CLI 预先同步。启动后直接访问 `http://127.0.0.1:8000` 并在界面点击 **Scan all** 即可。
+> 如需无头模式命令行调试，可随时执行：`PYTHONPATH=backend .venv/bin/python -m agent_fleet.cli --help`。
+
+---
+
+## ⚙️ 环境配置 (.env 与环境变量)
+
+Agent Fleet 支持开箱即用的配置方式，可在项目根目录下创建 `.env` 文件或直接配置系统环境变量。可复制模板快速初始化：
+
+```bash
+cp .env.example .env
+```
+
+服务启动时会自动加载 `.env` 中所有以 `AGENT_FLEET_` 开头的配置项。系统环境变量优先级高于 `.env` 文件。
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `AGENT_FLEET_HOST` | `127.0.0.1` | FastAPI 后端服务监听地址 |
+| `AGENT_FLEET_PORT` | `8000` | FastAPI 后端服务 HTTP 端口 |
+| `AGENT_FLEET_DATA_DIR` | `data` | 运行时数据存储目录 (数据库、配额凭据、日志) |
+| `AGENT_FLEET_DB_PATH` | `<repo>/data/fleet.db` | SQLite 数据库文件绝对/相对路径 |
+| `AGENT_FLEET_INVENTORY_PATHS` | `["<repo>/inventory.yaml"]` | 主机清单路径列表 (支持逗号分隔或 JSON 数组) |
+| `AGENT_FLEET_API_SECRET` | 空 (None) | 可选 API 访问控制令牌 / Bearer Secret |
+| `AGENT_FLEET_ALLOW_ANONYMOUS_READONLY` | `true` | 设置 Secret 后是否依然允许只读匿名访问 (严格模式设为 `false`) |
+| `AGENT_FLEET_AUTO_SCAN_ENABLED` | `false` | 启动时是否自动开启后台周期性扫描调度器 |
+| `AGENT_FLEET_AUTO_SCAN_INTERVAL_MINUTES` | `60` | 自动定时巡检扫描间隔 (分钟) |
+| `AGENT_FLEET_SCAN_CONCURRENCY` | `4` | 探测扫描并发度 (最大硬上限 8) |
+| `AGENT_FLEET_COMMAND_TIMEOUT` | `25` | 单项探针执行超时时间 (秒) |
+| `AGENT_FLEET_SSH_CONNECT_TIMEOUT` | `10` | SSH 建立连接超时时间 (秒) |
+| `AGENT_FLEET_SCAN_TTL_SECONDS` | `21600` | 快照过期陈旧时间 (默认 6 小时) |
+| `AGENT_FLEET_INCLUDE_LOCAL_RUNTIME` | `true` | 是否同时探测控制器本机 Runtime 环境 |
+| `AGENT_FLEET_LOCAL_HOST_LABEL` | `local-controller` | 控制器本机在资产清单中的显示名称 |
 
 ---
 
@@ -189,7 +222,9 @@ npm run dev        # 开发者热重载模式
 2. **三层脱敏与无凭据持久化**：
    - 远程机器的原始配置文件仅在内存分析时短暂驻留，落盘数据库与 API 返回结构均经过字段白名单过滤、敏感 Key 递归移除及模式掩码脱敏。
    - 导入的配额凭证存放在 `data/quota_accounts.json`（`0600` 权限），API 绝不返回明文秘钥。
-3. **网络通信纯出站**：
+3. **网络通信与接口安全**：
+   - 默认模式下 API 面向本地回环（Loopback）免密开放，适合本机开发。
+   - 当服务需暴露或共享至局域网/Tailnet 时，可通过配置 `AGENT_FLEET_API_SECRET` 启用 Bearer Token 访问控制（并可通过 `AGENT_FLEET_ALLOW_ANONYMOUS_READONLY=false` 开启全站严格认证）。
    - Runner 仅通过长轮询出站，内网主机无需对外开放任何端口，杜绝网络攻击面。
 
 ---

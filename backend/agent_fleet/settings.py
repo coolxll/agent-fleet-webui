@@ -2,25 +2,59 @@ from __future__ import annotations
 
 from pathlib import Path
 from functools import lru_cache
+from typing import Any
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="AGENT_FLEET_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="AGENT_FLEET_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    # Server & Network
+    host: str = "127.0.0.1"
+    port: int = 8000
 
     # Storage
+    data_dir: Path = ROOT / "data"
     db_path: Path = ROOT / "data" / "fleet.db"
 
     # Inventory sources. Later entries fill gaps for the same host name.
     # Hosts come only from these files; ~/.ssh/config is not auto-imported.
-    inventory_paths: list[Path] = [
+    inventory_paths: list[Path] | str = [
         ROOT / "inventory.yaml",
     ]
     auto_seed_legacy: bool = True
     workspace_root: Path = ROOT.parent
+
+    # Automated Scanning
+    auto_scan_enabled: bool = False
+    auto_scan_interval_minutes: int = 60
+
+    @field_validator("inventory_paths")
+    @classmethod
+    def parse_inventory_paths(cls, v: Any) -> list[Path]:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            if v.startswith("[") and v.endswith("]"):
+                import json
+                try:
+                    loaded = json.loads(v)
+                    return [Path(p) for p in loaded]
+                except Exception:
+                    pass
+            return [Path(p.strip()) for p in v.split(",") if p.strip()]
+        return [Path(p) for p in v]
 
     @property
     def resolved_inventory_paths(self) -> list[Path]:
@@ -137,6 +171,7 @@ class Settings(BaseSettings):
         return self.__repr__()
 
     def ensure_dirs(self) -> None:
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
