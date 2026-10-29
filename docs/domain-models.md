@@ -236,7 +236,7 @@ erDiagram
     }
 
     HERDR_OBSERVATION {
-        string runtime_id PK_FK
+        string runtime_id PK, FK
         string status
         datetime checked_at
         datetime last_success_at
@@ -251,7 +251,7 @@ erDiagram
     }
 
     PASEO_OBSERVATION {
-        string runtime_id PK_FK
+        string runtime_id PK, FK
         string status
         datetime checked_at
         datetime last_success_at
