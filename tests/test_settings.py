@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 from agent_fleet.settings import Settings, get_settings
 
 
-def test_settings_default_values():
+def test_settings_default_values(monkeypatch):
     """Verify default Settings values and configuration metadata."""
-    settings = Settings()
+    for key in list(os.environ):
+        if key.upper().startswith("AGENT_FLEET_"):
+            monkeypatch.delenv(key, raising=False)
+
+    settings = Settings(_env_file=None)
     assert settings.host == "127.0.0.1"
     assert settings.port == 8000
     assert settings.auto_scan_enabled is False
@@ -94,14 +99,14 @@ def test_settings_case_insensitive_env(monkeypatch):
     monkeypatch.setenv("agent_fleet_port", "8123")
     monkeypatch.setenv("agent_fleet_ssh_connect_timeout", "15")
 
-    settings = Settings()
+    settings = Settings(_env_file=None)
     assert settings.port == 8123
     assert settings.ssh_connect_timeout == 15
 
 
 def test_settings_masking_and_safe_dict():
     """Verify repr/str masking and safe_dict secret stripping."""
-    settings = Settings(api_secret="very-secret-token")
+    settings = Settings(_env_file=None, api_secret="very-secret-token")
     assert "very-secret-token" not in repr(settings)
     assert "'***'" in repr(settings)
     assert "very-secret-token" not in str(settings)
