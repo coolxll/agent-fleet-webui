@@ -76,71 +76,79 @@ async def lifespan(app: FastAPI):
         await task_service.shutdown()
 
 
-app = FastAPI(title="Agent Fleet Explorer", version="0.1.0", lifespan=lifespan)
+def create_app(web_dist: Path | None = None) -> FastAPI:
+    """Create and configure the FastAPI application."""
+    dist_dir = WEB_DIST if web_dist is None else web_dist
+    application = FastAPI(title="Agent Fleet Explorer", version="0.1.0", lifespan=lifespan)
 
-app.add_middleware(APIAuthMiddleware)
+    application.add_middleware(APIAuthMiddleware)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:4173",
-        "http://localhost:8000",
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:4173",
+            "http://localhost:8000",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-app.include_router(auth_router, prefix="/api")
-app.include_router(router, prefix="/api")
-app.include_router(daemon_router, prefix="/api")
-app.include_router(paseo_router, prefix="/api")
-app.include_router(task_router, prefix="/api")
-app.include_router(quota_source_router, prefix="/api")
+    application.include_router(auth_router, prefix="/api")
+    application.include_router(router, prefix="/api")
+    application.include_router(daemon_router, prefix="/api")
+    application.include_router(paseo_router, prefix="/api")
+    application.include_router(task_router, prefix="/api")
+    application.include_router(quota_source_router, prefix="/api")
 
+    if dist_dir.is_dir():
+        resolved_web_dist = dist_dir.resolve()
+        if (resolved_web_dist / "assets").is_dir():
+            application.mount("/assets", StaticFiles(directory=resolved_web_dist / "assets"), name="assets")
+        if (resolved_web_dist / "icons").is_dir():
+            application.mount("/icons", StaticFiles(directory=resolved_web_dist / "icons"), name="icons")
 
-if WEB_DIST.is_dir():
-    resolved_web_dist = WEB_DIST.resolve()
-    app.mount("/assets", StaticFiles(directory=resolved_web_dist / "assets"), name="assets")
-    if (resolved_web_dist / "icons").is_dir():
-        app.mount("/icons", StaticFiles(directory=resolved_web_dist / "icons"), name="icons")
-
-    @app.get("/")
-    def index():
-        index_file = resolved_web_dist / "index.html"
-        if index_file.is_file():
-            return FileResponse(index_file)
-        raise HTTPException(status_code=404, detail="Not found")
-
-    @app.get("/{full_path:path}")
-    def spa(full_path: str):
-        clean_path = full_path.replace("\\", "/").lstrip("/")
-        try:
-            resolved_candidate = (resolved_web_dist / clean_path).resolve()
-        except (ValueError, RuntimeError):
+        @application.get("/")
+        def index():
+            index_file = resolved_web_dist / "index.html"
+            if index_file.is_file():
+                return FileResponse(index_file)
             raise HTTPException(status_code=404, detail="Not found")
 
-        if not resolved_candidate.is_relative_to(resolved_web_dist):
+        @application.get("/{full_path:path}")
+        def spa(full_path: str):
+            clean_path = full_path.replace("\\", "/").lstrip("/")
+            try:
+                resolved_candidate = (resolved_web_dist / clean_path).resolve()
+            except (ValueError, RuntimeError):
+                raise HTTPException(status_code=404, detail="Not found")
+
+            if not resolved_candidate.is_relative_to(resolved_web_dist):
+                raise HTTPException(status_code=404, detail="Not found")
+
+            rel_path = resolved_candidate.relative_to(resolved_web_dist)
+            if any(part.startswith(".") for part in rel_path.parts):
+                raise HTTPException(status_code=404, detail="Not found")
+
+            if resolved_candidate.is_file():
+                return FileResponse(resolved_candidate)
+
+            index_file = resolved_web_dist / "index.html"
+            if index_file.is_file():
+                return FileResponse(index_file)
             raise HTTPException(status_code=404, detail="Not found")
+    else:
 
-        rel_path = resolved_candidate.relative_to(resolved_web_dist)
-        if any(part.startswith(".") for part in rel_path.parts):
-            raise HTTPException(status_code=404, detail="Not found")
+        @application.get("/")
+        def index_placeholder():
+            return {
+                "service": "agent-fleet",
+                "note": "frontend build missing; run npm run build in web/ or use the dev server",
+            }
 
-        if resolved_candidate.is_file():
-            return FileResponse(resolved_candidate)
+    return application
 
-        index_file = resolved_web_dist / "index.html"
-        if index_file.is_file():
-            return FileResponse(index_file)
-        raise HTTPException(status_code=404, detail="Not found")
-else:
 
-    @app.get("/")
-    def index_placeholder():
-        return {
-            "service": "agent-fleet",
-            "note": "frontend build missing; run npm run build in web/ or use the dev server",
-        }
+app = create_app()

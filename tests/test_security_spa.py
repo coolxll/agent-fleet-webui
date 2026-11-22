@@ -2,8 +2,42 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
-from agent_fleet.main import WEB_DIST
+from fastapi.testclient import TestClient
+
+from agent_fleet.main import create_app
+
+
+@pytest.fixture()
+def spa_dist(tmp_path: Path) -> Path:
+    """Create an isolated temporary web/dist tree so tests never touch the repo's web/dist."""
+    root = tmp_path / "repo"
+    dist = root / "web" / "dist"
+    assets = dist / "assets"
+    assets.mkdir(parents=True)
+
+    (dist / "index.html").write_text("<!doctype html><html><body>Agent Fleet SPA</body></html>")
+    (dist / "favicon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+    (assets / "app.js").write_text('console.log("agent-fleet");')
+
+    # Decoy sensitive files outside web/dist to ensure traversal cannot read them
+    (root / ".env").write_text("AGENT_FLEET_API_SECRET=supersecret\n")
+    (root / "data").mkdir(parents=True)
+    (root / "data" / "fleet.db").write_bytes(b"SQLite format 3\x00dummy")
+    (root / "backend" / "agent_fleet").mkdir(parents=True)
+    (root / "backend" / "agent_fleet" / "main.py").write_text('"""FastAPI application entry point."""\n')
+
+    return dist
+
+
+@pytest.fixture()
+def client(fleet_db, spa_dist: Path):
+    """Test client backed by the per-test database and an isolated tmp_path web/dist."""
+    test_app = create_app(web_dist=spa_dist)
+    with TestClient(test_app) as c:
+        yield c
 
 
 def test_directory_traversal_blocked_env(client):
@@ -53,17 +87,13 @@ def test_hidden_and_dotfiles_blocked(client):
     assert res_env.status_code in (403, 404)
 
 
-def test_dotfile_inside_web_dist_blocked(client):
+def test_dotfile_inside_web_dist_blocked(client, spa_dist: Path):
     """Even if a dotfile is accidentally placed inside WEB_DIST, it must NOT be served."""
-    dotfile = WEB_DIST / ".secret_spa_test"
-    try:
-        dotfile.write_text("SENSITIVE_SECRET_TOKEN=xyz123")
-        res = client.get("/.secret_spa_test")
-        assert res.status_code in (403, 404)
-        assert "SENSITIVE_SECRET_TOKEN" not in res.text
-    finally:
-        if dotfile.exists():
-            dotfile.unlink()
+    dotfile = spa_dist / ".secret_spa_test"
+    dotfile.write_text("SENSITIVE_SECRET_TOKEN=xyz123")
+    res = client.get("/.secret_spa_test")
+    assert res.status_code in (403, 404)
+    assert "SENSITIVE_SECRET_TOKEN" not in res.text
 
 
 def test_null_byte_path_rejected(client):
@@ -83,19 +113,13 @@ def test_legitimate_spa_client_routes(client):
 
 def test_legitimate_static_assets(client):
     """Legitimate static files in WEB_DIST must be served with 200 OK."""
-    if (WEB_DIST / "favicon.svg").is_file():
-        res = client.get("/favicon.svg")
-        assert res.status_code == 200
-        assert "<svg" in res.text or "svg" in res.headers.get("content-type", "")
+    res_favicon = client.get("/favicon.svg")
+    assert res_favicon.status_code == 200
+    assert "<svg" in res_favicon.text or "svg" in res_favicon.headers.get("content-type", "")
 
-    assets_dir = WEB_DIST / "assets"
-    if assets_dir.is_dir():
-        asset_files = [f for f in assets_dir.iterdir() if f.is_file()]
-        if asset_files:
-            sample_asset = asset_files[0]
-            res = client.get(f"/assets/{sample_asset.name}")
-            assert res.status_code == 200
-            assert len(res.content) > 0
+    res_asset = client.get("/assets/app.js")
+    assert res_asset.status_code == 200
+    assert "agent-fleet" in res_asset.text
 
 
 def test_api_endpoints_unaffected(client):
@@ -107,3 +131,15 @@ def test_api_endpoints_unaffected(client):
     res = client.get("/api/settings")
     assert res.status_code == 200
     assert "db_path" in res.json() or "auth_required" in res.json()
+
+
+def test_missing_web_dist_returns_placeholder(fleet_db, tmp_path: Path):
+    """When web/dist does not exist, root returns the JSON placeholder cleanly."""
+    missing_dist = tmp_path / "nonexistent-dist"
+    test_app = create_app(web_dist=missing_dist)
+    with TestClient(test_app) as c:
+        res = c.get("/")
+        assert res.status_code == 200
+        data = res.json()
+        assert data.get("service") == "agent-fleet"
+        assert "frontend build missing" in data.get("note", "")
