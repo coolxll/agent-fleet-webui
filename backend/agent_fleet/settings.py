@@ -134,6 +134,45 @@ class Settings(BaseSettings):
     def is_auth_enabled(self) -> bool:
         return bool(self.api_secret and self.api_secret.strip())
 
+    @staticmethod
+    def _mask_webhook_url(url: str | None) -> str | None:
+        """Mask credentials, query/fragment tokens, and secret webhook path tokens."""
+        if not url or not str(url).strip():
+            return None
+        from urllib.parse import urlsplit, urlunsplit
+        from agent_fleet.adapters.sanitize import mask_url
+
+        masked, _ = mask_url(url)
+        if not masked or "://" not in masked:
+            return masked
+        parts = urlsplit(masked)
+        path = parts.path
+        if path:
+            segments = path.split("/")
+            host = (parts.hostname or "").lower()
+            is_webhook_host = any(
+                p in host
+                for p in (
+                    "slack.com",
+                    "discord.com",
+                    "feishu.cn",
+                    "larksuite.com",
+                    "dingtalk.com",
+                    "weixin.qq.com",
+                )
+            )
+            if is_webhook_host and len(segments) > 1 and segments[-1]:
+                segments[-1] = "***"
+            else:
+                segments = [
+                    "***"
+                    if len(seg) >= 20 and not seg.endswith((".json", ".html", ".xml"))
+                    else seg
+                    for seg in segments
+                ]
+            path = "/".join(segments)
+        return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+
     def safe_dict(self) -> dict:
         """Return public settings dictionary without sensitive secrets."""
         fields = [
@@ -157,7 +196,9 @@ class Settings(BaseSettings):
         data = {}
         for f in fields:
             val = getattr(self, f, None)
-            if isinstance(val, Path):
+            if f == "webhook_url":
+                data[f] = self._mask_webhook_url(val)
+            elif isinstance(val, Path):
                 data[f] = str(val)
             elif isinstance(val, list):
                 data[f] = [str(x) if isinstance(x, Path) else x for x in val]
@@ -171,6 +212,8 @@ class Settings(BaseSettings):
         for k in type(self).model_fields:
             if k in ("api_secret", "webhook_secret"):
                 val = "'***'" if getattr(self, k) else "None"
+            elif k == "webhook_url":
+                val = repr(self._mask_webhook_url(getattr(self, k)))
             else:
                 val = repr(getattr(self, k))
             attrs.append(f"{k}={val}")

@@ -238,7 +238,8 @@ def effective_latest(installed: str, info: dict, channel: str | None = None):
     if channel == "stable":
         pkg = (info or {}).get("package")
         if pkg in ("@anthropic-ai/claude-code", "@cometix/claude-code"):
-            if compare_versions(installed, "2.1.280") >= 0:
+            cmp = compare_versions(installed, "2.1.280")
+            if cmp is not None and cmp >= 0:
                 return installed
         stable = (info or {}).get("stable_available")
         if stable:

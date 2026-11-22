@@ -402,7 +402,7 @@ def _sanitize_change_value(path: str, value):
     if path == "base_url" or path.endswith(".base_url"):
         masked, _ = sanitize.mask_url(value)
         return masked
-    return sanitize.redact_value(value)
+    return sanitize.sanitize_object(value)
 
 
 def cmd_compare(settings, args):

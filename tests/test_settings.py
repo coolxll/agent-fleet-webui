@@ -114,3 +114,40 @@ def test_settings_masking_and_safe_dict():
     safe = settings.safe_dict()
     assert "api_secret" not in safe
     assert safe["auth_required"] is True
+
+
+def test_settings_webhook_url_masking():
+    """Verify webhook_url tokens, credentials, and query secrets are masked in safe_dict and repr."""
+    cases = [
+        (
+            "https://hooks.slack.com/services/T00000000/B00000000/superSecretSlackToken",
+            "superSecretSlackToken",
+        ),
+        (
+            "https://discord.com/api/webhooks/123456789/discordSecretToken999",
+            "discordSecretToken999",
+        ),
+        (
+            "https://user:s3cr3tpass@hooks.example.com/notify?token=querySecret123#fragSecret",
+            "s3cr3tpass",
+        ),
+        (
+            "https://hooks.example.com/notify?token=querySecret123",
+            "querySecret123",
+        ),
+        (
+            "https://hooks.example.com/bot/a1b2c3d4e5f6g7h8i9j0k1l2",
+            "a1b2c3d4e5f6g7h8i9j0k1l2",
+        ),
+    ]
+    for raw_url, secret_fragment in cases:
+        s = Settings(_env_file=None, webhook_url=raw_url, webhook_secret="whsec_raw_secret")
+        safe = s.safe_dict()
+        assert safe["webhook_url"] is not None
+        assert secret_fragment not in safe["webhook_url"]
+        assert "whsec_raw_secret" not in repr(s)
+        assert secret_fragment not in repr(s)
+
+    empty = Settings(_env_file=None, webhook_url=None)
+    assert empty.safe_dict()["webhook_url"] is None
+    assert "webhook_url=None" in repr(empty)

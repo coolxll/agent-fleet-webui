@@ -35,6 +35,7 @@ class OpenCodeAdapter(AgentAdapter):
 
     PRECEDENCE_CHAIN = [
         ("system", "/etc/opencode/opencode.json"),
+        ("user", JSONC_PATH),
         ("user", JSON_PATH),
         ("project", "PROJECT/opencode.json"),
         ("project", "PROJECT/.opencode/opencode.json"),
@@ -196,7 +197,7 @@ class OpenCodeAdapter(AgentAdapter):
             data, [k for k in SETTING_KEYS] + ["mcp", "skills", "$schema", "instructions"]
         )
         cfg.unsupported_fields = [d for d in dropped if d not in ("$schema",)][:60]
-        cfg.settings = {k: v for k, v in settings.items() if not is_secret_key(k)}
+        cfg.settings.update({k: v for k, v in settings.items() if not is_secret_key(k)})
 
         model = data.get("model")
         if isinstance(model, str) and model:

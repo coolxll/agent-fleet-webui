@@ -81,18 +81,38 @@ def _strip_jsonc(text: str) -> str:
         out.append(c)
         i += 1
     cleaned = "".join(out)
-    # trailing commas: ", }" or ", ]"
-    buf, res = [], []
-    for ch in cleaned:
-        if ch in "}]":
-            while buf and buf[-1] in (" " + chr(9) + chr(10) + chr(13) + ","):
-                buf.pop()
-            res.append("".join(buf))
-            buf = []
+    # trailing commas: ", }" or ", ]" (string-aware so literals are never touched)
+    res = []
+    in_str = False
+    escaped = False
+    i, n = 0, len(cleaned)
+    while i < n:
+        ch = cleaned[i]
+        if in_str:
             res.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            i += 1
             continue
-        buf.append(ch)
-    return "".join(res) + "".join(buf)
+        if ch == '"':
+            in_str = True
+            res.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < n and cleaned[j] in " \t\r\n":
+                j += 1
+            if j < n and cleaned[j] in "}]":
+                i += 1
+                continue
+        res.append(ch)
+        i += 1
+    return "".join(res)
 
 
 def parse_json(text: str):
@@ -391,6 +411,7 @@ def scrub_config(cfg: "ParsedConfig") -> "ParsedConfig":
     cfg.sanitized = sanitize_object(cfg.sanitized) if cfg.sanitized else {}
     cfg.mcp_servers = sanitize_object(cfg.mcp_servers) if cfg.mcp_servers else []
     cfg.skills = sanitize_object(cfg.skills) if cfg.skills else []
+    cfg.warnings = [redact_value(w) for w in cfg.warnings] if cfg.warnings else []
     # Quota snapshots are already an explicit whitelist assembled by the
     # adapter (texts truncated, fractions clamped), so they are not passed
     # through the depth-limited generic sanitizer.

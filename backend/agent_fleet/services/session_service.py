@@ -111,11 +111,23 @@ def detect_codex_project_from_rollout(file_p, base_cwd):
         try:
             import subprocess
             proc = subprocess.Popen(['zstd', '-dc', target], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            for _ in range(80):
-                l = proc.stdout.readline().decode('utf-8', 'ignore')
-                if not l: break
-                lines.append(l)
-            proc.terminate()
+            try:
+                for _ in range(80):
+                    l = proc.stdout.readline().decode('utf-8', 'ignore')
+                    if not l: break
+                    lines.append(l)
+            finally:
+                try:
+                    if proc.stdout: proc.stdout.close()
+                except Exception: pass
+                try:
+                    proc.terminate()
+                except Exception: pass
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    try: proc.kill()
+                    except Exception: pass
         except Exception: pass
     else:
         try:
@@ -1084,7 +1096,7 @@ def parse_timestamp(val: Any) -> datetime | None:
 # --------------------------------------------------------------------------
 
 
-async def scan_sessions_for_runtime(rt_ref, runner, settings, db_session) -> int:
+async def scan_sessions_for_runtime(rt_ref, runner, settings, db_session=None) -> int:
     """Run session discovery on one runtime and upsert results into the database."""
     # Skip Windows runtimes for session indexing per user request
     if rt_ref.kind == "windows":
@@ -1112,7 +1124,10 @@ fi
     if idx == -1:
         return 0
 
-    json_str = stdout[idx + len(marker) :].strip().splitlines()[0]
+    lines = stdout[idx + len(marker) :].strip().splitlines()
+    if not lines:
+        return 0
+    json_str = lines[0]
     try:
         raw_sessions = json.loads(json_str)
     except Exception as e:
@@ -1122,64 +1137,70 @@ fi
     if not isinstance(raw_sessions, list):
         return 0
 
-    now = models.utcnow()
-    upserted_count = 0
+    def _upsert(s) -> int:
+        now = models.utcnow()
+        upserted_count = 0
 
-    for item in raw_sessions:
-        agent_id = str(item.get("agent_id") or "unknown")
-        session_key = str(item.get("session_key") or "")
-        if not session_key:
-            continue
+        for item in raw_sessions:
+            agent_id = str(item.get("agent_id") or "unknown")
+            session_key = str(item.get("session_key") or "")
+            if not session_key:
+                continue
 
-        session_id = f"{rt_ref.id}:{agent_id}:{session_key}"
-        title = (item.get("title") or "Untitled Session").strip()
-        project_path = item.get("project_path") or None
-        project_name = item.get("project_name") or (
-            os.path.basename(project_path) if project_path else None
-        )
-        file_path = item.get("file_path") or None
-        updated_at = parse_timestamp(item.get("updated_at"))
-        message_count = int(item.get("message_count") or 1)
-        token_count = item.get("token_count")
-
-        existing = db_session.get(models.Session, session_id)
-        if existing:
-            if title and (not existing.title or existing.title == "Untitled Session"):
-                existing.title = title
-            if file_path:
-                existing.file_path = file_path
-            if project_path:
-                existing.project_path = project_path
-            if project_name:
-                existing.project_name = project_name
-            if updated_at is not None:
-                existing.updated_at = updated_at
-            existing.message_count = max(existing.message_count, message_count)
-            if token_count:
-                existing.token_count = token_count
-            existing.last_synced_at = now
-        else:
-            new_s = models.Session(
-                id=session_id,
-                runtime_id=rt_ref.id,
-                agent_id=agent_id,
-                session_key=session_key,
-                title=title,
-                project_path=project_path,
-                project_name=project_name,
-                file_path=file_path,
-                updated_at=updated_at,
-                message_count=message_count,
-                token_count=token_count,
-                created_at=updated_at or now,
-                last_synced_at=now,
+            session_id = f"{rt_ref.id}:{agent_id}:{session_key}"
+            title = (item.get("title") or "Untitled Session").strip()
+            project_path = item.get("project_path") or None
+            project_name = item.get("project_name") or (
+                os.path.basename(project_path) if project_path else None
             )
-            db_session.add(new_s)
+            file_path = item.get("file_path") or None
+            updated_at = parse_timestamp(item.get("updated_at"))
+            message_count = int(item.get("message_count") or 1)
+            token_count = item.get("token_count")
 
-        upserted_count += 1
+            existing = s.get(models.Session, session_id)
+            if existing:
+                if title and (not existing.title or existing.title == "Untitled Session"):
+                    existing.title = title
+                if file_path:
+                    existing.file_path = file_path
+                if project_path:
+                    existing.project_path = project_path
+                if project_name:
+                    existing.project_name = project_name
+                if updated_at is not None:
+                    existing.updated_at = updated_at
+                existing.message_count = max(existing.message_count, message_count)
+                if token_count:
+                    existing.token_count = token_count
+                existing.last_synced_at = now
+            else:
+                new_s = models.Session(
+                    id=session_id,
+                    runtime_id=rt_ref.id,
+                    agent_id=agent_id,
+                    session_key=session_key,
+                    title=title,
+                    project_path=project_path,
+                    project_name=project_name,
+                    file_path=file_path,
+                    updated_at=updated_at,
+                    message_count=message_count,
+                    token_count=token_count,
+                    created_at=updated_at or now,
+                    last_synced_at=now,
+                )
+                s.add(new_s)
 
-    db_session.flush()
-    return upserted_count
+            upserted_count += 1
+
+        s.flush()
+        return upserted_count
+
+    if db_session is not None:
+        return _upsert(db_session)
+    with session_scope() as s:
+        return _upsert(s)
 
 
 async def sync_all_sessions(settings=None) -> dict[str, Any]:
@@ -1216,9 +1237,8 @@ async def sync_all_sessions(settings=None) -> dict[str, Any]:
     for ref in refs:
         runner = build_runner(ref, settings)
         try:
-            with session_scope() as s:
-                count = await scan_sessions_for_runtime(ref, runner, settings, s)
-                total_found += count
+            count = await scan_sessions_for_runtime(ref, runner, settings)
+            total_found += count
         except Exception as exc:
             errors.append(f"{ref.target}: {exc}")
 
@@ -1534,12 +1554,29 @@ def detect_codex_project_from_rollout(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             )
-            for _ in range(80):
-                l = proc.stdout.readline().decode("utf-8", "ignore")
-                if not l:
-                    break
-                lines.append(l)
-            proc.terminate()
+            try:
+                for _ in range(80):
+                    l = proc.stdout.readline().decode("utf-8", "ignore")
+                    if not l:
+                        break
+                    lines.append(l)
+            finally:
+                if proc.stdout is not None:
+                    try:
+                        proc.stdout.close()
+                    except Exception:
+                        pass
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
         except Exception:
             pass
     else:
@@ -2210,63 +2247,90 @@ async def get_session_transcript(
     """Fetch and return parsed conversation turns with sensitive data masked."""
     settings = settings or get_settings()
 
-    session_obj = (
-        db_session.execute(
-            select(models.Session)
-            .where(models.Session.id == session_id)
-            .options(
-                joinedload(models.Session.runtime).joinedload(models.Runtime.host),
-                joinedload(models.Session.transcript),
+    def _load_or_cached(s):
+        session_obj = (
+            s.execute(
+                select(models.Session)
+                .where(models.Session.id == session_id)
+                .options(
+                    joinedload(models.Session.runtime).joinedload(models.Runtime.host),
+                    joinedload(models.Session.transcript),
+                )
             )
+            .unique()
+            .scalar_one_or_none()
         )
-        .unique()
-        .scalar_one_or_none()
-    )
 
-    if not session_obj:
-        raise ValueError(f"Session '{session_id}' not found")
+        if not session_obj:
+            raise ValueError(f"Session '{session_id}' not found")
 
-    # If cached, return after verifying tool_calls and contents are fully sanitized
-    if session_obj.transcript and session_obj.transcript.turns:
-        cached_turns = session_obj.transcript.turns
-        sanitized_turns = []
-        extra_masked = 0
-        for turn in cached_turns:
-            s_turn, m_count = sanitize_turn(turn)
-            sanitized_turns.append(s_turn)
-            extra_masked += m_count
+        # If cached, return after verifying tool_calls and contents are fully sanitized
+        if session_obj.transcript and session_obj.transcript.turns:
+            cached_turns = session_obj.transcript.turns
+            sanitized_turns = []
+            extra_masked = 0
+            for turn in cached_turns:
+                s_turn, m_count = sanitize_turn(turn)
+                sanitized_turns.append(s_turn)
+                extra_masked += m_count
 
-        total_masked = (session_obj.transcript.masked_count or 0) + extra_masked
-        has_secrets = session_obj.transcript.has_secrets_masked or (total_masked > 0)
+            total_masked = (session_obj.transcript.masked_count or 0) + extra_masked
+            has_secrets = session_obj.transcript.has_secrets_masked or (total_masked > 0)
 
-        # Seamlessly update cached transcript in database if sensitive data was masked on read
-        if extra_masked > 0:
-            session_obj.transcript.turns = sanitized_turns
-            session_obj.transcript.masked_count = total_masked
-            session_obj.transcript.has_secrets_masked = has_secrets
-            db_session.flush()
+            # Seamlessly update cached transcript in database if sensitive data was masked on read
+            if extra_masked > 0:
+                session_obj.transcript.turns = sanitized_turns
+                session_obj.transcript.masked_count = total_masked
+                session_obj.transcript.has_secrets_masked = has_secrets
+                s.flush()
 
-        return {
-            "session_id": session_id,
-            "turns": sanitized_turns,
-            "has_secrets_masked": has_secrets,
-            "masked_count": total_masked,
-            "cached": True,
-            "cached_at": models.iso_utc(session_obj.transcript.cached_at),
-        }
+            return (
+                {
+                    "session_id": session_id,
+                    "turns": sanitized_turns,
+                    "has_secrets_masked": has_secrets,
+                    "masked_count": total_masked,
+                    "cached": True,
+                    "cached_at": models.iso_utc(session_obj.transcript.cached_at),
+                },
+                None,
+            )
 
-    # Fetch from remote runtime
-    rt = session_obj.runtime
-    if not rt:
-        raise ValueError(f"Runtime not associated with session '{session_id}'")
+        rt = session_obj.runtime
+        if not rt:
+            raise ValueError(f"Runtime not associated with session '{session_id}'")
 
-    file_path = session_obj.file_path
+        return (
+            None,
+            {
+                "file_path": session_obj.file_path,
+                "ref": to_ref(rt),
+                "agent": session_obj.agent_id,
+                "skey": session_obj.session_key,
+                "title": session_obj.title,
+                "updated_at": session_obj.updated_at,
+            },
+        )
+
+    if db_session is not None:
+        cached_resp, meta = _load_or_cached(db_session)
+    else:
+        with session_scope() as s:
+            cached_resp, meta = _load_or_cached(s)
+
+    if cached_resp is not None:
+        return cached_resp
+
+    # Fetch from remote runtime (no DB session held open when db_session is None)
+    file_path = meta["file_path"]
     turns: list[dict[str, Any]] = []
     total_masked = 0
-    ref = to_ref(rt)
+    ref = meta["ref"]
     runner = build_runner(ref, settings)
-    agent = session_obj.agent_id
-    skey = session_obj.session_key
+    agent = meta["agent"]
+    skey = meta["skey"]
+    session_title = meta["title"]
+    session_updated_at = meta["updated_at"]
 
     # Helper to run python script via heredoc cleanly without quoting issues
     async def _run_py(script_body: str, timeout_sec: int) -> str | None:
@@ -2483,7 +2547,7 @@ print('___CODEX_JSON___' + json.dumps(turns, ensure_ascii=False))
         exec_res = await runner.run_script(read_cmd, timeout=settings.ssh_connect_timeout + 15)
         if exec_res.ok and exec_res.stdout:
             raw_lines = exec_res.stdout.splitlines()
-            turns = parse_raw_transcript_lines(session_obj.agent_id, raw_lines)
+            turns = parse_raw_transcript_lines(agent, raw_lines)
 
     # 5. Fallback: if no turns, query agent history.jsonl for user prompts
     if not turns:
@@ -2533,12 +2597,12 @@ print('___HIST_JSON___' + json.dumps(turns))
                 except Exception: pass
 
     # 6. Ultimate fallback: session title
-    if not turns and session_obj.title:
+    if not turns and session_title:
         turns = [
             {
                 "role": "user",
-                "content": session_obj.title,
-                "timestamp": models.iso_utc(session_obj.updated_at),
+                "content": session_title,
+                "timestamp": models.iso_utc(session_updated_at),
             }
         ]
 
@@ -2574,16 +2638,24 @@ print('___HIST_JSON___' + json.dumps(turns))
 
     # Save to SessionTranscript cache
     now = models.utcnow()
-    tr = models.SessionTranscript(
-        id=models.new_id(),
-        session_id=session_id,
-        turns=turns,
-        has_secrets_masked=total_masked > 0,
-        masked_count=total_masked,
-        cached_at=now,
-    )
-    db_session.merge(tr)
-    db_session.flush()
+
+    def _persist_transcript(s):
+        tr = models.SessionTranscript(
+            id=models.new_id(),
+            session_id=session_id,
+            turns=turns,
+            has_secrets_masked=total_masked > 0,
+            masked_count=total_masked,
+            cached_at=now,
+        )
+        s.merge(tr)
+        s.flush()
+
+    if db_session is not None:
+        _persist_transcript(db_session)
+    else:
+        with session_scope() as s:
+            _persist_transcript(s)
 
     return {
         "session_id": session_id,

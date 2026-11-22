@@ -394,3 +394,44 @@ def test_config_only_when_binary_missing(fleet_db, monkeypatch):
         assert insts["codex"].status == "config_only"
         assert insts["codex"].detected is False
         assert insts["claude"].status == "not_installed"
+
+
+def test_scan_service_execute_cleanup_on_cancel_and_error(fleet_db, monkeypatch):
+    """Verify _execute cancels workers, runs _finish(run_id), and cleans up _background_tasks on cancel."""
+    rid = _make_runtime(fleet_db, name="cancel-box")
+    worker_started = asyncio.Event()
+    worker_cancelled = False
+
+    async def hanging_scan(ref, settings):
+        nonlocal worker_cancelled
+        worker_started.set()
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            worker_cancelled = True
+            raise
+
+    monkeypatch.setattr(scan_service, "scan_runtime", hanging_scan)
+
+    async def main():
+        run_id = await scan_service.start_scan([rid], "manual", fleet_db)
+        assert len(scan_service._background_tasks) >= 1
+        bg_tasks = list(scan_service._background_tasks)
+        await asyncio.wait_for(worker_started.wait(), timeout=2)
+        for t in bg_tasks:
+            t.cancel()
+        await asyncio.gather(*bg_tasks, return_exceptions=True)
+        # Allow done callbacks to run
+        await asyncio.sleep(0)
+        return run_id
+
+    run_id = asyncio.run(main())
+    assert worker_cancelled is True
+    assert len(scan_service._background_tasks) == 0
+    entry = scan_service.run_status(run_id)
+    assert entry is not None and entry["status"] == "done"
+    with session_scope() as s:
+        run = s.get(models.ScanRun, run_id)
+        assert run is not None
+        assert run.status != "running"
+        assert run.finished_at is not None

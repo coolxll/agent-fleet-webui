@@ -128,3 +128,33 @@ def test_deep_nesting_is_bounded():
     for _ in range(20):
         node = {"n": node}
     assert "***" in json.dumps(sanitize_object(node))
+
+
+def test_redact_value_masks_urls_and_substrings():
+    assert redact_value("https://user:pass@host.example.com/sse?api_key=xxx") == (
+        "https://host.example.com/sse"
+    )
+    assert redact_value("--url=https://user:pass@host.example.com/sse?token=abc") == (
+        "--url=https://host.example.com/sse"
+    )
+    assert redact_value("https://api.example.com/v1") == "https://api.example.com/v1"
+    clean = sanitize_object(
+        {"args": ["--sse", "https://alice:s3cr3t@mcp.example.com/sse?api_key=secret123"]}
+    )
+    assert clean["args"] == ["--sse", "https://mcp.example.com/sse"]
+
+
+def test_scrub_config_redacts_warnings():
+    from agent_fleet.adapters.base import ParsedConfig, scrub_config
+
+    cfg = ParsedConfig(
+        warnings=[
+            "sk-ant-api03-abcdefghijklmnopqrstuvwx",
+            "failed fetching https://user:pw@api.example.com/sse?api_key=secret",
+            "harmless warning",
+        ]
+    )
+    scrubbed = scrub_config(cfg)
+    assert scrubbed.warnings[0] == "***redacted***"
+    assert scrubbed.warnings[1] == "failed fetching https://api.example.com/sse"
+    assert scrubbed.warnings[2] == "harmless warning"

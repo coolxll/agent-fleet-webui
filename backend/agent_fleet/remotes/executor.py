@@ -62,7 +62,26 @@ async def _run(argv: list[str], stdin_data: str | None, timeout: int) -> ExecRes
                 proc.kill()
             except ProcessLookupError:
                 pass
-            out, err = await proc.communicate()
+            out, err = b"", b""
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), timeout=3)
+            except asyncio.TimeoutError:
+                for stream in (proc.stdin, proc.stdout, proc.stderr):
+                    transport = getattr(stream, "transport", None) or getattr(stream, "_transport", None)
+                    if transport is not None:
+                        try:
+                            transport.close()
+                        except Exception:
+                            pass
+                if proc.stdin is not None:
+                    try:
+                        proc.stdin.close()
+                    except Exception:
+                        pass
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=1)
+                except asyncio.TimeoutError:
+                    pass
             return ExecResult(
                 stdout=out.decode("utf-8", "replace"),
                 stderr=err.decode("utf-8", "replace"),

@@ -12,6 +12,7 @@ Rules implemented here:
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 
 REDACTED = "***redacted***"
@@ -150,10 +151,24 @@ def mask_url(url) -> tuple[str, bool]:
     return (f"{parts.scheme}://{netloc}{path}", changed)
 
 
+_URL_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\"'<>()]+")
+
+
+def _mask_urls_in_string(value: str) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        raw = match.group(0)
+        masked, changed = mask_url(raw)
+        return masked if (changed and masked is not None) else raw
+
+    return _URL_RE.sub(_replace, value)
+
+
 def redact_value(value):
     if isinstance(value, str):
         if looks_like_secret(value):
             return REDACTED
+        if "://" in value:
+            value = _mask_urls_in_string(value)
         if len(value) > MAX_STRING_LEN:
             return value[:MAX_STRING_LEN] + "...(+truncated)"
         return value

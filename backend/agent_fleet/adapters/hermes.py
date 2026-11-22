@@ -116,8 +116,9 @@ class HermesAdapter(AgentAdapter):
             cfg.model_provider = model_block.get("provider")
             if model_block.get("key_env"):
                 cfg.settings["key_env"] = model_block["key_env"]
-            if model_block.get("aliases"):
-                cfg.settings["model_aliases"] = sorted(model_block["aliases"].keys())[:40]
+            aliases = model_block.get("aliases")
+            if isinstance(aliases, dict) and aliases:
+                cfg.settings["model_aliases"] = sorted(aliases.keys())[:40]
 
         providers = data.get("providers")
         if isinstance(providers, dict):

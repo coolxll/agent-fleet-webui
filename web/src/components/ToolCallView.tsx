@@ -58,7 +58,7 @@ export function extractFilePath(input: any): string | null {
     return input.startsWith('/') || input.startsWith('./') || input.includes('/') ? input : null
   }
   if (typeof input === 'object') {
-    return (
+    const raw =
       input.AbsolutePath ||
       input.TargetFile ||
       input.file_path ||
@@ -66,9 +66,19 @@ export function extractFilePath(input: any): string | null {
       input.path ||
       input.changes?.[0]?.path ||
       null
-    )
+    return typeof raw === 'string' ? raw : raw != null ? String(raw) : null
   }
   return null
+}
+
+function toTextOrNull(val: unknown): string | null {
+  if (val === null || val === undefined) return null
+  if (typeof val === 'string') return val
+  try {
+    return JSON.stringify(val, null, 2)
+  } catch {
+    return String(val)
+  }
 }
 
 // Validate that a URL uses an explicit http: or https: scheme
@@ -444,14 +454,15 @@ export function FileEditCard({
 }) {
   const [viewMode, setViewMode] = useState<'unified' | 'split'>('unified')
   const input = call?.input || {}
-  const filePath = extractFilePath(input) || 'unknown file'
+  const rawFilePath = extractFilePath(input)
+  const filePath = typeof rawFilePath === 'string' && rawFilePath ? rawFilePath : 'unknown file'
   const toolName = call?.name || 'edit_file'
 
   // Extract Diff inputs
-  const targetContent = input.TargetContent ?? input.old_string ?? input.old_content ?? null
-  const replacementContent = input.ReplacementContent ?? input.new_string ?? input.new_content ?? null
-  const codeContent = input.CodeContent ?? input.content ?? null
-  const patchContent = input.patch ?? input.diff ?? null
+  const targetContent = toTextOrNull(input.TargetContent ?? input.old_string ?? input.old_content)
+  const replacementContent = toTextOrNull(input.ReplacementContent ?? input.new_string ?? input.new_content)
+  const codeContent = toTextOrNull(input.CodeContent ?? input.content)
+  const patchContent = toTextOrNull(input.patch ?? input.diff)
 
   const startLine = input.StartLine ?? input.start_line
   const endLine = input.EndLine ?? input.end_line
@@ -637,7 +648,8 @@ export function FileReadCard({
   output?: string | null
 }) {
   const input = call?.input || {}
-  const filePath = extractFilePath(input) || 'unknown file'
+  const rawFilePath = extractFilePath(input)
+  const filePath = typeof rawFilePath === 'string' && rawFilePath ? rawFilePath : 'unknown file'
   const toolName = call?.name || 'view_file'
   const startLine = input.StartLine ?? input.start_line ?? input.offset
   const endLine = input.EndLine ?? input.end_line ?? input.limit

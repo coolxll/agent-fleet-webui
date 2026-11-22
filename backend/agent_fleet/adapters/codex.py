@@ -163,7 +163,8 @@ class CodexAdapter(AgentAdapter):
                 else:
                     cfg.mcp_servers.append({"name": name, "transport": "unknown"})
 
-        skills_cfg = (data.get("skills") or {}).get("config") or []
+        skills_block = data.get("skills")
+        skills_cfg = skills_block.get("config") if isinstance(skills_block, dict) else []
         if isinstance(skills_cfg, list):
             for s in skills_cfg:
                 if isinstance(s, dict) and s.get("path"):

@@ -11,13 +11,16 @@ Nothing here mutates the source files.
 from __future__ import annotations
 
 import configparser
-import shlex
 import io
+import logging
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -208,26 +211,88 @@ def load_exclusions(path: Path) -> set[str]:
 
 def load_project_yaml(path: Path) -> list[DiscoveredHost]:
     data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace")) or {}
+    if not isinstance(data, dict):
+        logger.warning("inventory %s: root must be a mapping, got %s", path, type(data).__name__)
+        return []
+    hosts_raw = data.get("hosts")
+    if hosts_raw is None:
+        return []
+    if not isinstance(hosts_raw, list):
+        logger.warning("inventory %s: 'hosts' must be a list, got %s", path, type(hosts_raw).__name__)
+        return []
     out: list[DiscoveredHost] = []
-    for entry in data.get("hosts") or []:
+    for idx, entry in enumerate(hosts_raw):
         if isinstance(entry, str):
-            entry = {"name": entry}
+            name = entry.strip()
+            if not name:
+                logger.warning("inventory %s: skipping empty host entry at index %d", path, idx)
+                continue
+            entry = {"name": name}
+        elif not isinstance(entry, dict):
+            logger.warning(
+                "inventory %s: skipping malformed host entry at index %d (expected dict or str, got %s)",
+                path,
+                idx,
+                type(entry).__name__,
+            )
+            continue
+        name = _clean(entry.get("name"))
+        if not name:
+            logger.warning("inventory %s: skipping host entry at index %d missing 'name'", path, idx)
+            continue
         wsl = []
-        for w in entry.get("wsl") or []:
-            if isinstance(w, str):
-                wsl.append(WslTarget(distro=w))
-            else:
-                wsl.append(WslTarget(distro=w.get("distro", ""), user=_clean(w.get("user"))))
+        raw_wsl = entry.get("wsl")
+        if isinstance(raw_wsl, list):
+            for w_idx, w in enumerate(raw_wsl):
+                if isinstance(w, str):
+                    distro = w.strip()
+                    if distro:
+                        wsl.append(WslTarget(distro=distro))
+                elif isinstance(w, dict):
+                    distro = _clean(w.get("distro"))
+                    if distro:
+                        wsl.append(WslTarget(distro=distro, user=_clean(w.get("user"))))
+                    else:
+                        logger.warning(
+                            "inventory %s: host '%s' wsl entry %d missing 'distro', skipping",
+                            path,
+                            name,
+                            w_idx,
+                        )
+                else:
+                    logger.warning(
+                        "inventory %s: host '%s' wsl entry %d malformed (%s), skipping",
+                        path,
+                        name,
+                        w_idx,
+                        type(w).__name__,
+                    )
+        elif raw_wsl is not None:
+            logger.warning(
+                "inventory %s: host '%s' has non-list 'wsl' (%s), ignoring",
+                path,
+                name,
+                type(raw_wsl).__name__,
+            )
+        raw_port = entry.get("port") or entry.get("ansible_port")
+        port = None
+        if raw_port is not None:
+            try:
+                port = int(raw_port)
+            except (TypeError, ValueError):
+                logger.warning("inventory %s: host '%s' has invalid port %r, ignoring", path, name, raw_port)
+        raw_tags = entry.get("tags")
+        tags = dict(raw_tags) if isinstance(raw_tags, dict) else {}
         out.append(
             DiscoveredHost(
-                name=entry["name"],
+                name=name,
                 hostname=_clean(entry.get("hostname") or entry.get("ansible_host")),
                 user=_clean(entry.get("user") or entry.get("ansible_user")),
-                port=entry.get("port") or entry.get("ansible_port"),
+                port=port,
                 group=_clean(entry.get("group")),
-                tags=entry.get("tags") or {},
+                tags=tags,
                 source="project-yaml",
-                kind_hint=entry.get("kind", "auto"),
+                kind_hint=_clean(entry.get("kind")) or "auto",
                 wsl=wsl,
                 enabled=bool(entry.get("enabled", True)),
             )
@@ -274,17 +339,24 @@ def load_all(settings) -> list[DiscoveredHost]:
     for p in paths:
         p = Path(p)
         if p.is_dir():
-            add_many(discover_inventory_dir(p))
+            try:
+                add_many(discover_inventory_dir(p))
+            except Exception as exc:
+                logger.warning("failed to load inventory dir %s: %s", p, exc)
         elif p.suffix.lower() in (".yaml", ".yml"):
             try:
                 if _is_ansible_shape(p):
                     add_many(load_ansible_inventory(p))
                 else:
                     add_many(load_project_yaml(p))
-            except Exception:
+            except Exception as exc:
+                logger.warning("failed to load inventory file %s: %s", p, exc)
                 continue
         elif p.exists():
-            add_many(load_ansible_inventory(p))
+            try:
+                add_many(load_ansible_inventory(p))
+            except Exception as exc:
+                logger.warning("failed to load inventory file %s: %s", p, exc)
 
     # ~/.ssh/config is deliberately NOT read automatically. The fleet is
     # exactly what the inventory files declare; an SSH alias alone must not

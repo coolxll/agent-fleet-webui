@@ -233,8 +233,8 @@ function ChangesTable({ diff }: { diff: any }) {
       <div className="panel">
         <div className="body muted small">
           {t('diff.identicallyConfigured', {
-            hostA: diff.a.runtime.host,
-            hostB: diff.b.runtime.host
+            hostA: diff.a.runtime?.host ?? diff.a.id,
+            hostB: diff.b.runtime?.host ?? diff.b.id
           })}
         </div>
       </div>

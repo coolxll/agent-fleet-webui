@@ -279,6 +279,7 @@ export default function MachinesView({
     api
       .hosts()
       .then((r) => {
+        setError(null)
         setHosts(r.hosts)
         setSelectedHostId((prev) => {
           if (prev && r.hosts.some((h: any) => h.id === prev)) {
@@ -316,6 +317,7 @@ export default function MachinesView({
     return api
       .machine(hostId)
       .then((d) => {
+        setError(null)
         setHostDetail(d)
         setActiveRuntimeKey((prev) => {
           if (prev === 'all') return 'all'
@@ -522,10 +524,33 @@ export default function MachinesView({
     return count
   }, [hosts])
 
-  if (error) return <div className="err">{error}</div>
+  if (error && hosts.length === 0) return <div className="err">{error}</div>
 
   return (
     <div>
+      {error && (
+        <div
+          className="err"
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+            marginBottom: 12
+          }}
+        >
+          <span>{error}</span>
+          <button
+            type="button"
+            className="btn small"
+            onClick={() => setError(null)}
+            style={{ padding: '2px 8px', flexShrink: 0 }}
+            aria-label="Dismiss error"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {/* Top action bar: filter & view toggle */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

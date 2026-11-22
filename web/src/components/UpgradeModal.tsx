@@ -82,6 +82,7 @@ export default function UpgradeModal({ target, onClose, onUpgraded, onSubmitted 
   const [upgradeError, setUpgradeError] = useState<string | null>(null)
   const [showLogs, setShowLogs] = useState(false)
   const pollTimerRef = useRef<any>(null)
+  const aliveRef = useRef(true)
 
   const stopPolling = () => {
     if (pollTimerRef.current) {
@@ -90,11 +91,28 @@ export default function UpgradeModal({ target, onClose, onUpgraded, onSubmitted 
     }
   }
 
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+      stopPolling()
+    }
+  }, [])
+
   const pollTask = (taskId: string) => {
     stopPolling()
+    if (!aliveRef.current) return
     pollTimerRef.current = setInterval(async () => {
+      if (!aliveRef.current) {
+        stopPolling()
+        return
+      }
       try {
         const task = await api.getUpgradeTask(taskId)
+        if (!aliveRef.current) {
+          stopPolling()
+          return
+        }
         setUpgradeTask(task)
         if (task.status === 'completed' || task.status === 'failed') {
           stopPolling()
@@ -107,6 +125,7 @@ export default function UpgradeModal({ target, onClose, onUpgraded, onSubmitted 
         }
       } catch {
         stopPolling()
+        if (!aliveRef.current) return
         setUpgrading(false)
       }
     }, 1000)
@@ -120,7 +139,7 @@ export default function UpgradeModal({ target, onClose, onUpgraded, onSubmitted 
     api
       .getActiveUpgradeForInstallation(target.installationId)
       .then((res) => {
-        if (!alive) return
+        if (!alive || !aliveRef.current) return
         if (res.active_task) {
           setUpgradeTask(res.active_task)
           if (res.active_task.status === 'running' || res.active_task.status === 'pending') {
@@ -161,8 +180,10 @@ export default function UpgradeModal({ target, onClose, onUpgraded, onSubmitted 
         throw new Error('No target installation ID available to trigger upgrade')
       }
       onSubmitted?.(task)
+      if (!aliveRef.current) return
       onClose()
     } catch (err: any) {
+      if (!aliveRef.current) return
       setUpgradeError(err.message || 'Failed to start upgrade task')
       setSubmitting(false)
       setShowLogs(true)
@@ -186,6 +207,7 @@ export default function UpgradeModal({ target, onClose, onUpgraded, onSubmitted 
         throw new Error('No target installation ID available to trigger upgrade')
       }
 
+      if (!aliveRef.current) return
       setUpgradeTask(task)
       onSubmitted?.(task)
 
@@ -200,6 +222,7 @@ export default function UpgradeModal({ target, onClose, onUpgraded, onSubmitted 
         pollTask(task.task_id)
       }
     } catch (err: any) {
+      if (!aliveRef.current) return
       setUpgradeError(err.message || 'Failed to start upgrade task')
       setUpgrading(false)
       setShowLogs(true)

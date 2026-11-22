@@ -301,3 +301,69 @@ def test_sqlite_inventory_rejects_ssh_and_wsl_injection(fleet_db):
                 sqlite_inventory.update_host(created["id"], bad_update)
     finally:
         sqlite_inventory.delete_host(created["id"])
+
+
+@pytest.mark.asyncio
+async def test_executor_post_kill_timeout_closes_transports(monkeypatch):
+    """Verify _run does not hang if post-kill communicate() times out (e.g. grandchild holding pipes)."""
+    import asyncio
+    from agent_fleet.remotes import executor
+
+    closed_transports: list[str] = []
+
+    class FakeTransport:
+        def __init__(self, label: str):
+            self.label = label
+
+        def close(self):
+            closed_transports.append(self.label)
+
+    class FakeStream:
+        def __init__(self, label: str, use_private: bool = False):
+            if use_private:
+                self._transport = FakeTransport(label)
+            else:
+                self.transport = FakeTransport(label)
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class HangingProc:
+        def __init__(self):
+            self.stdin = FakeStream("stdin", use_private=False)
+            self.stdout = FakeStream("stdout", use_private=True)
+            self.stderr = FakeStream("stderr", use_private=True)
+            self.killed = False
+            self.returncode = -9
+
+        def kill(self):
+            self.killed = True
+
+        async def communicate(self, input=None):
+            await asyncio.sleep(60)
+            return b"", b""
+
+        async def wait(self):
+            return -9
+
+    proc = HangingProc()
+
+    async def fake_create_subprocess_exec(*argv, **kwargs):
+        return proc
+
+    real_wait_for = asyncio.wait_for
+
+    async def fast_wait_for(coro, timeout):
+        # Clamp timeouts so test runs instantly while still exercising real TimeoutError paths
+        return await real_wait_for(coro, timeout=min(timeout, 0.05))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(executor.asyncio, "wait_for", fast_wait_for)
+
+    res = await executor._run(["sleep", "60"], "input", timeout=1)
+    assert res.timed_out is True
+    assert res.exit_code == -1
+    assert proc.killed is True
+    assert proc.stdin.closed is True
+    assert set(closed_transports) == {"stdin", "stdout", "stderr"}

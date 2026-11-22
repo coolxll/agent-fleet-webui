@@ -435,3 +435,85 @@ def test_claude_unreadable_user_settings_does_not_count_as_parsed():
     assert cfg.mcp_servers  # ~/.claude.json was readable
     assert cfg.parse_status == "partial"
     assert cfg.resolution == "declared"
+
+
+def test_strip_jsonc_preserves_string_literals():
+    from agent_fleet.adapters.base import parse_jsonc
+
+    raw = (
+        '{\n'
+        '  // comment\n'
+        '  "msg": "keep, }", /* block */\n'
+        '  "arr": ["keep, ]", "spaces   }", "esc\\", }"],\n'
+        '  "nested": {"a": 1, },\n'
+        '}\n'
+    )
+    parsed = parse_jsonc(raw)
+    assert parsed == {
+        "msg": "keep, }",
+        "arr": ["keep, ]", "spaces   }", 'esc", }'],
+        "nested": {"a": 1},
+    }
+
+
+def test_claude_reads_model_from_settings_and_env_overrides():
+    settings_only = json.dumps({"model": "claude-opus-4-6", "effortLevel": "high"})
+    facts = _claude_facts(settings_only, json.dumps({"mcpServers": {}}))
+    cfg = get_adapter("claude").run(facts).config
+    assert cfg.model == "claude-opus-4-6"
+    assert cfg.parse_status == "parsed"
+
+    with_env = json.dumps(
+        {"model": "claude-opus-4-6", "env": {"ANTHROPIC_MODEL": "claude-sonnet-4-6"}}
+    )
+    facts_env = _claude_facts(with_env, json.dumps({"mcpServers": {}}))
+    cfg_env = get_adapter("claude").run(facts_env).config
+    assert cfg_env.model == "claude-sonnet-4-6"
+
+    non_str_model = json.dumps({"model": 123, "effortLevel": "low"})
+    facts_bad = _claude_facts(non_str_model, json.dumps({"mcpServers": {}}))
+    cfg_bad = get_adapter("claude").run(facts_bad).config
+    assert cfg_bad.model is None
+
+
+def test_opencode_jsonc_outranks_system_and_preserves_plugins():
+    facts = make_facts(
+        files={
+            "/etc/opencode/opencode.json": ("ok", json.dumps({"model": "sys/m"})),
+            "~/.config/opencode/opencode.json": None,
+            "~/.config/opencode/opencode.jsonc": (
+                "ok",
+                '{ // user jsonc\n "model": "user/jsonc-model", "theme": "dark", }',
+            ),
+        },
+        ls={"~/.config/opencode/plugins": [("my-plugin", "d"), ("readme.md", "f")]},
+        probed={"opencode:opencode"},
+    )
+    cfg = get_adapter("opencode").run(facts).config
+    assert cfg.parse_status == "parsed"
+    assert cfg.model == "user/jsonc-model"
+    assert cfg.settings["plugins"] == ["my-plugin"]
+    assert cfg.settings["theme"] == "dark"
+
+
+def test_codex_non_dict_skills_does_not_crash():
+    toml = 'model = "gpt-5"\nskills = ["foo", "bar"]\n'
+    facts = make_facts(
+        files={"~/.codex/config.toml": ("ok", toml)},
+        probed={"codex:codex"},
+    )
+    cfg = get_adapter("codex").run(facts).config
+    assert cfg.parse_status == "parsed"
+    assert cfg.model == "gpt-5"
+
+
+def test_hermes_non_dict_model_aliases_does_not_crash():
+    yml = "model:\n  default: claude-3\n  provider: anthropic\n  aliases:\n    - fast\n    - smart\n"
+    facts = make_facts(
+        files={"~/.hermes/config.yaml": ("ok", yml)},
+        probed={"hermes:hermes"},
+    )
+    cfg = get_adapter("hermes").run(facts).config
+    assert cfg.parse_status == "parsed"
+    assert cfg.model == "claude-3"
+    assert "model_aliases" not in cfg.settings

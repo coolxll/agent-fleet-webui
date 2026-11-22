@@ -1960,13 +1960,12 @@ def get_session(session_id: str):
 async def get_session_transcript(session_id: str):
     from agent_fleet.services import session_service
 
-    with session_scope() as s:
-        try:
-            return await session_service.get_session_transcript(s, session_id)
-        except ValueError as e:
-            raise HTTPException(404, str(e))
-        except Exception as e:
-            raise HTTPException(500, f"Error fetching transcript: {e}")
+    try:
+        return await session_service.get_session_transcript(None, session_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Error fetching transcript: {e}")
 
 
 @router.post("/sessions/{session_id}/pin")

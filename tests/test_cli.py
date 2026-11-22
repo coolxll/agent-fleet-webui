@@ -427,3 +427,24 @@ def test_wrapper_script_help():
     assert res.returncode == 0
     for cmd in ("matrix", "compare", "quotas", "tasks", "daemons"):
         assert cmd in res.stdout
+
+
+def test_sanitize_change_value_handles_lists_and_dicts():
+    raw = {
+        "name": "mcp-1",
+        "api_key": "sk-secret-value-12345678",
+        "args": ["--url", "https://user:pass@mcp.example.com/sse?token=abc"],
+    }
+    clean = cli._sanitize_change_value("mcp_servers", raw)
+    assert clean == {
+        "name": "mcp-1",
+        "args": ["--url", "https://mcp.example.com/sse"],
+    }
+    assert cli._sanitize_change_value("skills", ["a", "sk-ant-api03-abcdefghijklmnopqrst"]) == [
+        "a",
+        "***redacted***",
+    ]
+    assert cli._sanitize_change_value("base_url", "https://u:p@api.example.com/v1?k=1") == (
+        "https://api.example.com/v1"
+    )
+    assert cli._sanitize_change_value("model", None) is None

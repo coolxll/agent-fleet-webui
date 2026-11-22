@@ -17,6 +17,7 @@ from agent_fleet.services.scanner import RuntimeRef, scan_runtime, to_ref
 _GLOBAL_LIMIT = 8
 _global_sem: asyncio.Semaphore = None
 _registry: dict = {}
+_background_tasks: set[asyncio.Task] = set()
 
 
 def _sem() -> asyncio.Semaphore:
@@ -78,21 +79,27 @@ async def start_scan(runtime_ids, triggered_by, settings) -> str:
         "concurrency": settings.scan_concurrency,
         "queue": len(runtime_ids),
     }
-    asyncio.create_task(_execute(run_id, list(runtime_ids), settings))
+    task = asyncio.create_task(_execute(run_id, list(runtime_ids), settings))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return run_id
 
 
 async def _execute(run_id, runtime_ids, settings):
     queue: asyncio.Queue = asyncio.Queue()
-    for rid in runtime_ids:
-        await queue.put(rid)
-    workers = max(1, min(settings.scan_concurrency, _GLOBAL_LIMIT))
-    tasks = [asyncio.create_task(_worker(run_id, queue, settings)) for _ in range(workers)]
-    await queue.join()
-    for t in tasks:
-        t.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-    _finish(run_id)
+    tasks: list[asyncio.Task] = []
+    try:
+        for rid in runtime_ids:
+            await queue.put(rid)
+        workers = max(1, min(settings.scan_concurrency, _GLOBAL_LIMIT))
+        tasks = [asyncio.create_task(_worker(run_id, queue, settings)) for _ in range(workers)]
+        await queue.join()
+    finally:
+        for t in tasks:
+            t.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        _finish(run_id)
 
 
 async def _worker(run_id, queue, settings):

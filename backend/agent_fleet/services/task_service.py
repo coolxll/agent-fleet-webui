@@ -533,8 +533,8 @@ async def preview_handoff(task_id, data):
         source_stage = next((s for s in reversed(stages) if s.session_id == source_id), None) if source_id else latest
         source_path = db.get(Session, source_id).project_path if source_id and db.get(Session, source_id) else None
         source_description = f'{source_stage.host_name} / {source_stage.agent_id} / {source_stage.project_path}' if source_stage else 'No linked session'
-        transcript_text = ''
-        if source_id and not (resume_stage and resume_stage.session_id == source_id):
+        need_transcript = bool(source_id and not (resume_stage and resume_stage.session_id == source_id))
+        if need_transcript:
             source = db.get(Session, source_id)
             if source and source.transcript and (
                 not source.transcript.turns
@@ -542,13 +542,15 @@ async def preview_handoff(task_id, data):
             ):
                 source.transcript = None
                 db.flush()
-            transcript = await get_session_transcript(db, source_id)
-            for turn in transcript.get('turns', []):
-                transcript_text += f"\n[{turn.get('role', 'message')}]\n{turn.get('content', '')}\n"
-                if turn.get('tool_calls'):
-                    transcript_text += '\nTool evidence: ' + json.dumps([{key: tool[key] for key in ('id', 'name', 'input', 'output') if key in tool} for tool in turn['tool_calls'] if isinstance(tool, dict)], ensure_ascii=False)
-            if not transcript_text.strip():
-                raise TaskError('Source transcript is unavailable; sync/read the source session before handoff', 409)
+    transcript_text = ''
+    if need_transcript:
+        transcript = await get_session_transcript(None, source_id)
+        for turn in transcript.get('turns', []):
+            transcript_text += f"\n[{turn.get('role', 'message')}]\n{turn.get('content', '')}\n"
+            if turn.get('tool_calls'):
+                transcript_text += '\nTool evidence: ' + json.dumps([{key: tool[key] for key in ('id', 'name', 'input', 'output') if key in tool} for tool in turn['tool_calls'] if isinstance(tool, dict)], ensure_ascii=False)
+        if not transcript_text.strip():
+            raise TaskError('Source transcript is unavailable; sync/read the source session before handoff', 409)
     # A read-only directory/Git preflight; caller must prepare code on the target.
     script = 'import os,json,subprocess\np=' + repr(data['project_path']) + '\n'
     script += "\nif not os.path.isdir(p):\n print(json.dumps({'exists':False}))\nelse:\n result={'exists':True}\n for key,args in [('commit',['rev-parse','HEAD']),('status',['status','--short'])]:\n  try:\n   r=subprocess.run(['git','-C',p]+args,capture_output=True,text=True,timeout=8)\n   result[key]=r.stdout[:8000] if r.returncode==0 else None\n  except (OSError,subprocess.TimeoutExpired): result[key]=None\n print(json.dumps(result))\n"

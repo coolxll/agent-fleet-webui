@@ -191,3 +191,41 @@ def test_declared_controller_becomes_local_and_prunes_phantom(fleet_db):
 
 from pathlib import Path  # noqa: E402
 
+
+def test_project_yaml_skips_malformed_entries_with_warning(tmp_path, caplog):
+    import logging
+
+    p = tmp_path / "inv.yaml"
+    p.write_text(
+        "hosts:\n"
+        "  - name: good-box\n"
+        "    wsl:\n"
+        "      - Ubuntu\n"
+        "      - 123\n"
+        "      - user: missing-distro\n"
+        "  - 42\n"
+        "  - hostname: 10.0.0.9\n"
+        "  - valid-str-host\n"
+    )
+    with caplog.at_level(logging.WARNING, logger="agent_fleet.inventory.loader"):
+        hosts = load_project_yaml(p)
+    assert [h.name for h in hosts] == ["good-box", "valid-str-host"]
+    assert [w.distro for w in hosts[0].wsl] == ["Ubuntu"]
+    assert any("skipping malformed host entry" in r.message for r in caplog.records)
+    assert any("missing 'name'" in r.message for r in caplog.records)
+
+
+def test_load_all_logs_warning_on_broken_yaml(tmp_path, caplog):
+    import logging
+    from types import SimpleNamespace
+
+    bad = tmp_path / "broken.yaml"
+    bad.write_text(":\n  - [unclosed", encoding="utf-8")
+    good = tmp_path / "good.yaml"
+    good.write_text("hosts:\n  - name: survivor\n", encoding="utf-8")
+    settings = SimpleNamespace(inventory_paths=[str(bad), str(good)])
+    with caplog.at_level(logging.WARNING, logger="agent_fleet.inventory.loader"):
+        hosts = load_all(settings)
+    assert [h.name for h in hosts] == ["survivor"]
+    assert any("failed to load inventory file" in r.message for r in caplog.records)
+

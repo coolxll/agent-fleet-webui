@@ -282,7 +282,9 @@ async def test_stale_transcript_cache_is_refetched(fleet_db, tmp_path, monkeypat
         source = db.get(models.Session, source_id)
         source.updated_at = source.transcript.cached_at + timedelta(seconds=60)
     async def fresh(db, session_id):
-        assert db.get(models.Session, session_id).transcript is None
+        assert db is None
+        with session_scope() as check_db:
+            assert check_db.get(models.Session, session_id).transcript is None
         return {'turns': [{'role': 'assistant', 'content': 'Fresh transcript'}]}
     monkeypatch.setattr(service, 'get_session_transcript', fresh)
     preview = await service.preview_handoff(task_id, target(runtime_id, tmp_path))

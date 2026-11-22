@@ -851,6 +851,20 @@ async def test_remote_transcript_uses_shlex_quote_for_file_paths(fleet_db, monke
         assert f'"{malicious_zst}"' not in cmd
 
 
+@pytest.mark.asyncio
+async def test_scan_sessions_handles_empty_marker_payload(fleet_db):
+    """Verify scan_sessions_for_runtime returns 0 cleanly when nothing follows ___SESSIONS_JSON___."""
+    from types import SimpleNamespace
+
+    class EmptyMarkerRunner:
+        async def run_script(self, script, timeout):
+            return ExecResult(stdout="___SESSIONS_JSON___\n   \n", exit_code=0)
+
+    ref = SimpleNamespace(id="rt-empty-marker", kind="linux", target="empty-box")
+    count = await session_service.scan_sessions_for_runtime(ref, EmptyMarkerRunner(), fleet_db)
+    assert count == 0
+
+
 
 
 

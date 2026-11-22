@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   FleetTask,
   TaskDraft,
@@ -107,62 +107,73 @@ export default function TaskBoardView({
   const [confirmRetryOpen, setConfirmRetryOpen] = useState(false)
   const [retrying, setRetrying] = useState(false)
 
+  const aliveRef = useRef(true)
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
+
   // 1. Fetch GitHub Board
   const reloadGitHub = useCallback(async () => {
     try {
       const data = await taskApi.getGitHubBoard()
+      if (!aliveRef.current) return
       setGhBoard(data)
     } catch (err: any) {
+      if (!aliveRef.current) return
       console.warn('Failed to fetch github board:', err)
     }
   }, [])
 
   // 2. Fetch Local Tasks
   const reloadLocal = useCallback(async () => {
-    const result = await taskApi.list()
-    setTasks(result.tasks)
+    try {
+      const result = await taskApi.list()
+      if (!aliveRef.current) return
+      setTasks(result.tasks)
+      setError('')
+    } catch (err: any) {
+      if (!aliveRef.current) return
+      setError(err instanceof Error ? err.message : String(err))
+    }
   }, [])
 
   useEffect(() => {
+    let alive = true
     if (boardMode === 'github') {
       setGhLoading(true)
-      reloadGitHub().finally(() => setGhLoading(false))
+      reloadGitHub().finally(() => {
+        if (alive && aliveRef.current) setGhLoading(false)
+      })
     } else {
       reloadLocal()
+    }
+    return () => {
+      alive = false
     }
   }, [boardMode, reloadGitHub, reloadLocal, refreshSignal])
 
   // Periodic Polling
   useEffect(() => {
+    let alive = true
     const timer = window.setInterval(() => {
+      if (!alive || !aliveRef.current) return
       if (boardMode === 'github') {
         reloadGitHub()
       } else {
         reloadLocal()
       }
     }, 6000)
-    return () => window.clearInterval(timer)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
   }, [boardMode, reloadGitHub, reloadLocal])
 
   // Local task actions
   const selected = tasks.find((task) => task.id === selectedId)
-
-  useEffect(() => {
-    let alive = true
-    if (boardMode === 'local') {
-      taskApi.list()
-        .then((work) => {
-          if (!alive) return
-          setTasks(work.tasks)
-        })
-        .catch((err) => {
-          if (alive) setError(String(err.message ?? err))
-        })
-    }
-    return () => {
-      alive = false
-    }
-  }, [boardMode, refreshSignal])
 
   const run = async (action: () => Promise<unknown>, message?: string) => {
     setBusy(true)

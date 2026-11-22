@@ -114,6 +114,20 @@ def test_effective_latest_without_prerelease_data():
     assert effective_latest("1.0.0", {}) is None
 
 
+def test_effective_latest_non_semver_stable_channel_no_typeerror():
+    from agent_fleet.services.updates import effective_latest, version_state_for
+
+    for pkg in ("@anthropic-ai/claude-code", "@cometix/claude-code"):
+        info = {
+            "package": pkg,
+            "latest_available": "2.1.300",
+            "stable_available": "2.1.280",
+        }
+        for non_semver in ("dev", "unknown", "nightly-build"):
+            assert effective_latest(non_semver, info, channel="stable") == "2.1.280"
+            assert version_state_for(non_semver, info, channel="stable") == "unknown"
+
+
 def test_github_display_version_prefers_semver_over_calendar():
     from agent_fleet.services.updates import _display_version
 

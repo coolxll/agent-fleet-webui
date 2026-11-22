@@ -140,8 +140,30 @@ async function request<T>(path: string, method = 'GET', body?: unknown): Promise
     method, headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body)
   })
-  const data = await response.json()
-  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail ?? data))
+  const text = await response.text()
+  let data: any = null
+  if (text) {
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = null
+    }
+  }
+  if (!response.ok) {
+    const detail = data && typeof data === 'object' ? data.detail : undefined
+    const msg =
+      typeof detail === 'string'
+        ? detail
+        : detail !== undefined
+          ? JSON.stringify(detail)
+          : data !== null
+            ? JSON.stringify(data)
+            : `HTTP ${response.status}`
+    throw new Error(msg)
+  }
+  if (data === null && text) {
+    throw new Error(`HTTP ${response.status}`)
+  }
   return data as T
 }
 

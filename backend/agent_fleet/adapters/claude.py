@@ -194,7 +194,12 @@ class ClaudeAdapter(AgentAdapter):
             if isinstance(env, dict):
                 merged_env.update(env)
             for key in SETTING_KEYS:
-                if key in data and key != "model":
+                if key not in data:
+                    continue
+                if key == "model":
+                    if isinstance(data["model"], str) and data["model"]:
+                        cfg.model = data["model"]
+                else:
                     merged_settings[key] = data[key]
             hooks = data.get("hooks")
             if isinstance(hooks, dict) and hooks:
