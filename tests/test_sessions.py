@@ -794,6 +794,63 @@ async def test_cached_transcript_sanitized_on_read(fleet_db):
         assert "raw_leak_secret_12345678901234567890" not in str(db_tr.turns)
 
 
+@pytest.mark.asyncio
+async def test_remote_transcript_uses_shlex_quote_for_file_paths(fleet_db, monkeypatch):
+    """Verify remote transcript commands quote file paths with shlex.quote (no command substitution)."""
+    import shlex
+    from agent_fleet.db import session_scope
+
+    malicious_jsonl = "/tmp/$(id)`whoami`;echo pwned.jsonl"
+    malicious_zst = "/tmp/$(touch /tmp/pwned)`id`.jsonl.zst"
+
+    recorded_scripts: list[str] = []
+
+    class RecordingRunner:
+        async def run_script(self, script, timeout):
+            recorded_scripts.append(script)
+            if script.startswith("head -c 2000000") or script.startswith("zstd -dc"):
+                return ExecResult(
+                    stdout='{"type":"user","message":{"role":"user","content":[{"type":"text","text":"safe"}]}}\n',
+                    exit_code=0,
+                )
+            return ExecResult(stdout="", exit_code=0)
+
+    monkeypatch.setattr(session_service, "build_runner", lambda *args, **kwargs: RecordingRunner())
+
+    with session_scope() as s:
+        host = models.Host(id="h-shlex", name="shlex-box", hostname="shlex.local")
+        rt = models.Runtime(id="rt-shlex", host_id="h-shlex", key="native", kind="linux", transport="ssh")
+        sess_claude = models.Session(
+            id="sess-shlex-claude",
+            runtime_id="rt-shlex",
+            agent_id="claude",
+            session_key="k-claude",
+            file_path=malicious_jsonl,
+        )
+        sess_codex_zst = models.Session(
+            id="sess-shlex-codex-zst",
+            runtime_id="rt-shlex",
+            agent_id="codex",
+            session_key="k-codex-zst",
+            file_path=malicious_zst,
+        )
+        s.add_all([host, rt, sess_claude, sess_codex_zst])
+        s.flush()
+
+        await session_service.get_session_transcript(s, "sess-shlex-claude")
+        await session_service.get_session_transcript(s, "sess-shlex-codex-zst")
+
+    head_cmds = [cmd for cmd in recorded_scripts if cmd.startswith("head -c 2000000")]
+    zstd_cmds = [cmd for cmd in recorded_scripts if cmd.startswith("zstd -dc")]
+
+    assert f"head -c 2000000 {shlex.quote(malicious_jsonl)}" in head_cmds
+    assert zstd_cmds == [f"zstd -dc {shlex.quote(malicious_zst)} 2>/dev/null | head -c 2000000"]
+    # Single-quoted by shlex.quote, never double-quoted by json.dumps
+    for cmd in head_cmds + zstd_cmds:
+        assert f'"{malicious_jsonl}"' not in cmd
+        assert f'"{malicious_zst}"' not in cmd
+
+
 
 
 

@@ -408,8 +408,27 @@ def start_upgrade_task(inst_id: str, operation_id: str | None = None) -> dict[st
         )
         _background_tasks.add(bg_task)
         bg_task.add_done_callback(_background_tasks.discard)
-    except RuntimeError:
-        logger.debug("No active running event loop; background upgrade queued for task %s", task_id)
+    except RuntimeError as exc:
+        err_msg = f"No active running event loop to schedule background upgrade: {exc}"
+        logger.error("Failed to schedule background upgrade for task %s: %s", task_id, err_msg)
+        task_entry.update({
+            "status": "failed",
+            "ok": False,
+            "error": err_msg,
+            "finished_at": time.time(),
+        })
+        _writeback_operation_status(
+            entry=task_entry,
+            status="failed",
+            error=err_msg,
+            details={
+                "task_id": task_id,
+                "installation_id": inst_id,
+                "runtime_id": runtime_id,
+                "agent": agent_id,
+                "old_version": old_version,
+            },
+        )
 
     return task_entry
 

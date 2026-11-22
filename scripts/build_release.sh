@@ -256,7 +256,7 @@ cp "$VERSION_FILE" "${TARGET_DIR}/version.json"
 cp -R "$REPO_ROOT/web/dist" "${TARGET_DIR}/web/dist"
 
 # Copy default configurations, scripts and manifests
-for f in start.sh dev.sh Dockerfile docker-compose.yml .dockerignore .env.example README.md README_ZH.md inventory.yaml; do
+for f in start.sh dev.sh Dockerfile docker-compose.yml .dockerignore .env.example README.md README_ZH.md; do
   if [ -e "$REPO_ROOT/$f" ]; then
     cp -R "$REPO_ROOT/$f" "${TARGET_DIR}/"
   fi
@@ -268,10 +268,10 @@ if [ -d "$REPO_ROOT/examples" ]; then
   cp -R "$REPO_ROOT/examples"/* "${TARGET_DIR}/examples/" 2>/dev/null || true
 fi
 
-# Ensure default inventory.yaml exists in release root
-if [ ! -f "${TARGET_DIR}/inventory.yaml" ] && [ -f "$REPO_ROOT/examples/inventory.yaml" ]; then
+# Always seed release root inventory.yaml from examples/inventory.yaml (never package private root inventory.yaml)
+if [ -f "$REPO_ROOT/examples/inventory.yaml" ]; then
   cp "$REPO_ROOT/examples/inventory.yaml" "${TARGET_DIR}/inventory.yaml"
-  ok "Copied examples/inventory.yaml as fallback inventory.yaml"
+  ok "Copied examples/inventory.yaml as default inventory.yaml"
 fi
 
 # Copy scripts directory (management utilities)

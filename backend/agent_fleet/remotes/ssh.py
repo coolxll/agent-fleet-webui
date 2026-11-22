@@ -7,7 +7,51 @@ aliases and ~/.ssh/config declarations.
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+_WSL_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def validate_ssh_token(value: str | None, field_name: str = "ssh_target") -> str | None:
+    """Validate an SSH host, alias, user, or destination token against option/control injection.
+
+    Rejects leading '-', whitespace, and ASCII control characters (including \\r, \\n, \\0).
+    When formatted as 'user@host', both user and host components are validated.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid {field_name}: must be a string")
+    if value == "":
+        return value
+    if value.startswith("-"):
+        raise ValueError(f"Invalid {field_name}: must not start with '-'")
+    for ch in value:
+        if ch.isspace() or ord(ch) < 32 or ord(ch) == 127:
+            raise ValueError(
+                f"Invalid {field_name}: must not contain whitespace or control characters"
+            )
+    if "@" in value:
+        user_part, host_part = value.split("@", 1)
+        if user_part.startswith("-") or host_part.startswith("-"):
+            raise ValueError(f"Invalid {field_name}: user/host component must not start with '-'")
+    return value
+
+
+def validate_wsl_identifier(value: str | None, field_name: str = "wsl_distro") -> str | None:
+    """Validate a WSL distro name or username against shell metacharacters and option injection."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid {field_name}: must be a string")
+    if value == "":
+        return value
+    if value.startswith("-") or not _WSL_IDENTIFIER_RE.fullmatch(value):
+        raise ValueError(
+            f"Invalid {field_name}: must match ^[A-Za-z0-9._-]+$ and must not start with '-'"
+        )
+    return value
 
 
 def parse_ssh_destination(
@@ -63,6 +107,15 @@ def resolve_ssh_target(
     If ssh_user is provided and not already present in the target string,
     it is prepended as 'user@target'.
     """
+    if ssh_alias:
+        validate_ssh_token(ssh_alias, "ssh_alias")
+    if ssh_host:
+        validate_ssh_token(ssh_host, "ssh_host")
+    if host_name:
+        validate_ssh_token(host_name, "host_name")
+    if ssh_user:
+        validate_ssh_token(ssh_user, "ssh_user")
+
     raw = (ssh_alias or ssh_host or host_name or "").strip()
     clean_host, parsed_user, _ = parse_ssh_destination(raw)
     effective_user = (ssh_user or parsed_user or "").strip()
@@ -91,6 +144,15 @@ def resolve_ssh_connection(
     - If only an address is present: destination operand is address.
     - If ssh_user is present: 'user@operand' is returned.
     """
+    if ssh_alias:
+        validate_ssh_token(ssh_alias, "ssh_alias")
+    if ssh_host:
+        validate_ssh_token(ssh_host, "ssh_host")
+    if host_name:
+        validate_ssh_token(host_name, "host_name")
+    if ssh_user:
+        validate_ssh_token(ssh_user, "ssh_user")
+
     clean_alias, alias_user, alias_port = parse_ssh_destination(ssh_alias)
     clean_host, host_user, host_port = parse_ssh_destination(ssh_host)
     clean_hostname, hname_user, hname_port = parse_ssh_destination(host_name)
@@ -147,6 +209,17 @@ def build_ssh_command(
        - Non-standard ports (!= 22) are passed via -p <port>.
        - Standard port 22 or None omits -p, allowing ~/.ssh/config `Port` to apply.
     """
+    if target:
+        validate_ssh_token(target, "target")
+    if user:
+        validate_ssh_token(user, "user")
+    if host_address:
+        validate_ssh_token(host_address, "host_address")
+    if ssh_host:
+        validate_ssh_token(ssh_host, "ssh_host")
+    if ssh_alias:
+        validate_ssh_token(ssh_alias, "ssh_alias")
+
     cmd = ["ssh"]
     if batch_mode:
         cmd.extend(["-o", "BatchMode=yes"])
@@ -190,7 +263,10 @@ def build_ssh_command(
     else:
         final_target = operand or target
 
-    cmd.append(final_target)
+    if final_target:
+        validate_ssh_token(final_target, "target")
+
+    cmd.extend(["--", final_target])
 
     if remote_command:
         if isinstance(remote_command, list):

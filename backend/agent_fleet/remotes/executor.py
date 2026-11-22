@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+from agent_fleet.remotes.ssh import validate_ssh_token, validate_wsl_identifier
+
 
 class RemoteError(Exception):
     """Connection-level failure (auth, DNS, refused, timeout)."""
@@ -117,6 +119,7 @@ class LocalRunner(Runner):
 
 class _SshBase(Runner):
     def __init__(self, target: str, port: int | None = None, connect_timeout: int = 10):
+        validate_ssh_token(target, "target")
         self.target = target
         self.port = port
         self.connect_timeout = connect_timeout
@@ -141,10 +144,12 @@ class _SshBase(Runner):
         return argv
 
     async def run_command(self, argv_remote: list[str], timeout: int) -> ExecResult:
-        return await _run(self._base_argv() + [self.target] + argv_remote, None, timeout)
+        validate_ssh_token(self.target, "target")
+        return await _run(self._base_argv() + ["--", self.target] + argv_remote, None, timeout)
 
     async def run_stdin(self, argv_remote: list[str], script: str, timeout: int) -> ExecResult:
-        return await _run(self._base_argv() + [self.target] + argv_remote, script, timeout)
+        validate_ssh_token(self.target, "target")
+        return await _run(self._base_argv() + ["--", self.target] + argv_remote, script, timeout)
 
     def _target_label(self, prefix: str) -> str:
         return f"{prefix}:{self.target}" + (f":{self.port}" if self.port else "")
@@ -222,8 +227,12 @@ class WslRunner(Runner):
         self.user = user
 
     def _wrap(self, tail: list[str]) -> list[str]:
+        if not self.distro:
+            raise ValueError("Invalid wsl_distro: must not be empty")
+        validate_wsl_identifier(self.distro, "wsl_distro")
         argv = ["wsl.exe", "-d", self.distro]
         if self.user:
+            validate_wsl_identifier(self.user, "wsl_user")
             argv += ["-u", self.user]
         return argv + ["--"] + tail
 

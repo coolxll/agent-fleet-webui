@@ -1264,7 +1264,7 @@ class BatchUpgradeRequest(BaseModel):
 
 
 @router.post("/upgrades/batch")
-def batch_upgrade_route(payload: BatchUpgradeRequest):
+async def batch_upgrade_route(payload: BatchUpgradeRequest):
     from agent_fleet.services.action_service import start_batch_upgrade
     from agent_fleet.services import operation_service
 
@@ -1289,7 +1289,7 @@ def batch_upgrade_route(payload: BatchUpgradeRequest):
     for t in tasks:
         inst_id = t.get("installation_id")
         op_id = op_map.get(inst_id)
-        if op_id:
+        if op_id and t.get("status") == "running":
             operation_service.update_operation_status(
                 op_id,
                 status="running",
@@ -1299,7 +1299,7 @@ def batch_upgrade_route(payload: BatchUpgradeRequest):
 
 
 @router.post("/machines/{host_id}/upgrade-all")
-def upgrade_machine_all_route(host_id: str):
+async def upgrade_machine_all_route(host_id: str):
     from agent_fleet.services.action_service import find_outdated_installations, start_batch_upgrade
     from agent_fleet.services import operation_service
 
@@ -1325,7 +1325,7 @@ def upgrade_machine_all_route(host_id: str):
     for t in tasks:
         inst_id = t.get("installation_id")
         op_id = op_map.get(inst_id)
-        if op_id:
+        if op_id and t.get("status") == "running":
             operation_service.update_operation_status(
                 op_id,
                 status="running",
@@ -1335,7 +1335,7 @@ def upgrade_machine_all_route(host_id: str):
 
 
 @router.post("/agents/{agent_id}/upgrade-all")
-def upgrade_agent_all_route(agent_id: str):
+async def upgrade_agent_all_route(agent_id: str):
     from agent_fleet.services.action_service import find_outdated_installations, start_batch_upgrade
     from agent_fleet.services import operation_service
 
@@ -1361,7 +1361,7 @@ def upgrade_agent_all_route(agent_id: str):
     for t in tasks:
         inst_id = t.get("installation_id")
         op_id = op_map.get(inst_id)
-        if op_id:
+        if op_id and t.get("status") == "running":
             operation_service.update_operation_status(
                 op_id,
                 status="running",
@@ -1371,7 +1371,7 @@ def upgrade_agent_all_route(agent_id: str):
 
 
 @router.post("/fleet/upgrade-all")
-def upgrade_fleet_all_route():
+async def upgrade_fleet_all_route():
     from agent_fleet.services.action_service import find_outdated_installations, start_batch_upgrade
     from agent_fleet.services import operation_service
 
@@ -1397,7 +1397,7 @@ def upgrade_fleet_all_route():
     for t in tasks:
         inst_id = t.get("installation_id")
         op_id = op_map.get(inst_id)
-        if op_id:
+        if op_id and t.get("status") == "running":
             operation_service.update_operation_status(
                 op_id,
                 status="running",

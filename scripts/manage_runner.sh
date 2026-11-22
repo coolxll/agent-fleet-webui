@@ -14,6 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_FILE="${RUNNER_FLEET_CONFIG:-$ROOT_DIR/config/runner_fleet.yaml}"
 RUNNER_VERSION="2.322.0" # 统一稳定版 runner
+SSH_OPTS=(-n -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
 
 # Python 解释器查找（优先虚拟环境，保证 yaml 模块可用）
 PYTHON_BIN="python3"
@@ -24,17 +25,25 @@ fi
 # 解析 SQLite 数据库 (优先) 或 config/runner_fleet.yaml (回退) 辅助函数
 py_query() {
   local code="$1"
-  "$PYTHON_BIN" - <<PYEOF
-import sys, sqlite3, json
+  shift || true
+  AGENT_FLEET_DB_PATH="${AGENT_FLEET_DB_PATH:-}" \
+  RUNNER_FLEET_CONFIG="${RUNNER_FLEET_CONFIG:-}" \
+  FLEET_ROOT_DIR="$ROOT_DIR" \
+  FLEET_CONFIG_FILE="$CONFIG_FILE" \
+  PY_QUERY_CODE="$code" \
+  "$PYTHON_BIN" - "$@" <<'PYEOF'
+import os, sys, sqlite3, json
 from pathlib import Path
 
-db_path_env = "${AGENT_FLEET_DB_PATH:-}"
-runner_config_env = "${RUNNER_FLEET_CONFIG:-}"
+db_path_env = os.environ.get("AGENT_FLEET_DB_PATH", "")
+runner_config_env = os.environ.get("RUNNER_FLEET_CONFIG", "")
+root_dir = os.environ.get("FLEET_ROOT_DIR", "")
+config_file = os.environ.get("FLEET_CONFIG_FILE", "")
 
 if db_path_env:
     db_path = Path(db_path_env)
 elif not runner_config_env:
-    db_path = Path("$ROOT_DIR/data/fleet.db")
+    db_path = Path(root_dir) / "data" / "fleet.db"
 else:
     db_path = None
 
@@ -85,10 +94,10 @@ if db_path and db_path.is_file():
         pass
 
 # Fallback: only if SQLite does not exist or has 0 hosts, fallback to reading CONFIG_FILE
-if not sqlite_has_hosts and Path("$CONFIG_FILE").is_file():
+if not sqlite_has_hosts and config_file and Path(config_file).is_file():
     try:
         import yaml
-        with open("$CONFIG_FILE", "r", encoding="utf-8") as f:
+        with open(config_file, "r", encoding="utf-8") as f:
             y = yaml.safe_load(f) or {}
             cfg["hosts"] = y.get("hosts", {}) or {}
             cfg["pools"] = y.get("pools", {}) or {}
@@ -102,7 +111,8 @@ if not sqlite_has_hosts and Path("$CONFIG_FILE").is_file():
     except Exception:
         pass
 
-$code
+query_code = os.environ.get("PY_QUERY_CODE", "")
+exec(query_code, {"__builtins__": __builtins__, "cfg": cfg, "argv": sys.argv[1:]})
 PYEOF
 }
 
@@ -138,22 +148,24 @@ check_gh() {
 # 获取主机的 Profile 配置 (proxy, user, labels, max_runners)
 get_host_profile() {
   local host="$1"
-  py_query "
-h = cfg.get('hosts', {}).get('$host', {})
-proxy = h.get('proxy', '')
-user = h.get('user', 'lynn')
-labels = ','.join(h.get('labels', ['self-hosted', 'Linux', 'X64', '$host']))
-max_runners = int(h.get('max_runners', 1))
-print(f'{proxy}|{user}|{labels}|{max_runners}')
-"
+  py_query '
+host = argv[0]
+h = cfg.get("hosts", {}).get(host, {})
+proxy = h.get("proxy", "")
+user = h.get("user", "lynn")
+labels = ",".join(h.get("labels", ["self-hosted", "Linux", "X64", host]))
+max_runners = int(h.get("max_runners", 1))
+print(f"{proxy}|{user}|{labels}|{max_runners}")
+' "$host"
 }
 
 get_host_max_runners() {
   local host="$1"
-  py_query "
-h = cfg.get('hosts', {}).get('$host', {})
-print(int(h.get('max_runners', 1)))
-"
+  py_query '
+host = argv[0]
+h = cfg.get("hosts", {}).get(host, {})
+print(int(h.get("max_runners", 1)))
+' "$host"
 }
 
 # 槽位与实例命名规范辅助函数
@@ -199,13 +211,13 @@ py_reconcile() {
   local max_runners="$3"
   local runners_json="$4"
 
-  RUNNERS_RAW="$runners_json" "$PYTHON_BIN" - <<PYEOF
+  RUNNERS_RAW="$runners_json" "$PYTHON_BIN" - "$host" "$safe_repo" "$max_runners" <<'PYEOF'
 import os, json, re, sys
 
-host = "$host"
-safe_repo = "$safe_repo"
+host = sys.argv[1]
+safe_repo = sys.argv[2]
 try:
-    max_runners = int("$max_runners")
+    max_runners = int(sys.argv[3])
 except Exception:
     max_runners = 1
 
@@ -388,7 +400,7 @@ cmd_start_slot() {
   host_labels=$(echo "$profile" | cut -d'|' -f3)
 
   echo "==> [1/4] 验证主机 [$host] SSH 连通性 (用户: $host_user)..."
-  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$host" "echo ok" >/dev/null 2>&1; then
+  if ! ssh "${SSH_OPTS[@]}" "$host" "echo ok" >/dev/null 2>&1; then
     echo "❌ 错误: 无法通过 SSH 连接到主机 [$host]，请检查 ~/.ssh/config" >&2
     return 1
   fi
@@ -452,24 +464,35 @@ cmd_start_slot() {
   fi
 
   echo "==> [4/4] 在 [$host] 启动 Runner [$runner_name] (槽位: $slot, 代理: ${host_proxy:-直连}, 标签: [$host_labels])..."
-  ssh "$host" "
+  ssh "${SSH_OPTS[@]}" "$host" "
     set -euo pipefail
     mkdir -p ~/.cache/actions-runner \"$target_dir\"
 
     TARBALL=\"\$HOME/.cache/actions-runner/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz\"
     if [ ! -f \"\$TARBALL\" ]; then
       echo '   - 首次下载 runner 安装包缓存...'
+      TMP_TARBALL=\"\${TARBALL}.tmp.\$\$\"
+      rm -f \"\$TMP_TARBALL\"
       if [ -n \"$host_proxy\" ]; then
-        curl -sSL --proxy \"$host_proxy\" -o \"\$TARBALL\" \"https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz\"
+        if ! curl -fsSL --proxy \"$host_proxy\" -o \"\$TMP_TARBALL\" \"https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz\"; then
+          rm -f \"\$TMP_TARBALL\"
+          exit 1
+        fi
       else
-        curl -sSL -o \"\$TARBALL\" \"https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz\"
+        if ! curl -fsSL -o \"\$TMP_TARBALL\" \"https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz\"; then
+          rm -f \"\$TMP_TARBALL\"
+          exit 1
+        fi
       fi
+      mv -f \"\$TMP_TARBALL\" \"\$TARBALL\"
     fi
 
     # 清理并解压当前槽位目录与会话
     tmux kill-session -t \"$session_name\" 2>/dev/null || true
-    pkill -f \"$target_dir/\" 2>/dev/null || true
-    rm -rf \"$target_dir\"/*
+    for pid in \$(ps -eo pid=,args= | awk -v pat=\"$target_dir/\" -v self=\"\$\$\" -v parent=\"\$PPID\" 'index(\$0, pat) && (\$0 ~ /[R]unner\.(Listener|Worker)/ || \$0 ~ /[r]un-helper\.sh/ || \$0 ~ /[r]un\.sh/) && \$1 != self && \$1 != parent {print \$1}'); do
+      kill \"\$pid\" 2>/dev/null || true
+    done
+    find \"$target_dir\" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
     tar -zxf \"\$TARBALL\" -C \"$target_dir\"
 
     # 自动写入代理配置（支持 HTTP 与 SOCKS5 出站代理共享）
@@ -485,7 +508,7 @@ NO_PROXY=localhost,127.0.0.1,10.*,172.*,100.*
 no_proxy=localhost,127.0.0.1,10.*,172.*,100.*
 ENVEOF
     else
-      touch \"$target_dir/.env\"
+      : > \"$target_dir/.env\"
     fi
 
     if [ -f ~/.runner-env ]; then
@@ -629,9 +652,11 @@ cmd_stop_slot() {
     echo "   - GitHub 端反注册成功 (ID: $rid)"
   fi
 
-  ssh "$host" "
+  ssh "${SSH_OPTS[@]}" "$host" "
     tmux kill-session -t \"$session_name\" 2>/dev/null || true
-    pkill -f \"$target_dir/\" 2>/dev/null || true
+    for pid in \$(ps -eo pid=,args= | awk -v pat=\"$target_dir/\" -v self=\"\$\$\" -v parent=\"\$PPID\" 'index(\$0, pat) && (\$0 ~ /[R]unner\.(Listener|Worker)/ || \$0 ~ /[r]un-helper\.sh/ || \$0 ~ /[r]un\.sh/) && \$1 != self && \$1 != parent {print \$1}'); do
+      kill \"\$pid\" 2>/dev/null || true
+    done
     rm -rf \"$target_dir\"
   " 2>/dev/null || true
   echo "✓ 远端主机 [$host] 槽位 [$slot] 会话与目录已清理"
@@ -657,10 +682,10 @@ cmd_stop() {
     local safe_repo
     safe_repo=$(safe_name "$repo")
     local runners_to_stop
-    runners_to_stop=$(RUNNERS_RAW="$gh_runners" "$PYTHON_BIN" - <<PYEOF
-import os, json, re
-host = "$host"
-safe_repo = "$safe_repo"
+    runners_to_stop=$(RUNNERS_RAW="$gh_runners" "$PYTHON_BIN" - "$host" "$safe_repo" <<'PYEOF'
+import os, json, re, sys
+host = sys.argv[1]
+safe_repo = sys.argv[2]
 prefix = f"{host}-{safe_repo}"
 raw_json = os.environ.get("RUNNERS_RAW", "")
 slot_pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$")
@@ -710,7 +735,7 @@ cmd_logs() {
   fi
 
   echo "==> 捕获 [$host] 上的 tmux 会话 [$session_name] 输出..."
-  ssh "$host" "tmux capture-pane -pt \"$session_name\" -S -50 2>/dev/null || tmux capture-pane -pt \"runner-${safe_repo}\" -S -50 2>/dev/null || echo 'ℹ 会话 $session_name 未在运行'"
+  ssh "${SSH_OPTS[@]}" "$host" "tmux capture-pane -pt \"$session_name\" -S -50 2>/dev/null || tmux capture-pane -pt \"runner-${safe_repo}\" -S -50 2>/dev/null || echo 'ℹ 会话 $session_name 未在运行'"
 }
 
 # --- 全网大盘总览 (Overview) ---
@@ -734,7 +759,11 @@ cmd_overview() {
   while IFS= read -r repo; do
     [ -z "$repo" ] && continue
     local expected_hosts
-    expected_hosts=$(py_query "for h in cfg.get('pools', {}).get('$repo', []): print(h)")
+    expected_hosts=$(py_query '
+repo = argv[0]
+for h in cfg.get("pools", {}).get(repo, []):
+    print(h)
+' "$repo")
 
     local gh_runners
     gh_runners=$(gh api "repos/$repo/actions/runners" 2>/dev/null || true)
@@ -747,14 +776,14 @@ cmd_overview() {
       max_r=$(get_host_max_runners "$host")
 
       local overview_lines
-      overview_lines=$(RUNNERS_RAW="$gh_runners" "$PYTHON_BIN" - <<PYEOF
-import json, os, re
+      overview_lines=$(RUNNERS_RAW="$gh_runners" "$PYTHON_BIN" - "$host" "$safe_repo" "$max_r" <<'PYEOF'
+import json, os, re, sys
 
 raw = os.environ.get("RUNNERS_RAW", "")
-host = "$host"
-safe_repo = "$safe_repo"
+host = sys.argv[1]
+safe_repo = sys.argv[2]
 try:
-    max_r = int("$max_r")
+    max_r = int(sys.argv[3])
 except Exception:
     max_r = 1
 
@@ -827,12 +856,13 @@ reconcile_host_runners() {
 
   # 1. 打印正常在线状态 (幂等无损)
   local healthy_lines
-  healthy_lines=$("$PYTHON_BIN" -c "
-import json
-data = json.loads('''$plan_json''')
-for h in data.get('healthy', []):
-    print(f\"{h['slot']}|{h['name']}\")
-")
+  healthy_lines=$(PLAN_JSON="$plan_json" "$PYTHON_BIN" - <<'PYEOF'
+import json, os
+data = json.loads(os.environ.get("PLAN_JSON", "{}"))
+for h in data.get("healthy", []):
+    print(f"{h['slot']}|{h['name']}")
+PYEOF
+)
   if [ -n "$healthy_lines" ]; then
     while IFS='|' read -r s_idx r_name; do
       [ -z "$s_idx" ] && continue
@@ -842,12 +872,13 @@ for h in data.get('healthy', []):
 
   # 2. 扩容/自愈：补齐缺失或离线槽位
   local missing_lines
-  missing_lines=$("$PYTHON_BIN" -c "
-import json
-data = json.loads('''$plan_json''')
-for m in data.get('missing', []):
-    print(f\"{m['slot']}|{m.get('existing_id') or ''}|{m.get('existing_name') or ''}|{m.get('reason')}\")
-")
+  missing_lines=$(PLAN_JSON="$plan_json" "$PYTHON_BIN" - <<'PYEOF'
+import json, os
+data = json.loads(os.environ.get("PLAN_JSON", "{}"))
+for m in data.get("missing", []):
+    print(f"{m['slot']}|{m.get('existing_id') or ''}|{m.get('existing_name') or ''}|{m.get('reason')}")
+PYEOF
+)
   if [ -n "$missing_lines" ]; then
     while IFS='|' read -r s_idx ex_id ex_name reason; do
       [ -z "$s_idx" ] && continue
@@ -858,12 +889,13 @@ for m in data.get('missing', []):
 
   # 3. 缩容/回收：处理冗余槽位 (busy 保护)
   local redundant_lines
-  redundant_lines=$("$PYTHON_BIN" -c "
-import json
-data = json.loads('''$plan_json''')
-for r in data.get('redundant', []):
-    print(f\"{r['slot']}|{r['id']}|{r['name']}|{str(r['busy']).lower()}\")
-")
+  redundant_lines=$(PLAN_JSON="$plan_json" "$PYTHON_BIN" - <<'PYEOF'
+import json, os
+data = json.loads(os.environ.get("PLAN_JSON", "{}"))
+for r in data.get("redundant", []):
+    print(f"{r['slot']}|{r['id']}|{r['name']}|{str(r['busy']).lower()}")
+PYEOF
+)
   if [ -n "$redundant_lines" ]; then
     while IFS='|' read -r s_idx r_id r_name r_busy; do
       [ -z "$s_idx" ] && continue
@@ -897,7 +929,11 @@ cmd_sync() {
     echo "------------------------------------------------------------"
 
     local expected_hosts
-    expected_hosts=$(py_query "for h in cfg.get('pools', {}).get('$repo', []): print(h)")
+    expected_hosts=$(py_query '
+repo = argv[0]
+for h in cfg.get("pools", {}).get(repo, []):
+    print(h)
+' "$repo")
 
     local gh_runners
     gh_runners=$(gh api "repos/$repo/actions/runners" 2>/dev/null || true)
@@ -932,7 +968,7 @@ cmd_prune() {
     [ -z "$gh_runners" ] && continue
 
     local offline_runners
-    offline_runners=$(RUNNERS_RAW="$gh_runners" "$PYTHON_BIN" - <<PYEOF
+    offline_runners=$(RUNNERS_RAW="$gh_runners" "$PYTHON_BIN" - <<'PYEOF'
 import os, json
 raw = os.environ.get("RUNNERS_RAW", "")
 try:

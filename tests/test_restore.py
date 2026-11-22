@@ -378,7 +378,8 @@ def test_restore_metadata_invalid_or_missing_sha(tmp_path: Path):
 
 
 def test_rollback_restores_pre_existing_wal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Test that rollback restores both target .db and -wal if -wal existed."""
+    """Test that rollback removes stale WAL/SHM when pre_restore_bak used Online Backup API,
+    and restores pre_restore_wal only when pre_restore_bak fell back to raw file copy."""
     src_db = tmp_path / "src.db"
     _create_sample_db(src_db, [(10, "backup_val")])
 
@@ -386,24 +387,46 @@ def test_rollback_restores_pre_existing_wal(tmp_path: Path, monkeypatch: pytest.
     create_backup(src_db, backup_dir, "wal_rb.db")
     backup_file = backup_dir / "wal_rb.db"
 
-    target_db = tmp_path / "target_wal.db"
-    _create_sample_db(target_db, [(20, "original_val")])
-
-    target_wal = tmp_path / "target_wal.db-wal"
-    target_wal.write_bytes(b"important_wal_data_to_preserve")
-
     def fake_replace(src, dst):
         raise OSError("Forced failure during swap")
 
     monkeypatch.setattr(os, "replace", fake_replace)
 
+    # Case 1: Valid SQLite DB -> pre_restore_bak uses Online Backup API (standalone snapshot).
+    # Rollback MUST remove stale -wal and -shm sidecars so they are never replayed over it.
+    target_db = tmp_path / "target_wal.db"
+    _create_sample_db(target_db, [(20, "original_val")])
+
+    target_wal = tmp_path / "target_wal.db-wal"
+    target_shm = tmp_path / "target_wal.db-shm"
+    target_wal.write_bytes(b"stale_wal_that_would_corrupt_snapshot")
+    target_shm.write_bytes(b"stale_shm_bytes")
+
     with pytest.raises(OSError, match="Forced failure during swap"):
         restore_database(backup_file, target_path=target_db, force=True)
 
-    # Both target_db and target_wal must be restored
     assert target_db.exists()
-    assert target_wal.exists()
-    assert target_wal.read_bytes() == b"important_wal_data_to_preserve"
+    assert not target_wal.exists()
+    assert not target_shm.exists()
+    conn = sqlite3.connect(str(target_db))
+    assert conn.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+    assert conn.execute("SELECT id, name FROM users").fetchall() == [(20, "original_val")]
+    conn.close()
+
+    # Case 2: Corrupted/non-SQLite target DB -> pre_restore_bak falls back to raw copy.
+    # Rollback SHOULD restore the raw pre_restore_wal alongside the raw DB copy.
+    raw_target = tmp_path / "target_raw.db"
+    raw_target.write_bytes(b"not_a_valid_sqlite_database_header")
+    raw_wal = tmp_path / "target_raw.db-wal"
+    raw_wal.write_bytes(b"raw_wal_bytes_to_preserve")
+
+    with pytest.raises(OSError, match="Forced failure during swap"):
+        restore_database(backup_file, target_path=raw_target, force=True)
+
+    assert raw_target.exists()
+    assert raw_target.read_bytes() == b"not_a_valid_sqlite_database_header"
+    assert raw_wal.exists()
+    assert raw_wal.read_bytes() == b"raw_wal_bytes_to_preserve"
 
 
 def test_restore_offline_check_rejects_wal_active_writer(tmp_path: Path):

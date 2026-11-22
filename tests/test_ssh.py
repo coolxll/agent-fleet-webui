@@ -197,4 +197,107 @@ def test_build_ssh_command_batch_mode_timeout_and_remote_command():
 
     # String remote command
     cmd_str = build_ssh_command(target="my-server", remote_command="echo hello")
-    assert cmd_str[-2:] == ["my-server", "echo hello"]
+    assert cmd_str[-3:] == ["--", "my-server", "echo hello"]
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "-oProxyCommand=id",
+        "-Jevil",
+        "user@-oProxyCommand=id",
+        "host with spaces",
+        "host\nProxyCommand=id",
+        "host\rname",
+        "host\x00name",
+        "host\tname",
+    ],
+)
+def test_ssh_option_injection_rejected(bad_value):
+    """Reject leading '-', whitespace, and control characters in SSH targets/options."""
+    with pytest.raises(ValueError):
+        build_ssh_command(target=bad_value)
+    with pytest.raises(ValueError):
+        resolve_ssh_target(ssh_host=bad_value)
+    with pytest.raises(ValueError):
+        resolve_ssh_connection(ssh_alias=bad_value)
+
+
+def test_build_ssh_command_inserts_end_of_options_marker():
+    """Verify '--' always precedes the SSH destination operand."""
+    cmd = build_ssh_command(target="corp-bastion", user="sysadmin", port=2222)
+    assert cmd[-2:] == ["--", "sysadmin@corp-bastion"]
+
+
+@pytest.mark.asyncio
+async def test_ssh_runner_end_of_options_and_validation(monkeypatch):
+    """Verify _SshBase rejects malicious targets and inserts '--' before destination."""
+    from agent_fleet.remotes import executor
+
+    with pytest.raises(ValueError):
+        executor.SSHRunner("-oProxyCommand=id")
+
+    captured: list[list[str]] = []
+
+    async def fake_run(argv, stdin_data, timeout):
+        captured.append(argv)
+        return executor.ExecResult(stdout="ok", exit_code=0)
+
+    monkeypatch.setattr(executor, "_run", fake_run)
+
+    runner = executor.SSHRunner("dev@box.local", port=22022)
+    await runner.run_command(["uname", "-a"], timeout=5)
+    await runner.run_stdin(["sh", "-s"], "echo hi", timeout=5)
+
+    assert len(captured) == 2
+    for argv in captured:
+        idx = argv.index("--")
+        assert argv[idx + 1] == "dev@box.local"
+
+
+def test_wsl_runner_rejects_shell_metacharacters():
+    """Verify WslRunner._wrap rejects shell metacharacters and accepts valid identifiers."""
+    from agent_fleet.remotes.executor import LocalRunner, WslRunner
+
+    parent = LocalRunner()
+    valid = WslRunner(parent, "Ubuntu-22.04", "dev_user.1")
+    assert valid._wrap(["sh", "-s"]) == ["wsl.exe", "-d", "Ubuntu-22.04", "-u", "dev_user.1", "--", "sh", "-s"]
+
+    for bad_distro in ("Ubuntu; whoami", "Ubuntu$(id)", "Ubuntu|cat", "Ubuntu`id`", "-Ubuntu", ""):
+        with pytest.raises(ValueError):
+            WslRunner(parent, bad_distro)._wrap(["sh", "-s"])
+
+    for bad_user in ("root;id", "user name", "$(whoami)", "-u"):
+        with pytest.raises(ValueError):
+            WslRunner(parent, "Ubuntu-22.04", bad_user)._wrap(["sh", "-s"])
+
+
+def test_sqlite_inventory_rejects_ssh_and_wsl_injection(fleet_db):
+    """Verify create_host and update_host reject SSH option injection and WSL metacharacters."""
+    from agent_fleet.services import sqlite_inventory
+
+    for bad_payload in (
+        {"name": "-oProxyCommand=id"},
+        {"name": "valid-host", "hostname": "-Jevil"},
+        {"name": "valid-host", "ssh_host": "10.0.0.1\nProxyCommand=id"},
+        {"name": "valid-host", "ssh_alias": "bad alias"},
+        {"name": "valid-host", "ssh_user": "-root"},
+        {"name": "valid-host", "wsl": [{"distro": "Ubuntu;id"}]},
+        {"name": "valid-host", "wsl": [{"distro": "Ubuntu-22.04", "user": "root&whoami"}]},
+    ):
+        with pytest.raises(ValueError):
+            sqlite_inventory.create_host(bad_payload)
+
+    created = sqlite_inventory.create_host({"name": "safe-validation-host", "hostname": "10.0.0.5"})
+    try:
+        for bad_update in (
+            {"hostname": "-oProxyCommand=id"},
+            {"ssh_host": "host\x00evil"},
+            {"ssh_user": "user with space"},
+            {"wsl_distro": "Ubuntu;rm"},
+            {"wsl_user": "root|id"},
+        ):
+            with pytest.raises(ValueError):
+                sqlite_inventory.update_host(created["id"], bad_update)
+    finally:
+        sqlite_inventory.delete_host(created["id"])

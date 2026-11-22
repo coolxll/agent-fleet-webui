@@ -14,11 +14,13 @@ if [ -f "$SCRIPT_DIR/manage_runner.sh" ]; then
 fi
 
 # 兼顾清理旧命名规则的历史临时目录与会话
-ssh -o BatchMode=yes "$HOST" "
+ssh -n -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 "$HOST" '
   tmux kill-session -t actions-runner-fleet 2>/dev/null || true
   tmux kill-session -t actions-runner-fleet-2 2>/dev/null || true
-  pkill -f 'actions-runner-fleet' 2>/dev/null || true
+  for pid in $(ps -eo pid=,args= | awk -v self="$$" -v parent="$PPID" '"'"'/[a]ctions-runner-fleet/ && (/[R]unner\.(Listener|Worker)/ || /[r]un-helper\.sh/ || /[r]un\.sh/) && $1 != self && $1 != parent {print $1}'"'"'); do
+    kill "$pid" 2>/dev/null || true
+  done
   rm -rf ~/actions-runner-fleet ~/actions-runner-fleet-2
-" 2>/dev/null || true
+' 2>/dev/null || true
 
 echo "✓ 下线与清理已完成"

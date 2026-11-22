@@ -384,6 +384,7 @@ def restore_database(
     target_file.parent.mkdir(parents=True, exist_ok=True)
     pre_restore_bak: Path | None = None
     pre_restore_wal: Path | None = None
+    pre_restore_used_raw_copy = False
     target_wal = target_file.with_name(f"{target_file.name}-wal")
     target_shm = target_file.with_name(f"{target_file.name}-shm")
 
@@ -396,7 +397,7 @@ def restore_database(
             )
 
         # Preserve a copy of WAL file BEFORE any SQLite connection is opened,
-        # in case backup() checkpoints/removes the WAL or target is in DELETE mode.
+        # in case backup() fails and we fall back to raw file copy.
         # Note: Do not name it with "-wal" suffix to prevent SQLite from treating it
         # as pre_restore_bak's own active WAL file during backup connection.
         if target_wal.exists():
@@ -425,6 +426,7 @@ def restore_database(
                 )
 
             os.chmod(pre_restore_bak, 0o600)
+            pre_restore_used_raw_copy = False
         except Exception as e:
             # Fallback to direct copy if target DB is not valid SQLite (e.g. raw corrupted bytes)
             logger.warning(
@@ -432,6 +434,7 @@ def restore_database(
             )
             shutil.copy2(target_file, pre_restore_bak)
             os.chmod(pre_restore_bak, 0o600)
+            pre_restore_used_raw_copy = True
 
         _notify(f"  [OK] Safety backup created: {pre_restore_bak.name}")
     else:
@@ -457,12 +460,13 @@ def restore_database(
             try:
                 lock_conn = sqlite3.connect(str(target_file), timeout=1.0)
                 try:
-                    lock_conn.execute("BEGIN EXCLUSIVE")
-                    # Checkpoint to truncate WAL if in WAL mode
+                    # Checkpoint to truncate WAL if in WAL mode (must run outside a transaction)
                     try:
                         lock_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                     except Exception:
                         pass
+                    lock_conn.execute("BEGIN EXCLUSIVE")
+                    lock_conn.execute("ROLLBACK")
                 finally:
                     lock_conn.close()
             except sqlite3.OperationalError as e:
@@ -471,6 +475,12 @@ def restore_database(
                         f"Target database became locked by another process during restore preparation ({e})"
                     )
                 _notify(f"  [WARN] Proceeding with swap despite lock (--force specified): {e}")
+            except sqlite3.DatabaseError as e:
+                if not force:
+                    raise
+                _notify(
+                    f"  [WARN] Target database is unreadable/corrupted; proceeding with swap (--force specified): {e}"
+                )
 
         # 3. Perform atomic replace
         os.replace(tmp_target, target_file)
@@ -506,9 +516,28 @@ def restore_database(
             try:
                 shutil.copy2(pre_restore_bak, target_file)
                 os.chmod(target_file, 0o600)
-                if pre_restore_wal and pre_restore_wal.exists():
+                if pre_restore_used_raw_copy and pre_restore_wal and pre_restore_wal.exists():
                     shutil.copy2(pre_restore_wal, target_wal)
                     os.chmod(target_wal, 0o600)
+                    if target_shm.exists():
+                        try:
+                            target_shm.unlink()
+                        except OSError:
+                            pass
+                else:
+                    # pre_restore_bak is a standalone checkpointed snapshot from SQLite
+                    # Online Backup API; remove stale WAL/SHM sidecars so SQLite never
+                    # replays them over the checkpointed backup.
+                    for sidecar in (target_wal, target_shm):
+                        if sidecar.exists():
+                            try:
+                                sidecar.unlink()
+                            except OSError as sidecar_exc:
+                                logger.warning(
+                                    "Could not unlink stale sidecar %s during rollback: %s",
+                                    sidecar,
+                                    sidecar_exc,
+                                )
                 _notify("  [ROLLBACK] Target database successfully rolled back to pre-restore snapshot.")
                 logger.info("Rollback completed successfully from %s", pre_restore_bak)
             except Exception as rb_exc:

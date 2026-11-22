@@ -565,10 +565,11 @@ def test_stop_non_zero_slot_ignores_legacy_even_if_first(mock_fleet_env):
     assert "DELETE 101" in del_content
     assert "DELETE 100" not in del_content, "停止 slot 1 严禁误删 legacy runner"
 
-    # 验证清理的远端会话与路径仅为 slot 1
+    # 验证清理的远端会话与路径仅为 slot 1（避免 pkill -f 自杀）
     ssh_content = ssh_log.read_text(encoding="utf-8")
     assert 'tmux kill-session -t "runner-org-test-repo-1"' in ssh_content
-    assert 'pkill -f "/home/testuser/runners/org-test-repo-1/"' in ssh_content
+    assert 'awk -v pat="/home/testuser/runners/org-test-repo-1/"' in ssh_content
+    assert 'pkill -f ' not in ssh_content
     assert 'rm -rf "/home/testuser/runners/org-test-repo-1"' in ssh_content
 
 
@@ -608,7 +609,7 @@ def test_stop_non_zero_slot_when_absent_never_falls_back_to_legacy(mock_fleet_en
     # 远端清理操作只作用于 slot 2
     ssh_content = ssh_log.read_text(encoding="utf-8")
     assert 'tmux kill-session -t "runner-org-test-repo-2"' in ssh_content
-    assert 'pkill -f "/home/testuser/runners/org-test-repo-2/"' in ssh_content
+    assert 'awk -v pat="/home/testuser/runners/org-test-repo-2/"' in ssh_content
 
 
 def test_stop_slot_0_prefers_exact_over_legacy(mock_fleet_env):
@@ -653,7 +654,7 @@ def test_stop_slot_0_prefers_exact_over_legacy(mock_fleet_env):
 
     ssh_content = ssh_log.read_text(encoding="utf-8")
     assert 'tmux kill-session -t "runner-org-test-repo-0"' in ssh_content
-    assert 'pkill -f "/home/testuser/runners/org-test-repo-0/"' in ssh_content
+    assert 'awk -v pat="/home/testuser/runners/org-test-repo-0/"' in ssh_content
 
 
 def test_stop_slot_0_falls_back_to_legacy_when_slot_0_absent(mock_fleet_env):
@@ -689,7 +690,7 @@ def test_stop_slot_0_falls_back_to_legacy_when_slot_0_absent(mock_fleet_env):
 
     ssh_content = ssh_log.read_text(encoding="utf-8")
     assert 'tmux kill-session -t "runner-org-test-repo"' in ssh_content
-    assert 'pkill -f "/home/testuser/runners/org-test-repo/"' in ssh_content
+    assert 'awk -v pat="/home/testuser/runners/org-test-repo/"' in ssh_content
 
 
 def test_directory_path_termination_boundary_isolation(mock_fleet_env):
@@ -702,10 +703,10 @@ def test_directory_path_termination_boundary_isolation(mock_fleet_env):
     assert res1.returncode == 0
     ssh_content1 = ssh_log.read_text(encoding="utf-8")
 
-    # 提取 pkill 模式
+    # 提取进程目录边界匹配模式
     import re
-    m1 = re.search(r'pkill -f "([^"]+)"', ssh_content1)
-    assert m1 is not None, "必须包含 pkill 命令"
+    m1 = re.search(r'awk -v pat="([^"]+)"', ssh_content1)
+    assert m1 is not None, "必须包含带目录边界的进程清理命令"
     pattern1 = m1.group(1)
     assert pattern1 == "/home/testuser/runners/org-test-repo-1/"
 
@@ -743,8 +744,8 @@ def test_directory_path_termination_boundary_isolation(mock_fleet_env):
     assert res0.returncode == 0
     ssh_content0 = ssh_log.read_text(encoding="utf-8")
 
-    m0 = re.search(r'pkill -f "([^"]+)"', ssh_content0)
-    assert m0 is not None, "必须包含 pkill 命令"
+    m0 = re.search(r'awk -v pat="([^"]+)"', ssh_content0)
+    assert m0 is not None, "必须包含带目录边界的进程清理命令"
     pattern0 = m0.group(1)
     assert pattern0 == "/home/testuser/runners/org-test-repo/"
 

@@ -98,3 +98,104 @@ def test_start_batch_upgrade_empty_and_dedup():
     tasks = start_batch_upgrade(["fake_1", "fake_2", "fake_1"])
     assert tasks == []
 
+
+def test_start_upgrade_task_without_event_loop_marks_failed(fleet_db):
+    """Calling start_upgrade_task without a running event loop must NOT leave task stuck in running."""
+    from agent_fleet import models
+    from agent_fleet.db import session_scope
+    from agent_fleet.services import action_service, operation_service
+
+    with session_scope() as s:
+        host = models.Host(id="h-noloop", name="host-noloop", enabled=True)
+        rt = models.Runtime(id="rt-noloop", key="native", host_id="h-noloop", transport="local", enabled=True)
+        inst = models.AgentInstallation(
+            id="inst-noloop",
+            runtime_id="rt-noloop",
+            agent_id="codex",
+            version="0.1.0",
+            detected=True,
+        )
+        s.add_all([host, rt, inst])
+
+    op = operation_service.record_operation(
+        operation_type="agent_upgrade",
+        target_type="runtime",
+        target_id="rt-noloop",
+        target_name="host-noloop:codex",
+        status="running",
+        details={"installation_id": "inst-noloop"},
+    )
+
+    task = action_service.start_upgrade_task("inst-noloop", operation_id=op["id"])
+    assert task["status"] == "failed"
+    assert task["ok"] is False
+    assert task["finished_at"] is not None
+    assert "event loop" in (task["error"] or "").lower()
+
+    final_op = operation_service.get_operation(op["id"])
+    assert final_op["status"] == "failed"
+
+
+def test_batch_upgrade_routes_execute_in_async_event_loop(client, monkeypatch):
+    """All 4 batch upgrade endpoints must run in an async event loop and schedule background tasks."""
+    import time
+    from unittest.mock import AsyncMock
+    from agent_fleet import models
+    from agent_fleet.db import session_scope
+    from agent_fleet.remotes.executor import ExecResult
+    from agent_fleet.services import action_service
+
+    with session_scope() as s:
+        host = models.Host(id="h-batch-api", name="host-batch-api", enabled=True)
+        rt = models.Runtime(id="rt-batch-api", key="native", host_id="h-batch-api", transport="local", enabled=True)
+        inst = models.AgentInstallation(
+            id="inst-batch-api",
+            runtime_id="rt-batch-api",
+            agent_id="codex",
+            version="0.1.0",
+            detected=True,
+        )
+        s.add_all([host, rt, inst])
+
+    executed = []
+
+    class FakeRunner:
+        async def run_script(self, script, timeout):
+            executed.append(script)
+            return ExecResult(stdout="upgraded", exit_code=0)
+
+    mock_scan = AsyncMock()
+    mock_scan.ok = True
+    monkeypatch.setattr(action_service, "build_runner", lambda *args, **kwargs: FakeRunner())
+    monkeypatch.setattr(action_service, "scan_runtime", AsyncMock(return_value=mock_scan))
+    monkeypatch.setattr(action_service, "persist_result", lambda *args, **kwargs: None)
+    monkeypatch.setattr(action_service, "find_outdated_installations", lambda **kwargs: ["inst-batch-api"])
+
+    endpoints = [
+        ("/api/upgrades/batch", {"installation_ids": ["inst-batch-api"]}),
+        ("/api/machines/h-batch-api/upgrade-all", {}),
+        ("/api/agents/codex/upgrade-all", {}),
+        ("/api/fleet/upgrade-all", {}),
+    ]
+
+    for url, body in endpoints:
+        action_service._tasks.clear()
+        before = len(executed)
+        res = client.post(url, json=body)
+        assert res.status_code == 200, f"{url} failed: {res.text}"
+        data = res.json()
+        assert data["queued"] == 1
+        task_id = data["tasks"][0]["task_id"]
+
+        # Wait briefly for the scheduled background task to finish on the event loop
+        for _ in range(40):
+            t = action_service.get_upgrade_task(task_id)
+            if t and t.get("status") in ("completed", "failed"):
+                break
+            time.sleep(0.025)
+
+        final_task = action_service.get_upgrade_task(task_id)
+        assert final_task is not None
+        assert final_task["status"] == "completed", f"{url} task did not complete: {final_task}"
+        assert len(executed) > before, f"{url} never executed upgrade script"
+

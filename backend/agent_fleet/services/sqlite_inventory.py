@@ -16,7 +16,12 @@ import yaml
 from sqlalchemy import select, delete
 from agent_fleet import models
 from agent_fleet.db import session_scope
-from agent_fleet.remotes.ssh import build_ssh_command, resolve_ssh_target
+from agent_fleet.remotes.ssh import (
+    build_ssh_command,
+    resolve_ssh_target,
+    validate_ssh_token,
+    validate_wsl_identifier,
+)
 from agent_fleet.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -407,26 +412,60 @@ def get_host(id_or_name: str) -> dict[str, Any] | None:
 
 def create_host(payload: dict[str, Any]) -> dict[str, Any]:
     """Create a new host in SQLite."""
-    name = str(payload.get("name") or "").strip()
-    if not name:
+    raw_name = payload.get("name")
+    if raw_name is None or not str(raw_name).strip():
         raise ValueError("Host name 不能为空")
+    name = str(raw_name)
+    validate_ssh_token(name, "name")
+
+    raw_hostname = payload.get("hostname")
+    if raw_hostname is not None and str(raw_hostname) != "":
+        validate_ssh_token(str(raw_hostname), "hostname")
+    hostname = str(raw_hostname) if raw_hostname else name
+
+    raw_ssh_host = payload.get("ssh_host")
+    if raw_ssh_host is not None and str(raw_ssh_host) != "":
+        validate_ssh_token(str(raw_ssh_host), "ssh_host")
+    ssh_host = str(raw_ssh_host) if raw_ssh_host else hostname
+
+    raw_ssh_alias = payload.get("ssh_alias")
+    if raw_ssh_alias is not None and str(raw_ssh_alias) != "":
+        validate_ssh_token(str(raw_ssh_alias), "ssh_alias")
+
+    raw_user = payload.get("ssh_user")
+    if raw_user is not None and str(raw_user) != "":
+        validate_ssh_token(str(raw_user), "ssh_user")
+        user = str(raw_user)
+    else:
+        user = None
+
+    validated_wsl: list[tuple[str, str | None]] = []
+    for w in (payload.get("wsl") or []):
+        d = w if isinstance(w, str) else (w.get("distro") or "")
+        u = None if isinstance(w, str) else w.get("user")
+        if d:
+            validate_wsl_identifier(str(d), "wsl_distro")
+            if u is not None and str(u) != "":
+                validate_wsl_identifier(str(u), "wsl_user")
+                u_val: str | None = str(u)
+            else:
+                u_val = None
+            validated_wsl.append((str(d), u_val))
 
     with session_scope() as s:
         existing = s.execute(select(models.Host).where(models.Host.name == name)).scalar_one_or_none()
         if existing:
             raise ValueError(f"主机已存在: {name}")
 
-        raw_user = payload.get("ssh_user")
-        user = str(raw_user).strip() if raw_user is not None and str(raw_user).strip() else None
         h = models.Host(
             id=models.new_id(),
             name=name,
-            hostname=payload.get("hostname") or name,
+            hostname=hostname,
             description=payload.get("description", ""),
             inventory_source="sqlite",
             group=payload.get("group", ""),
             tags=payload.get("tags") or {},
-            ssh_host=payload.get("ssh_host") or payload.get("hostname") or name,
+            ssh_host=ssh_host,
             ssh_port=int(payload.get("ssh_port") or 22),
             ssh_user=user,
             proxy=payload.get("proxy", ""),
@@ -442,7 +481,8 @@ def create_host(payload: dict[str, Any]) -> dict[str, Any]:
         # Add native primary runtime
         kind = payload.get("kind", "linux")
         transport = payload.get("transport") or ("windows" if kind == "windows" else "ssh")
-        alias = payload.get("ssh_alias") or (h.hostname if (h.ssh_host and h.hostname != h.ssh_host) else name)
+        alias = str(raw_ssh_alias) if raw_ssh_alias else (h.hostname if (h.ssh_host and h.hostname != h.ssh_host) else name)
+        validate_ssh_token(alias, "ssh_alias")
 
         s.add(
             models.Runtime(
@@ -458,32 +498,47 @@ def create_host(payload: dict[str, Any]) -> dict[str, Any]:
                 enabled=h.enabled,
             )
         )
-        for w in (payload.get("wsl") or []):
-            d = w if isinstance(w, str) else w.get("distro", "")
-            u = None if isinstance(w, str) else w.get("user")
-            if d:
-                s.add(
-                    models.Runtime(
-                        id=models.new_id(),
-                        host_id=h.id,
-                        key=f"wsl:{d}",
-                        kind="wsl",
-                        transport="wsl",
-                        wsl_distro=d,
-                        wsl_user=u or user,
-                        ssh_alias=alias,
-                        ssh_host=h.ssh_host,
-                        ssh_port=h.ssh_port,
-                        collect_user=u or user,
-                        enabled=h.enabled,
-                    )
+        for d, u in validated_wsl:
+            effective_wsl_user = u or user
+            if effective_wsl_user:
+                validate_wsl_identifier(effective_wsl_user, "wsl_user")
+            s.add(
+                models.Runtime(
+                    id=models.new_id(),
+                    host_id=h.id,
+                    key=f"wsl:{d}",
+                    kind="wsl",
+                    transport="wsl",
+                    wsl_distro=d,
+                    wsl_user=effective_wsl_user,
+                    ssh_alias=alias,
+                    ssh_host=h.ssh_host,
+                    ssh_port=h.ssh_port,
+                    collect_user=effective_wsl_user,
+                    enabled=h.enabled,
                 )
+            )
         s.flush()
         return host_to_dict(h)
 
 
 def update_host(id_or_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Update an existing host in SQLite."""
+    for field in ("hostname", "ssh_host", "ssh_alias", "ssh_user"):
+        if field in payload and payload[field] is not None and str(payload[field]) != "":
+            validate_ssh_token(str(payload[field]), field)
+    for wsl_field in ("wsl_distro", "wsl_user"):
+        if wsl_field in payload and payload[wsl_field] is not None and str(payload[wsl_field]) != "":
+            validate_wsl_identifier(str(payload[wsl_field]), wsl_field)
+    if "wsl" in payload and payload["wsl"]:
+        for w in payload["wsl"]:
+            d = w if isinstance(w, str) else (w.get("distro") or "")
+            u = None if isinstance(w, str) else w.get("user")
+            if d:
+                validate_wsl_identifier(str(d), "wsl_distro")
+            if u is not None and str(u) != "":
+                validate_wsl_identifier(str(u), "wsl_user")
+
     with session_scope() as s:
         h = s.execute(
             select(models.Host).where((models.Host.id == id_or_name) | (models.Host.name == id_or_name))

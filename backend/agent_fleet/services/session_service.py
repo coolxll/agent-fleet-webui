@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shlex
 from datetime import datetime, timezone
 from typing import Any
 from pydantic import TypeAdapter
@@ -2468,9 +2469,9 @@ print('___CODEX_JSON___' + json.dumps(turns, ensure_ascii=False))
         # Fallback to rollout decompression if sqlite had no items
         if not turns and file_path and not file_path.endswith((".db", ".sqlite")):
             if file_path.endswith(".zst"):
-                read_cmd = f"zstd -dc {json.dumps(file_path)} 2>/dev/null | head -c 2000000"
+                read_cmd = f"zstd -dc {shlex.quote(file_path)} 2>/dev/null | head -c 2000000"
             else:
-                read_cmd = f"head -c 2000000 {json.dumps(file_path)}"
+                read_cmd = f"head -c 2000000 {shlex.quote(file_path)}"
             exec_res = await runner.run_script(read_cmd, timeout=settings.ssh_connect_timeout + 15)
             if exec_res.ok and exec_res.stdout:
                 raw_lines = exec_res.stdout.splitlines()
@@ -2478,7 +2479,7 @@ print('___CODEX_JSON___' + json.dumps(turns, ensure_ascii=False))
 
     # 4. Standard file-based agents (Claude, AGY, CodeBuddy, Qoder, Pi)
     if not turns and file_path and not file_path.endswith((".db", ".sqlite")):
-        read_cmd = f"head -c 2000000 {json.dumps(file_path)}"
+        read_cmd = f"head -c 2000000 {shlex.quote(file_path)}"
         exec_res = await runner.run_script(read_cmd, timeout=settings.ssh_connect_timeout + 15)
         if exec_res.ok and exec_res.stdout:
             raw_lines = exec_res.stdout.splitlines()

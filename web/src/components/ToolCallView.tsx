@@ -71,17 +71,34 @@ export function extractFilePath(input: any): string | null {
   return null
 }
 
+// Validate that a URL uses an explicit http: or https: scheme
+export function safeHttpUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.href
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 // Extract web URL or search query
 export function extractWebTarget(input: any): { url?: string; query?: string; domain?: string } | null {
   if (!input) return null
   if (typeof input === 'string') {
-    if (input.startsWith('http://') || input.startsWith('https://')) {
-      return { url: input }
+    const safeUrl = safeHttpUrl(input)
+    if (safeUrl) {
+      return { url: safeUrl }
     }
     return null
   }
   if (typeof input === 'object') {
-    const url = input.url || input.Url || input.uri || input.link
+    const url = safeHttpUrl(input.url || input.Url || input.uri || input.link) ?? undefined
     const query = input.query || input.search_query || input.q
     const domain = input.domain || input.site
     if (url || query) {
@@ -673,6 +690,7 @@ export function WebSearchCard({
 }) {
   const input = call?.input || {}
   const webTarget = extractWebTarget(input)
+  const safeUrl = safeHttpUrl(webTarget?.url)
   const toolName = call?.name || 'web_search'
   const summary = input.toolAction || input.toolSummary
 
@@ -685,8 +703,8 @@ export function WebSearchCard({
           {summary && <span className="tool-summary-tag">{summary}</span>}
         </div>
         <div className="tool-header-right">
-          {webTarget?.url && <CopyButton text={webTarget.url} label="Copy URL" />}
-          {webTarget?.query && !webTarget.url && (
+          {safeUrl && <CopyButton text={safeUrl} label="Copy URL" />}
+          {webTarget?.query && !safeUrl && (
             <CopyButton text={webTarget.query} label="Copy Query" />
           )}
         </div>
@@ -702,16 +720,16 @@ export function WebSearchCard({
         </div>
       )}
 
-      {webTarget?.url && (
+      {safeUrl && (
         <div className="tool-url-box">
           <span className="tool-url-icon">🔗</span>
           <a
-            href={webTarget.url}
+            href={safeUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="tool-url-link"
           >
-            {webTarget.url}
+            {safeUrl}
           </a>
         </div>
       )}
