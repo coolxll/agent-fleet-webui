@@ -17,7 +17,7 @@ from typing import Any
 import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from agent_fleet.services.quota_providers import QuotaProviderError
+from agent_fleet.services.quota_providers import QuotaAuthError, QuotaProviderError
 
 
 def _iso(dt: datetime) -> str:
@@ -212,6 +212,7 @@ async def fetch(raw_credential: str | dict | None) -> dict:
     usage_data = None
     userinfo_data = None
     plan_data = None
+    auth_failed = False
 
     async with httpx.AsyncClient(timeout=25) as client:
         # 1. Fetch usage Presentation (Primary)
@@ -222,18 +223,41 @@ async def fetch(raw_credential: str | dict | None) -> dict:
         ]:
             try:
                 resp = await client.get(url, headers=headers)
+                if resp.status_code in (401, 403):
+                    auth_failed = True
+                    continue
                 if resp.status_code == 200:
                     data = resp.json()
                     if isinstance(data, dict):
                         candidate = data.get("qoderUsage") or data
-                        if isinstance(candidate, dict) and isinstance(candidate.get("userQuota"), dict):
-                            _quota_values(candidate["userQuota"])
-                            usage_data = data
-                            break
+                        if isinstance(candidate, dict):
+                            has_user = isinstance(candidate.get("userQuota"), dict) and bool(candidate.get("userQuota"))
+                            has_org = (
+                                isinstance(candidate.get("orgResourcePackage"), dict)
+                                and candidate["orgResourcePackage"].get("available") is True
+                                and bool(candidate["orgResourcePackage"].get("total") or candidate["orgResourcePackage"].get("cap"))
+                            )
+                            has_addon = (
+                                isinstance(candidate.get("addOnQuota"), dict)
+                                and candidate["addOnQuota"].get("available") is not False
+                                and bool(candidate["addOnQuota"].get("total") or candidate["addOnQuota"].get("cap"))
+                            )
+                            user_valid = False
+                            if has_user:
+                                try:
+                                    _quota_values(candidate["userQuota"])
+                                    user_valid = True
+                                except QuotaProviderError:
+                                    user_valid = False
+                            if user_valid or has_org or has_addon:
+                                usage_data = data
+                                break
             except Exception:
                 continue
 
         if not usage_data:
+            if auth_failed:
+                raise QuotaAuthError("QoderCN access token is invalid or expired")
             raise QuotaProviderError("Failed to query QoderCN usage API (HTTP error or invalid response)")
 
         # 2. Fetch userinfo (Best-effort)
@@ -254,10 +278,18 @@ async def fetch(raw_credential: str | dict | None) -> dict:
 
     # Unpack usage details
     qoder_usage = usage_data.get("qoderUsage") or usage_data
-    user_quota = qoder_usage.get("userQuota") or {}
-    total, used, remaining = _quota_values(user_quota)
-    unit = user_quota.get("unit") or "credits"
-    reset_at_iso = _expiry_time(qoder_usage.get("expiresAt"))
+    user_quota = qoder_usage.get("userQuota")
+    if isinstance(user_quota, dict) and user_quota:
+        try:
+            total, used, remaining = _quota_values(user_quota)
+            unit = user_quota.get("unit") or "credits"
+        except QuotaProviderError:
+            total, used, remaining = 0.0, 0.0, 0.0
+            unit = qoder_usage.get("usageType") or "credits"
+    else:
+        total, used, remaining = 0.0, 0.0, 0.0
+        unit = qoder_usage.get("usageType") or "credits"
+    reset_at_iso = _expiry_time(qoder_usage.get("expiresAt")) or _expiry_time(qoder_usage.get("refreshAt"))
 
     remaining_fraction = round(remaining / total, 4) if total > 0 else 0.0
     remaining_fraction = max(0.0, min(1.0, remaining_fraction))
@@ -326,7 +358,7 @@ async def fetch(raw_credential: str | dict | None) -> dict:
             continue
         if key == "orgResourcePackage" and pkg.get("available") is not True:
             continue
-        capacity_key = "total" if "total" in pkg else "cap"
+        capacity_key = "total" if pkg.get("total") else "cap"
         if not pkg.get(capacity_key):
             continue
         pkg_total, pkg_used, pkg_remaining = _quota_values(pkg, capacity_key)
@@ -350,12 +382,18 @@ async def fetch(raw_credential: str | dict | None) -> dict:
     if not buckets:
         raise QuotaProviderError("QoderCN returned no usable credit pools")
 
+    primary_used, primary_total, primary_remaining = used, total, remaining
+    if primary_total <= 0:
+        primary_used = buckets[0]["used"]
+        primary_total = buckets[0]["total"]
+        primary_remaining = buckets[0]["remaining"]
+
     daily_consumption = [
         {
             "name": "周期累计已用",
-            "used": used,
-            "total": total,
-            "remaining": remaining,
+            "used": primary_used,
+            "total": primary_total,
+            "remaining": primary_remaining,
             "reset_at": reset_at_iso,
         }
     ]

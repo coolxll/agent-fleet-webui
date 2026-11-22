@@ -379,7 +379,7 @@ def test_fetch_cross_host_worst_case_wins_weekly_quota(monkeypatch):
     gemini = next(group for group in groups if group['id'] == 'gemini')
     buckets = {bucket['window']: bucket for bucket in gemini['buckets']}
 
-    assert any("antigravity/2.24.0" in ua for ua in seen_user_agents if ua)
+    assert any(agy.USER_AGENT in ua for ua in seen_user_agents if ua)
     # Worst-case wins should preserve daily live consumption instead of stale 1.0 from PROD
     assert buckets['weekly']['remaining_fraction'] == 0.2148
     assert buckets['weekly']['reset_at'] == daily_weekly_reset
@@ -518,3 +518,34 @@ def test_model_fallback_only_when_summary_unavailable(monkeypatch):
     groups = asyncio.run(agy.fetch(credential()))['quota']['accounts'][0]['groups']
     assert [g['id'] for g in groups] == ['gemini']
     assert [b['window'] for b in groups[0]['buckets']] == ['model']
+
+
+def test_proto3_omitted_remaining_fraction_infers_zero_with_valid_reset():
+    reset = '2027-01-01T04:00:00Z'
+    groups = agy.quota_groups({'groups': [{'displayName': 'Gemini Models', 'buckets': [
+        {'bucketId': 'gemini-5h', 'window': '5h', 'resetTime': reset},
+        {'bucketId': 'gemini-weekly', 'window': 'weekly', 'remainingFraction': None, 'resetTime': reset},
+    ]}]})
+    assert len(groups) == 1
+    assert groups[0]['buckets'] == [{
+        'id': 'gemini-5h',
+        'name': '5-Hour',
+        'window': '5h',
+        'remaining_fraction': 0.0,
+        'reset_at': reset,
+    }]
+
+    # Omitted remainingFraction without a valid resetTime is NOT inferred as zero.
+    assert agy.quota_groups({'groups': [{'displayName': 'Gemini Models', 'buckets': [
+        {'bucketId': 'gemini-5h', 'window': '5h'},
+    ]}]}) == []
+
+    # Legacy model fallback also infers proto3 zero when resetTime is valid.
+    model_groups = agy.gemini_groups_from_models({'models': {
+        'gemini-3.8-flash': {'quotaInfo': {'resetTime': reset}},
+        'gemini-3.8-pro': {'quotaInfo': {'remainingFraction': None, 'resetTime': reset}},
+    }})
+    assert len(model_groups) == 1
+    assert len(model_groups[0]['buckets']) == 1
+    assert model_groups[0]['buckets'][0]['id'] == 'gemini-3.8-flash'
+    assert model_groups[0]['buckets'][0]['remaining_fraction'] == 0.0

@@ -277,7 +277,7 @@ export type QuotaEntry = {
 export type MagpieQuotaSource = {
   available: boolean
   error: string | null
-  accounts: { id: string; email: string | null; label: string; plan: string | null; linked_account_id: string | null }[]
+  accounts: { id: string; provider?: string; email: string | null; label: string; plan: string | null; linked_account_id: string | null }[]
 }
 
 export type QuotaCollectionSettings = { enabled: boolean; interval_seconds: number }

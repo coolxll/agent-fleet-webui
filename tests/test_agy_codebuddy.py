@@ -295,6 +295,32 @@ def test_agy_swap_quota_ignores_invalid_buckets():
     assert "min_remaining_fraction" not in account
 
 
+def test_agy_swap_quota_allows_missing_reset_at_for_full_buckets():
+    data = json.dumps(
+        {
+            "full@example.com": {
+                "email": "full@example.com",
+                "quota_snapshot": {
+                    "groups": [
+                        {
+                            "id": "gemini",
+                            "buckets": [
+                                {"id": "gemini-5h", "window": "5h", "remaining_fraction": 1.0},
+                                {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 1.0, "reset_at": None},
+                            ],
+                        }
+                    ]
+                },
+            }
+        }
+    )
+    res = get_adapter("agy").run(_agy_facts(agy_swap_accounts=data))
+    account = res.config.quota["accounts"][0]
+    assert account["min_remaining_fraction"] == 1.0
+    assert len(account["groups"][0]["buckets"]) == 2
+    assert all(b["reset_at"] is None for b in account["groups"][0]["buckets"])
+
+
 # ---------------------------------------------------------------------------
 # CodeBuddy
 # ---------------------------------------------------------------------------

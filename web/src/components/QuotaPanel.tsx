@@ -415,7 +415,7 @@ export default function QuotaPanel({
                             const resetAt = parseTime(bucket.reset_at)
                             const resetText =
                               resetAt === null
-                                ? t('common.unknown')
+                                ? null
                                 : resetAt <= now
                                   ? t(bucket.reset_kind === 'expires' ? 'quota.expired' : 'quota.refreshDue')
                                   : t(bucket.reset_kind === 'partial_expiry' ? 'quota.nextExpiry' : bucket.reset_kind === 'expires' ? 'quota.expiresIn' : 'quota.resetsIn', { time: duration(resetAt - now) })
@@ -423,18 +423,20 @@ export default function QuotaPanel({
                               <div className="quota-bucket" key={bucket.id || bucket.window + bucket.name}>
                                 <div className="quota-bucket-header">
                                   <span className="quota-bucket-window">{['model', 'cycle'].includes(bucket.window) ? bucket.name : windowLabel(bucket.window)}</span>
-                                  <span className="quota-bucket-reset small muted" title={bucket.reset_at || undefined}>
-                                    {resetText}
-                                    {resetAt !== null && (
-                                      <span className="quota-reset-at">
-                                        {' · '}
-                                        {new Date(resetAt).toLocaleString(
-                                          language === 'zh' ? 'zh-CN' : 'en-US',
-                                          { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }
-                                        )}
-                                      </span>
-                                    )}
-                                  </span>
+                                  {resetText && (
+                                    <span className="quota-bucket-reset small muted" title={bucket.reset_at || undefined}>
+                                      {resetText}
+                                      {resetAt !== null && (
+                                        <span className="quota-reset-at">
+                                          {' · '}
+                                          {new Date(resetAt).toLocaleString(
+                                            language === 'zh' ? 'zh-CN' : 'en-US',
+                                            { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }
+                                          )}
+                                        </span>
+                                      )}
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="quota-bucket-bar">
                                   <div className="quota-track">

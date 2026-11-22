@@ -13,10 +13,11 @@ import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
-from agent_fleet.services.quota_providers import QuotaProviderError
+from agent_fleet.services.quota_providers import QuotaAuthError, QuotaProviderError
 
 
 def _iso(dt: datetime) -> str:
@@ -157,11 +158,20 @@ def parse_credential(raw: str | None) -> dict:
 
 
 def _is_global(credential: dict) -> bool:
-    realm = (credential.get("realm") or "").lower()
+    realm = (credential.get("realm") or "").strip().lower()
     if realm == "global":
         return True
-    domain = (credential.get("domain") or "").lower()
-    return domain == "workbuddy.ai" or domain.endswith(".workbuddy.ai")
+    raw_domain = (credential.get("domain") or "").strip().lower()
+    if not raw_domain:
+        return False
+    if "://" in raw_domain:
+        host = (urlparse(raw_domain).hostname or "").lower()
+    else:
+        host = raw_domain.split("/", 1)[0].split(":", 1)[0]
+    return any(
+        host == base or host.endswith(f".{base}")
+        for base in ("workbuddy.ai", "codebuddy.ai")
+    )
 
 
 def _package_remain_used(acct: dict) -> tuple[float, float, float]:
@@ -248,11 +258,16 @@ async def fetch(raw_credential: str | dict) -> dict:
     async with httpx.AsyncClient(timeout=25) as client:
         for page in range(1, 101):
             last_error = "no response"
+            auth_failed = False
             page_data = None
             for path in paths:
                 try:
                     resp = await client.post(f"https://{base_domain}{path}", headers=headers,
                                              json={**body, "PageNumber": page})
+                    if resp.status_code in (401, 403):
+                        auth_failed = True
+                        last_error = f"HTTP {resp.status_code}"
+                        continue
                     if resp.status_code != 200:
                         last_error = f"HTTP {resp.status_code}"
                         continue
@@ -261,6 +276,8 @@ async def fetch(raw_credential: str | dict) -> dict:
                 except (httpx.HTTPError, ValueError, QuotaProviderError) as exc:
                     last_error = str(exc)
             if page_data is None:
+                if auth_failed:
+                    raise QuotaAuthError(f"Workbuddy authentication failed: {last_error}")
                 raise QuotaProviderError(f"Workbuddy API request failed: {last_error}")
             rows = page_data["Accounts"]
             raw_accounts.extend(rows)

@@ -46,6 +46,13 @@ export default function QuotaSourceSettings({ onChanged }: { onChanged: () => vo
     } finally { setBusy(false) }
   }
 
+  const providerLabel = (provider?: string) => {
+    if (provider === 'codex') return 'Codex'
+    if (provider === 'qodercn') return 'QoderCN'
+    if (provider === 'codebuddy' || provider === 'workbuddy') return 'CodeBuddy'
+    return provider || 'Codex'
+  }
+
   return (
     <div className="panel" style={{ marginBottom: 16 }}>
       <div className="body">
@@ -73,15 +80,16 @@ export default function QuotaSourceSettings({ onChanged }: { onChanged: () => vo
         </div>
         <div className="muted small" style={{ marginTop: 8, lineHeight: 1.6 }}>
           {zh
-            ? '仅自动采集已关联的 Codex 账号。使用 magpie 当前登录查询配额，不续期、不修改登录；失效时请在 magpie 更新认证。'
-            : 'Only linked Codex accounts are collected automatically. Uses the current magpie login to query quota; never renews or modifies authentication. Update expired logins in magpie.'}
+            ? '仅自动采集已关联的 magpie 账号（Codex、QoderCN、CodeBuddy/WorkBuddy）。使用 magpie 当前登录查询配额，不续期、不修改登录；失效时请在 magpie 更新认证。'
+            : 'Only linked magpie accounts (Codex, QoderCN, CodeBuddy/WorkBuddy) are collected automatically. Uses the current magpie login to query quota; never renews or modifies authentication. Update expired logins in magpie.'}
         </div>
         {error && <div className="err small" style={{ marginTop: 8 }}>{error}</div>}
         {open && source && <div style={{ marginTop: 12 }}>
           {!source.available ? <div className="err small">{source.error}</div>
-            : source.accounts.length === 0 ? <div className="muted small">{zh ? 'magpie 中没有可关联的 Codex 账号。' : 'No Codex accounts found in magpie.'}</div>
+            : source.accounts.length === 0 ? <div className="muted small">{zh ? 'magpie 中没有可关联的账号。' : 'No linkable accounts found in magpie.'}</div>
             : source.accounts.map((a) => (
               <div key={a.id} style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', padding: '8px 0' }}>
+                <span className="tag">{providerLabel(a.provider)}</span>
                 <span className="small">{a.label}</span>
                 {a.linked_account_id
                   ? <span className="tag">{zh ? '已关联' : 'Linked'}</span>

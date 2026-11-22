@@ -164,9 +164,15 @@ def _agy_swap_groups(snapshot):
                 if window not in ("weekly", "5h"):
                     continue
                 fraction = _clamp_fraction(raw_bucket.get("remaining_fraction"))
-                reset_at = _text(raw_bucket.get("reset_at"), 80)
-                if fraction is None or not reset_at:
+                raw_reset = raw_bucket.get("reset_at")
+                if fraction is None:
                     continue
+                if raw_reset is None:
+                    reset_at = None
+                else:
+                    reset_at = _text(raw_reset, 80)
+                    if not reset_at:
+                        continue
                 buckets.append(
                     {
                         "id": _text(raw_bucket.get("id"), 80),

@@ -9,7 +9,7 @@ from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from agent_fleet.services import qoder_quota as qoder
-from agent_fleet.services.quota_providers import fetch_account
+from agent_fleet.services.quota_providers import QuotaAuthError, QuotaProviderError, fetch_account
 
 
 def _encrypt_payload(payload: dict, machine_id: str) -> str:
@@ -205,3 +205,49 @@ def test_unlimited_expiration_sentinel_is_not_a_reset(monkeypatch):
         'userQuota': {'total': 100, 'used': 0, 'remaining': 100},
     })
     assert account['groups'][0]['buckets'][0]['reset_at'] is None
+
+
+def test_enterprise_org_package_without_user_quota_succeeds(monkeypatch):
+    account = fetch_usage(monkeypatch, {
+        'userType': 'enterprise',
+        'usageType': 'credits',
+        'expiresAt': 1797696000000,
+        'orgResourcePackage': {'cap': 3000, 'used': 17, 'remaining': 2983, 'available': True},
+    })
+    buckets = account['groups'][0]['buckets']
+    assert [b['id'] for b in buckets] == ['org_package']
+    assert buckets[0]['remaining'] == 2983
+    assert buckets[0]['total'] == 3000
+    assert account['min_remaining_fraction'] == round(2983 / 3000, 4)
+
+
+@pytest.mark.parametrize('status', [401, 403])
+def test_usage_auth_error_raises_quota_auth_error(monkeypatch, status):
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        'AsyncClient',
+        lambda **kw: original(transport=httpx.MockTransport(lambda r: httpx.Response(status)), **kw),
+    )
+    with pytest.raises(QuotaAuthError):
+        asyncio.run(qoder.fetch('expired-token'))
+
+
+def test_invalid_user_quota_still_allows_org_package_with_zero_total_and_cap(monkeypatch):
+    account = fetch_usage(monkeypatch, {
+        'userQuota': {'total': 'invalid'},
+        'orgResourcePackage': {'total': 0, 'cap': 3000, 'used': 150, 'remaining': 2850, 'available': True},
+    })
+    buckets = account['groups'][0]['buckets']
+    assert [b['id'] for b in buckets] == ['org_package']
+    assert buckets[0]['total'] == 3000
+    assert buckets[0]['remaining'] == 2850
+
+
+def test_sentinel_expires_at_falls_back_to_refresh_at(monkeypatch):
+    account = fetch_usage(monkeypatch, {
+        'expiresAt': 253402300799000,
+        'refreshAt': 1795017600000,
+        'userQuota': {'total': 100, 'used': 10, 'remaining': 90},
+    })
+    assert account['groups'][0]['buckets'][0]['reset_at'] == '2026-11-18T16:00:00Z'

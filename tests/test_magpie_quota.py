@@ -336,3 +336,97 @@ def test_team_members_sharing_workspace_remain_distinct(source, monkeypatch):
     assert len(accounts) == 2
     assert {a['email'] for a in accounts} == {'a@example.test', 'b@example.test'}
     assert {a['source_account_id'] for a in accounts} == {'login-a', 'login-b'}
+
+
+def test_plugin_logins_link_and_query_qoder_and_workbuddy_without_storing_tokens(source, monkeypatch):
+    plugin_auth = source.parent / 'plugin-auth.json'
+    plugin_auth.write_text(json.dumps({
+        'qoder-cn': {'access': 'qoder-tok', 'refresh': 'NEVER-Q', 'uid': 'u-qoder', 'name': 'QUser'},
+        'workbuddy#abc': {'access': 'wb-tok', 'refresh': 'NEVER-WB', 'uid': 'u-wb', 'accountId': 'wbuser', 'domain': 'copilot.tencent.com'},
+    }))
+    source.write_text(json.dumps([
+        {'id': 'q-login', 'agent': 'plugin:qoder-cn', 'user': 'u-qoder', 'plan': 'enterprise', 'auth': {}},
+        {'id': 'wb-login', 'agent': 'plugin:workbuddy', 'user': 'wbuser', 'plan': 'Free', 'auth': {}},
+        {'id': 'wb-hidden', 'agent': 'plugin:workbuddy', 'user': 'u-wb', 'hidden': 'hidden', 'auth': {}},
+    ]))
+    quota_store._write({'version': 1, 'accounts': [
+        {'id': 'old-q', 'provider': 'qodercn', 'email': 'u-qoder@qoder.cn', 'credential': {'access_token': 'stale', 'uid': 'u-qoder'}},
+        {'id': 'old-wb', 'provider': 'codebuddy', 'email': 'u-wb@workbuddy', 'credential': {'access_token': 'stale', 'uid': 'u-wb'}},
+    ]})
+    seen = []
+    async def fetch(provider, raw):
+        cred = json.loads(raw)
+        seen.append((provider, cred))
+        return {
+            'credential': {'access_token': cred['access_token']},
+            'identity': {'email': f"{cred['uid']}@{provider}", 'plan': provider},
+            'quota': {'source': provider, 'observed_at': '2026-11-22T00:00:00Z', 'accounts': []},
+        }
+    monkeypatch.setattr(quota_providers, 'fetch_account', fetch)
+    sources = magpie.source_accounts()['accounts']
+    assert [s['id'] for s in sources] == ['q-login', 'wb-login']
+    async def scenario():
+        q_acc = await magpie.link_account('q-login')
+        wb_acc = await magpie.link_account('wb-login')
+        assert q_acc['id'] == 'old-q' and q_acc['credential_source'] == 'magpie'
+        assert wb_acc['id'] == 'old-wb' and wb_acc['credential_source'] == 'magpie'
+    asyncio.run(scenario())
+    assert [p for p, _ in seen] == ['qodercn', 'codebuddy']
+    wb_cred = seen[1][1]
+    assert wb_cred['realm'] == 'cn'
+    stored = quota_store.store_path().read_text()
+    assert 'qoder-tok' not in stored and 'wb-tok' not in stored and 'NEVER-' not in stored
+
+
+def test_qoder_second_query_succeeds_when_fetch_email_differs_from_plugin_auth(source, monkeypatch):
+    plugin_auth = source.parent / 'plugin-auth.json'
+    plugin_auth.write_text(json.dumps({
+        'qoder-cn': {
+            'access': 'qoder-tok',
+            'uid': 'u-qoder',
+            'email': 'real.user@corp.example',
+            'name': 'Real User',
+        },
+        'workbuddy#global': {
+            'access': 'wb-global-tok',
+            'uid': 'u-wb-g',
+            'accountId': 'wbglobal',
+            'domain': 'https://www.codebuddy.ai/api',
+        },
+    }))
+    source.write_text(json.dumps([
+        {'id': 'q-login', 'agent': 'plugin:qoder-cn', 'user': 'u-qoder', 'plan': 'enterprise', 'auth': {}},
+        {'id': 'wb-global', 'agent': 'plugin:workbuddy', 'user': 'wbglobal', 'plan': 'Pro', 'auth': {}},
+    ]))
+    calls = []
+    async def fetch(provider, raw):
+        cred = json.loads(raw)
+        calls.append((provider, cred))
+        if provider == 'qodercn':
+            return {
+                'credential': {'access_token': cred['access_token']},
+                'identity': {'email': f"{cred['uid']}@qoder.cn", 'plan': 'Qoder Enterprise'},
+                'quota': {'source': 'qodercn', 'observed_at': '2026-11-22T00:00:00Z', 'accounts': []},
+            }
+        return {
+            'credential': {'access_token': cred['access_token']},
+            'identity': {'account_id': f"workbuddy:{cred['realm']}:uid:{cred['uid']}", 'email': f"{cred['uid']}@workbuddy", 'plan': 'WorkBuddy Global'},
+            'quota': {'source': 'workbuddy', 'observed_at': '2026-11-22T00:00:00Z', 'accounts': []},
+        }
+    monkeypatch.setattr(quota_providers, 'fetch_account', fetch)
+    async def scenario():
+        q_acc = await magpie.link_account('q-login')
+        assert q_acc['email'] == 'u-qoder@qoder.cn'
+        stored = quota_store.get_account(q_acc['id'])
+        assert stored['source_email'] == 'real.user@corp.example'
+        assert stored['source_identity_account_id'] == 'qodercn:uid:u-qoder'
+        age_account(q_acc['id'])
+        q_again = await magpie.query_account(q_acc['id'])
+        assert q_again['status'] == 'ok'
+        assert q_again['error_code'] is None
+
+        wb_acc = await magpie.link_account('wb-global')
+        assert wb_acc['status'] == 'ok'
+    asyncio.run(scenario())
+    assert [p for p, _ in calls] == ['qodercn', 'qodercn', 'codebuddy']
+    assert calls[2][1]['realm'] == 'global'

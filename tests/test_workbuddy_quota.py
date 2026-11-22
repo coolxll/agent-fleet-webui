@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from agent_fleet.services import workbuddy_quota as wb
-from agent_fleet.services.quota_providers import QuotaProviderError, fetch_account
+from agent_fleet.services.quota_providers import QuotaAuthError, QuotaProviderError, fetch_account
 
 
 def test_parse_credential_plain():
@@ -358,3 +358,40 @@ def test_invalid_resource_is_not_shown_as_zero_balance(monkeypatch, payload):
 def test_cycle_amounts_keep_zero_and_fractional_credits():
     assert wb._package_remain_used({'CycleCapacitySize': 100, 'CycleCapacityRemain': 0, 'CycleCapacityUsed': 5}) == (0, 100, 100)
     assert wb._package_remain_used({'CapacitySize': 10.5, 'CapacityRemain': 2.25}) == (2.25, 8.25, 10.5)
+
+
+@pytest.mark.parametrize('status', [401, 403])
+def test_usage_auth_error_raises_quota_auth_error(monkeypatch, status):
+    original = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        'AsyncClient',
+        lambda **kw: original(transport=httpx.MockTransport(lambda r: httpx.Response(status)), **kw),
+    )
+    with pytest.raises(QuotaAuthError):
+        asyncio.run(wb.fetch('expired-token'))
+
+
+def test_is_global_recognizes_codebuddy_ai_and_strips_url(monkeypatch):
+    assert wb._is_global({'domain': 'codebuddy.ai'}) is True
+    assert wb._is_global({'domain': 'www.codebuddy.ai'}) is True
+    assert wb._is_global({'domain': 'https://www.codebuddy.ai/api/v1'}) is True
+    assert wb._is_global({'domain': 'https://workbuddy.ai:443/path'}) is True
+    assert wb._is_global({'domain': 'www.codebuddy.cn'}) is False
+    assert wb._is_global({'domain': 'evilcodebuddy.ai'}) is False
+
+    seen_hosts = []
+    def handler(request: httpx.Request):
+        seen_hosts.append(request.url.host)
+        return httpx.Response(200, json={'code': 0, 'Response': {'Data': {'Accounts': []}}})
+
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kw: original(transport=httpx.MockTransport(handler), **kw))
+    res = asyncio.run(wb.fetch(json.dumps({
+        'accessToken': 'cb-global-tok',
+        'domain': 'https://www.codebuddy.ai/auth/callback',
+        'uid': 'cb-g-1',
+    })))
+    assert seen_hosts == ['www.workbuddy.ai']
+    assert res['identity']['plan'] == 'WorkBuddy Global'
+    assert res['credential']['realm'] == 'global'

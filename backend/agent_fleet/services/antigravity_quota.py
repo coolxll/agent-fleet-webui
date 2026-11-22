@@ -163,7 +163,7 @@ def _require_client_secret(client_id: str) -> str:
 
 API = "https://daily-cloudcode-pa.googleapis.com/v1internal:"
 PROD_API = "https://cloudcode-pa.googleapis.com/v1internal:"
-USER_AGENT = "antigravity/2.24.0 (aidev_client; os_type=darwin; arch=arm64)"
+USER_AGENT = "antigravity/2.34.0 (aidev_client; os_type=darwin; arch=arm64)"
 TIERS = {"free-tier": "Free", "g1-pro-tier": "Google AI Pro", "g1-ultra-tier": "Google AI Ultra", "g1-ultra-lite-tier": "Google AI Ultra Lite"}
 
 
@@ -269,11 +269,21 @@ def resolve_bucket(bucket: dict) -> dict | None:
     if not isinstance(ident, str):
         return None
     ident = ident.strip()
+    reset_at = _reset_time(bucket.get("resetTime") or bucket.get("reset_time"))
+    has_explicit_fraction = "remainingFraction" in bucket or (
+        isinstance(bucket.get("remaining"), dict) and "remainingFraction" in bucket["remaining"]
+    )
     remaining = fraction(bucket.get("remainingFraction"))
     if remaining is None and isinstance(bucket.get("remaining"), dict):
         remaining = fraction(bucket["remaining"].get("remainingFraction"))
     if remaining is None:
-        return None
+        # Proto3 JSON omits scalar 0.0; infer exhausted (0.0) only when the
+        # field is absent (not explicitly null/invalid) and a valid resetTime
+        # proves the bucket is active.
+        if not has_explicit_fraction and reset_at is not None:
+            remaining = 0.0
+        else:
+            return None
     known = SUMMARY_BUCKETS.get(ident)
     window = bucket.get("window") or (known[1] if known else None)
     if ident == ARGON_BUCKET:
@@ -287,7 +297,7 @@ def resolve_bucket(bucket: dict) -> dict | None:
         "name": bucket.get("displayName") or bucket.get("name") or ("Weekly" if window == "weekly" else "5-Hour"),
         "window": window,
         "remaining_fraction": remaining,
-        "reset_at": _reset_time(bucket.get("resetTime") or bucket.get("reset_time")),
+        "reset_at": reset_at,
     }
 
 
@@ -367,11 +377,15 @@ def gemini_groups_from_models(models: dict) -> list[dict]:
         info = model.get("quotaInfo")
         if not isinstance(info, dict):
             continue
+        reset_at = _reset_time(info.get("resetTime"))
         remaining = fraction(info.get("remainingFraction"))
         if remaining is None:
-            continue
+            if "remainingFraction" not in info and reset_at is not None:
+                remaining = 0.0
+            else:
+                continue
         buckets.append({"id": ident, "name": label, "window": "model", "remaining_fraction": remaining,
-                        "reset_at": _reset_time(info.get("resetTime"))})
+                        "reset_at": reset_at})
     return [{"id": "gemini", "name": "Gemini models", "buckets": buckets}] if buckets else []
 
 

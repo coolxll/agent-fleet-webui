@@ -41,6 +41,32 @@ def _time(value: str | None) -> datetime | None:
         return None
 
 
+def _plugin_auth() -> dict[str, dict]:
+    path = get_settings().magpie_config_dir / "plugin-auth.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, dict)}
+
+
+def _match_plugin_auth(plugin_auth: dict[str, dict], prefix: str, user_hint: str) -> dict | None:
+    candidates = [
+        v for k, v in plugin_auth.items()
+        if (k == prefix or k.startswith(prefix + "#"))
+        and isinstance(v.get("access"), str) and v.get("access")
+    ]
+    if not candidates:
+        return None
+    if user_hint:
+        for item in candidates:
+            if user_hint in (item.get("accountId"), item.get("uid"), item.get("email"), item.get("name")):
+                return item
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def _logins() -> list[dict]:
     path = get_settings().magpie_config_dir / "logins.json"
     try:
@@ -51,30 +77,81 @@ def _logins() -> list[dict]:
         raise SourceError("magpie login store could not be read") from None
     if not isinstance(data, list):
         raise SourceError("magpie login store has an unsupported format")
+    plugin_auth = _plugin_auth()
     entries = []
     for row in data:
-        if not isinstance(row, dict) or row.get("agent") != "codex":
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
             continue
-        auth = row.get("auth")
-        tokens = auth.get("tokens") if isinstance(auth, dict) else None
-        if not isinstance(tokens, dict) or not isinstance(row.get("id"), str):
-            continue
-        # Deliberately do not forward id_token or refresh_token to providers.
-        credential = {k: tokens[k] for k in ("access_token", "account_id") if isinstance(tokens.get(k), str)}
-        identity = quota_providers._codex_identity(credential)
-        if not identity.get("account_id"):
-            continue
-        label = row.get("user") if isinstance(row.get("user"), str) else row["id"]
-        email = identity.get("email")
-        if not email and "@" in label:
-            email = label.split(" · ")[0]
-        if email:
-            credential["email"] = email
-        entries.append({
-            "id": row["id"], "email": email, "label": label,
-            "plan": row.get("plan") if isinstance(row.get("plan"), str) else None,
-            "account_id": identity["account_id"], "credential": credential,
-        })
+        agent = row.get("agent")
+        if agent == "codex":
+            auth = row.get("auth")
+            tokens = auth.get("tokens") if isinstance(auth, dict) else None
+            if not isinstance(tokens, dict):
+                continue
+            # Deliberately do not forward id_token or refresh_token to providers.
+            credential = {k: tokens[k] for k in ("access_token", "account_id") if isinstance(tokens.get(k), str)}
+            identity = quota_providers._codex_identity(credential)
+            if not identity.get("account_id"):
+                continue
+            label = row.get("user") if isinstance(row.get("user"), str) else row["id"]
+            email = identity.get("email")
+            if not email and "@" in label:
+                email = label.split(" · ")[0]
+            if email:
+                credential["email"] = email
+            entries.append({
+                "id": row["id"], "provider": "codex", "email": email, "label": label,
+                "plan": row.get("plan") if isinstance(row.get("plan"), str) else None,
+                "account_id": identity["account_id"], "credential": credential,
+            })
+        elif agent == "plugin:qoder-cn":
+            if row.get("hidden"):
+                continue
+            user_hint = row.get("user") if isinstance(row.get("user"), str) else ""
+            pa = _match_plugin_auth(plugin_auth, "qoder-cn", user_hint)
+            if not pa:
+                continue
+            uid = str(pa.get("uid") or pa.get("accountId") or user_hint).strip()
+            if not uid:
+                continue
+            email = pa.get("email") if isinstance(pa.get("email"), str) and "@" in pa.get("email") else f"{uid}@qoder.cn"
+            credential = {
+                "access_token": pa["access"],
+                "uid": uid,
+                "name": pa.get("name") if isinstance(pa.get("name"), str) else None,
+            }
+            entries.append({
+                "id": row["id"], "provider": "qodercn", "email": email,
+                "label": pa.get("name") or user_hint or row["id"],
+                "plan": row.get("plan") if isinstance(row.get("plan"), str) else None,
+                "account_id": f"qodercn:uid:{uid}", "credential": credential,
+            })
+        elif agent == "plugin:workbuddy":
+            if row.get("hidden"):
+                continue
+            user_hint = row.get("user") if isinstance(row.get("user"), str) else ""
+            pa = _match_plugin_auth(plugin_auth, "workbuddy", user_hint)
+            if not pa:
+                continue
+            uid = str(pa.get("uid") or "").strip()
+            if not uid:
+                continue
+            domain = str(pa.get("domain") or "").strip()
+            realm = "global" if ("workbuddy.ai" in domain.lower() or "codebuddy.ai" in domain.lower()) else "cn"
+            email = f"{uid}@workbuddy"
+            credential = {
+                "access_token": pa["access"],
+                "uid": uid,
+                "domain": domain,
+                "realm": realm,
+                "nickname": user_hint or pa.get("accountId"),
+            }
+            entries.append({
+                "id": row["id"], "provider": "codebuddy", "email": email,
+                "label": user_hint or uid,
+                "plan": row.get("plan") if isinstance(row.get("plan"), str) else None,
+                "account_id": f"workbuddy:{realm}:uid:{uid}", "credential": credential,
+            })
     return entries
 
 
@@ -99,7 +176,7 @@ def source_accounts() -> dict:
     public = []
     for a in entries:
         linked = next((r for r in accounts if r["credential_source"] == "magpie" and r["source_account_id"] == a["id"]), None)
-        public.append({k: a[k] for k in ("id", "email", "label", "plan")} | {
+        public.append({k: a[k] for k in ("id", "provider", "email", "label", "plan")} | {
             "linked_account_id": linked["id"] if linked else None,
         })
     return {"available": True, "error": None, "accounts": public}
@@ -125,31 +202,40 @@ def update_collection(enabled: bool, interval_seconds: int) -> dict:
 
 async def link_account(source_id: str) -> dict:
     entry = _source(source_id)
+    provider = entry.get("provider") or "codex"
     with quota_store._STORE_LOCK:
         data = quota_store._read()
-        matches = [a for a in data["accounts"] if a.get("provider") == "codex" and (
+        entry_uid = (entry.get("credential") or {}).get("uid")
+        matches = [a for a in data["accounts"] if a.get("provider") == provider and (
             a.get("source_account_id") == source_id
             # ChatGPT account_id identifies a workspace, shared by team members.
             # A workspace alone must never merge two different users.
-            or ((a.get("account_id") or (a.get("credential") or {}).get("account_id")) == entry["account_id"]
+            or (provider == "codex"
+                and (a.get("account_id") or (a.get("credential") or {}).get("account_id")) == entry["account_id"]
                 and entry["email"] and a.get("email") == entry["email"])
+            or (provider != "codex" and (
+                a.get("account_id") == entry["account_id"]
+                or (entry["email"] and a.get("email") == entry["email"])
+                or (entry_uid and (a.get("credential") or {}).get("uid") == entry_uid)
+            ))
         )]
         if not matches:
             # Legacy imports sometimes have no stable ID. Only migrate a unique
             # email match with no conflicting account ID (teams can share email).
-            matches = [a for a in data["accounts"] if a.get("provider") == "codex"
+            matches = [a for a in data["accounts"] if a.get("provider") == provider
                        and entry["email"] and a.get("email") == entry["email"]
                        and not (a.get("account_id") or (a.get("credential") or {}).get("account_id"))]
         if len(matches) > 1:
             raise SourceError("Multiple quota accounts match; remove duplicate imports before linking")
         account = matches[0] if matches else {
-            "id": models.new_id(), "provider": "codex", "created_at": _iso(_now()),
+            "id": models.new_id(), "provider": provider, "created_at": _iso(_now()),
         }
         if not matches:
             data["accounts"].append(account)
         if account.get("source_account_id") not in (None, source_id):
             raise SourceError("This quota account is already linked to another magpie login")
         account.update({"credential_source": "magpie", "source_account_id": source_id,
+                        "source_identity_account_id": entry["account_id"], "source_email": entry["email"],
                         "account_id": entry["account_id"], "email": entry["email"],
                         "plan": entry["plan"], "status": "unknown", "updated_at": _iso(_now())})
         account.pop("credential", None)
@@ -195,21 +281,32 @@ async def _query_account(account_id: str) -> dict:
     if checked and (_now() - checked).total_seconds() < 30:
         return quota_store.public_account(account)
     source_id = account["source_account_id"]
+    expected_account_id = (
+        account["source_identity_account_id"]
+        if "source_identity_account_id" in account
+        else account.get("account_id")
+    )
+    expected_email = (
+        account["source_email"]
+        if "source_email" in account
+        else account.get("email")
+    )
     error_code, message, result = None, None, None
     try:
-        entry = _source(source_id, account.get("account_id"), account.get("email"))
+        entry = _source(source_id, expected_account_id, expected_email)
+        provider = entry.get("provider") or account.get("provider") or "codex"
         credential = entry["credential"]
         if not credential.get("access_token"):
             raise quota_providers.QuotaAuthError("No current access token")
         try:
-            result = await quota_providers.fetch_account("codex", json.dumps(credential))
+            result = await quota_providers.fetch_account(provider, json.dumps(credential))
         except quota_providers.QuotaAuthError:
             # Magpie may have replaced its access token during the request. Read
             # it once more; retry only if it changed. Never renew it ourselves.
-            latest = _source(source_id, account.get("account_id"), account.get("email"))["credential"]
+            latest = _source(source_id, expected_account_id, expected_email)["credential"]
             if latest == credential or not latest.get("access_token"):
                 raise
-            result = await quota_providers.fetch_account("codex", json.dumps(latest))
+            result = await quota_providers.fetch_account(provider, json.dumps(latest))
     except SourceError as exc:
         error_code, message = "source_unavailable", str(exc)
     except quota_providers.QuotaAuthError:
