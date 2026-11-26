@@ -83,6 +83,69 @@ def _get_lock(runtime_id: str) -> asyncio.Lock:
     return _host_locks[runtime_id]
 
 
+def _post_upgrade_cleanup(agent_id: str, platform: str) -> str:
+    """Return an optional shell/PowerShell snippet to recycle long-lived agent daemons.
+
+    Runs only when the upgrade command succeeded (exit code 0) and preserves the
+    upgrade exit code even if no background daemon is running.
+    """
+    if platform == "windows":
+        win_exit_capture = (
+            "$upgradeExit = if ($null -eq $LASTEXITCODE) "
+            "{ if ($?) { 0 } else { 1 } } else { [int]$LASTEXITCODE }\n"
+        )
+        if agent_id == "codex":
+            return (
+                win_exit_capture
+                + "if ($upgradeExit -eq 0) {\n"
+                "  if (Get-Command codex -ErrorAction SilentlyContinue) {\n"
+                "    & codex app-server daemon stop 2>$null | Out-Null\n"
+                "  }\n"
+                "  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {\n"
+                "    $_.CommandLine -match 'codex.*app-server' -and $_.CommandLine -notmatch 'WindowsApps' -and $_.ProcessId -ne $PID\n"
+                "  } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\n"
+                "}\n"
+                "exit $upgradeExit"
+            )
+        if agent_id == "opencode":
+            return (
+                win_exit_capture
+                + "if ($upgradeExit -eq 0) {\n"
+                "  if (Get-Command opencode -ErrorAction SilentlyContinue) {\n"
+                "    & opencode service stop 2>$null | Out-Null\n"
+                "  }\n"
+                "  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {\n"
+                "    $_.CommandLine -match 'opencode.*serve' -and $_.ProcessId -ne $PID\n"
+                "  } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }\n"
+                "}\n"
+                "exit $upgradeExit"
+            )
+        return "exit $LASTEXITCODE"
+
+    if agent_id == "codex":
+        # Avoid literal "app-server" anywhere in the script so Linux procps pkill -f
+        # (whose .* matches across newlines in /proc/pid/cmdline) never kills an ancestor sh -c/bash -c.
+        return (
+            "_upgrade_rc=$?\n"
+            'if [ "$_upgrade_rc" -eq 0 ]; then\n'
+            "  (codex app'-'server daemon stop >/dev/null 2>&1 || true)\n"
+            "  (pkill -f '[c]odex.*app[-]server' >/dev/null 2>&1 || true)\n"
+            "fi\n"
+            'exit "$_upgrade_rc"'
+        )
+    if agent_id == "opencode":
+        # Avoid literal "serve" anywhere in the script for the same Linux procps pkill -f reason.
+        return (
+            "_upgrade_rc=$?\n"
+            'if [ "$_upgrade_rc" -eq 0 ]; then\n'
+            "  (opencode service stop >/dev/null 2>&1 || true)\n"
+            "  (pkill -f '[o]pencode.*s[e]rve' >/dev/null 2>&1 || true)\n"
+            "fi\n"
+            'exit "$_upgrade_rc"'
+        )
+    return ""
+
+
 def build_upgrade_script(agent_id: str, platform: str, channel: str | None = None) -> str:
     rule = UPGRADE_RULES.get(agent_id)
     if not rule:
@@ -93,6 +156,7 @@ def build_upgrade_script(agent_id: str, platform: str, channel: str | None = Non
     tag = "stable" if channel == "stable" else "latest"
 
     if platform == "windows":
+        win_tail = _post_upgrade_cleanup(agent_id, "windows")
         if rule_type == "npm":
             body = (
                 f"if (Get-Command npm.cmd -ErrorAction SilentlyContinue) {{\n"
@@ -103,7 +167,7 @@ def build_upgrade_script(agent_id: str, platform: str, channel: str | None = Non
                 f'  Write-Error "npm executable not found on Windows target"\n'
                 f"  exit 127\n"
                 f"}}\n"
-                f"exit $LASTEXITCODE"
+                f"{win_tail}"
             )
         elif rule_type == "npm_or_cli":
             cli, sub = OFFICIAL_UPDATERS.get(
@@ -125,7 +189,7 @@ def build_upgrade_script(agent_id: str, platform: str, channel: str | None = Non
                 f"}} else {{\n"
                 f"  & npm install -g {pkg}@{tag}\n"
                 f"}}\n"
-                f"exit $LASTEXITCODE"
+                f"{win_tail}"
             )
         elif rule_type == "agy":
             body = (
@@ -137,7 +201,7 @@ def build_upgrade_script(agent_id: str, platform: str, channel: str | None = Non
                 f'  Write-Error "agy executable not found on Windows target"\n'
                 f"  exit 127\n"
                 f"}}\n"
-                f"exit $LASTEXITCODE"
+                f"{win_tail}"
             )
         elif rule_type == "hermes":
             # pip install hermes-agent would pin to 0.19.0 (PyPI is stale);
@@ -152,10 +216,10 @@ def build_upgrade_script(agent_id: str, platform: str, channel: str | None = Non
                 f"if ($LASTEXITCODE -ne 0) {{\n"
                 f"  {upstream}\n"
                 f"}}\n"
-                f"exit $LASTEXITCODE"
+                f"{win_tail}"
             )
         else:
-            body = f"& npm.cmd install -g {pkg}@{tag}\nexit $LASTEXITCODE"
+            body = f"& npm.cmd install -g {pkg}@{tag}\n{win_tail}"
 
         return f"{WIN_PATH_BOOTSTRAP}\n{body}\n"
 
@@ -182,7 +246,10 @@ def build_upgrade_script(agent_id: str, platform: str, channel: str | None = Non
     else:
         cmd = f"npm install -g {pkg}@{tag}"
 
+    cleanup = _post_upgrade_cleanup(agent_id, "posix")
     # Strict PATH_BOOTSTRAP prefix guarantees npm, node, brew, nvm are available
+    if cleanup:
+        return f"{PATH_BOOTSTRAP}\n{cmd}\n{cleanup}\n"
     return f"{PATH_BOOTSTRAP}\n{cmd}\n"
 
 

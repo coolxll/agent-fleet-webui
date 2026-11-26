@@ -76,6 +76,89 @@ def test_build_upgrade_script_windows_hermes_never_uses_pip():
     assert "pip install --upgrade hermes-agent" not in script
 
 
+def test_build_upgrade_script_posix_codex_stops_app_server_on_success():
+    import re
+
+    script = build_upgrade_script("codex", "posix")
+    assert "_upgrade_rc=$?" in script
+    assert 'if [ "$_upgrade_rc" -eq 0 ]; then' in script
+    assert "codex app'-'server daemon stop" in script
+    assert "pkill -f '[c]odex.*app[-]server'" in script
+    # Guard against Linux procps pkill -f (where .* crosses newlines) matching an ancestor sh -c/bash -c cmdline
+    assert re.search(r"codex.*app-server", script, re.DOTALL) is None
+    assert 'exit "$_upgrade_rc"' in script
+    assert "systemctl" not in script
+    assert "paseo" not in script
+
+
+def test_build_upgrade_script_posix_opencode_stops_serve_without_restarting_paseo():
+    import re
+
+    script = build_upgrade_script("opencode", "posix")
+    assert "_upgrade_rc=$?" in script
+    assert 'if [ "$_upgrade_rc" -eq 0 ]; then' in script
+    assert "opencode service stop" in script
+    assert "pkill -f '[o]pencode.*s[e]rve'" in script
+    assert re.search(r"opencode.*serve", script, re.DOTALL) is None
+    assert 'exit "$_upgrade_rc"' in script
+    assert "systemctl" not in script
+    assert "paseo" not in script
+
+
+def test_build_upgrade_script_windows_codex_stops_app_server_excluding_windowsapps():
+    script = build_upgrade_script("codex", "windows")
+    assert "$upgradeExit = if ($null -eq $LASTEXITCODE)" in script
+    assert "if ($upgradeExit -eq 0)" in script
+    assert "& codex app-server daemon stop" in script
+    assert "codex.*app-server" in script
+    assert "WindowsApps" in script
+    assert "exit $upgradeExit" in script
+
+
+def test_build_upgrade_script_windows_opencode_stops_serve():
+    script = build_upgrade_script("opencode", "windows")
+    assert "$upgradeExit = if ($null -eq $LASTEXITCODE)" in script
+    assert "if ($upgradeExit -eq 0)" in script
+    assert "& opencode service stop" in script
+    assert "opencode.*serve" in script
+    assert "exit $upgradeExit" in script
+    assert "paseo" not in script
+
+
+def test_build_upgrade_script_other_agents_skip_daemon_cleanup():
+    for agent_id in ("claude", "pi", "hermes", "qoder", "codebuddy", "agy"):
+        posix = build_upgrade_script(agent_id, "posix")
+        assert "pkill" not in posix
+        assert "app-server" not in posix
+        assert "service stop" not in posix
+        win = build_upgrade_script(agent_id, "windows")
+        assert "Stop-Process" not in win
+        assert "service stop" not in win
+
+
+def test_posix_post_upgrade_cleanup_preserves_exit_code():
+    import subprocess
+    from agent_fleet.services.action_service import _post_upgrade_cleanup
+
+    for agent_id, pat in (
+        ("codex", "[c]odex.*app[-]server"),
+        ("opencode", "[o]pencode.*s[e]rve"),
+    ):
+        cleanup = _post_upgrade_cleanup(agent_id, "posix")
+        # Use a sentinel pattern that never matches any running process so we don't kill real daemons
+        safe_cleanup = (
+            cleanup.replace(pat, "[z]zzzz_nonexistent_agent_fleet_test_proc")
+            .replace("codex app'-'server daemon stop", "true")
+            .replace("opencode service stop", "true")
+        )
+
+        ok_res = subprocess.run(["bash", "-c", f"true\n{safe_cleanup}"], capture_output=True, text=True)
+        assert ok_res.returncode == 0
+
+        fail_res = subprocess.run(["bash", "-c", f"(exit 42)\n{safe_cleanup}"], capture_output=True, text=True)
+        assert fail_res.returncode == 42
+
+
 def test_build_upgrade_script_injection_rejected():
     with pytest.raises(ValueError, match="does not support automated upgrades"):
         build_upgrade_script("malicious_agent; rm -rf /", "posix")
